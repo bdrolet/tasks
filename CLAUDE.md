@@ -1,0 +1,101 @@
+# tasks
+
+Asana task automation service. Inbox publishes `email_classified` domain
+events for **every** processed email to its `email-events` Pub/Sub topic;
+this repo owns the task policy ("should this be a task" — `services/policy.py`),
+Claude enrichment (summary + deadline), and all Asana interactions. Dividing
+rule: mailbox-touching work (classification, invite detection, reply drafts)
+stays in inbox; task-serving work lives here.
+
+## Stack
+
+| | |
+|---|---|
+| **GCP project** | `bens-project-462804`, `us-central1` |
+| **Events CF** | `tasks-events` — Pub/Sub trigger on the inbox-owned `email-events` topic, entry point `process` in `main.py` |
+| **Enrichment** | Claude via `clients/claude.py` (Haiku summary, Sonnet deadline extraction) — `ANTHROPIC_API_KEY` |
+| **Webhook CF** | `tasks-webhook` — HTTP public, entry point `webhook` in `main.py` (same source zip) |
+| **Escalation** | Cloud Scheduler `tasks-escalation`, `0 6 * * *` America/New_York → `POST <webhook-url>/escalate` |
+| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`; schema in `repo/schema.sql` |
+| **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
+| **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
+
+## Event schema (see models/events.py)
+
+- `email_classified` — one per processed email, ALL categories
+  (urgent|respond|review|reference|ignore): message_id, category, importance
+  (P0–P3), confidence, subject/sender/to/cc/received_at, tags, reasoning, full
+  body (10k cap) + body_html (200k cap), web_link, draft_link? (respond),
+  seed_key_points?/seed_links? (calendar-invite facts + RSVP links from inbox)
+- `label_applied` — message_id, task_gid (nullable — resolved via the tasks DB,
+  then Asana `external:{message_id}` lookup), label, source
+- Completions arrive via the Asana webhook, not Pub/Sub.
+
+## Task policy
+
+`services/policy.py::warrants_task` — urgent/review/respond → task.
+Changing what becomes a task is a change HERE, never an inbox deploy. Enrichment
+(summary via Claude Haiku, deadline extraction for P0/P1 via Sonnet) runs only
+for events that pass the policy gate.
+
+## Section mapping
+
+`ASANA_SECTION_REVIEW_GID`, `ASANA_SECTION_RESPOND_GID`,
+`ASANA_SECTION_URGENT_GID` (optional — unset leaves urgent tasks unsectioned),
+`ASANA_SECTION_DONE_GID`, `ASANA_SECTION_OVERDUE_GID` env vars (terraform
+vars → CF env). `services/sections.py` maps category/label → GID. Optional
+`ASANA_OVERDUE_TAG_GID` also tags escalated tasks.
+
+## Layer rules
+
+- `clients/` — I/O only (Asana REST, Cloud SQL, OTel); every Asana call goes
+  through `clients/asana.py::_request` (records `asana.api.duration`)
+- `repo/` — DB read/write only; takes an open connection, never opens its own
+- `services/` — business logic, one concern per file; no direct HTTP
+- `handlers/` — orchestrate clients + repo + services; called only from `main.py`
+- `models/` — pure types, no imports from other layers
+- `main.py` — CF entry points only; always `otel.flush()` in `finally`
+
+DB usage in handlers is **best-effort**: Asana is the source of truth; a DB
+outage degrades lookups to the `external:{message_id}` fallback and must never
+crash an event.
+
+## Secrets
+
+Shared secrets (`asana-api-key`, `grafana-otlp-endpoint`,
+`grafana-otlp-token`, `webhook-label-token`, `search-token`) are **owned by inbox terraform**
+— referenced as data sources in `terraform/secrets.tf`; never create them
+here. (Ownership moves to a platform state in `~/src/infra` eventually — see
+`/Users/ben/.claude/plans/infra-platform-migration.md`.) `asana-webhook-secret`,
+`tasks-db-password`, and `tasks-anthropic-api-key` are owned here — the
+Anthropic key is **dedicated to this service** (Console key name `tasks-cf`),
+deliberately separate from inbox's `anthropic-api-key` for independent spend
+tracking and rotation. `ASANA_PROJECT_ID` and section GIDs are plain env vars,
+not secrets.
+
+## Asana webhook
+
+Handshake = POST with `X-Hook-Secret` header (CF echoes + logs it). Events
+validated via `X-Hook-Signature` HMAC-SHA256. Re-registration (needed if the
+CF URL changes): `docs/asana-webhook-setup.md`.
+
+## Local dev
+
+```bash
+scripts/fetch-env.sh        # .env from Secret Manager + terraform.tfvars
+.venv/bin/pytest tests/ -q
+.venv/bin/python scripts/test-task-create.py   # creates a REAL Asana task
+```
+
+## Development workflow
+
+Open a PR rather than committing to `main` (auto-deploy watches `main`):
+branch off `main`, implement + verify, then use the `/pr-open` skill.
+
+## Terraform
+
+Use the `/terraform-plan` and `/terraform-apply` skills — they are repo-aware
+and operate on this repo's `terraform/` when run from here. `terraform.tfvars`
+is gitignored — holds the Asana project/section GIDs, `tasks_db_password`, and
+(post-registration) `asana_webhook_secret`. After an apply that first creates
+the database, run `scripts/migrate_db.py` (see README first-time setup).
