@@ -1,7 +1,17 @@
-import clients.asana as asana
-from repo import asana_tags
-from services import tags
-from tests.test_repo import FakeConn
+import sys
+from unittest.mock import MagicMock
+
+# psycopg needs libpq; mock it so this module — the only one that imports
+# clients.db — can be collected in environments without libpq installed.
+sys.modules['psycopg'] = MagicMock()
+sys.modules['psycopg.rows'] = MagicMock()
+sys.modules['psycopg.types'] = MagicMock()
+sys.modules['psycopg.types.json'] = MagicMock()
+
+import clients.asana as asana  # noqa: E402
+from repo import asana_tags  # noqa: E402
+from services import tags  # noqa: E402
+from tests.test_repo import FakeConn  # noqa: E402
 
 
 def test_resolve_gids_uses_db_cache(monkeypatch):
