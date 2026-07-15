@@ -30,9 +30,7 @@ class FakeConn:
 
 def test_insert_is_idempotent_on_message_id():
     conn = FakeConn()
-    repo_tasks.insert(
-        conn, task_gid="42", message_id="m1", category="review", importance="P1"
-    )
+    repo_tasks.insert(conn, task_gid="42", message_id="m1", category="review", importance="P1")
     query, params = conn.executed[0]
     assert "INSERT INTO tasks" in query
     assert "ON CONFLICT (message_id) DO NOTHING" in query

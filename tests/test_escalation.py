@@ -10,9 +10,7 @@ def _tasks(monkeypatch, tasks):
 
 def _stub_db(monkeypatch, escalated_gids=()):
     monkeypatch.setattr(escalation, "get_conn", lambda: FakeConn())
-    monkeypatch.setattr(
-        repo_tasks, "was_escalated", lambda conn, gid: gid in escalated_gids
-    )
+    monkeypatch.setattr(repo_tasks, "was_escalated", lambda conn, gid: gid in escalated_gids)
     marked = []
     monkeypatch.setattr(repo_tasks, "mark_escalated", lambda conn, gid: marked.append(gid))
     return marked

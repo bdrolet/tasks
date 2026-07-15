@@ -43,9 +43,7 @@ def handle(event: EmailClassifiedEvent) -> None:
         )
         return
 
-    otel.tasks_created.add(
-        1, {"category": event["category"], "importance": event["importance"]}
-    )
+    otel.tasks_created.add(1, {"category": event["category"], "importance": event["importance"]})
 
     try:
         with get_conn() as conn:

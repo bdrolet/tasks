@@ -33,9 +33,7 @@ def test_already_in_done_is_a_noop(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
     monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": True})
-    monkeypatch.setattr(
-        asana, "current_section", lambda task: {"gid": "sec-done", "name": "Done"}
-    )
+    monkeypatch.setattr(asana, "current_section", lambda task: {"gid": "sec-done", "name": "Done"})
     moves = []
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
 

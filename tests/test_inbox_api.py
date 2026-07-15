@@ -9,9 +9,7 @@ def _capture(monkeypatch, status=200, payload=None):
 
     def fake_get(url, **kwargs):
         calls.append({"url": url, **kwargs})
-        return httpx.Response(
-            status, json=payload or {}, request=httpx.Request("GET", url)
-        )
+        return httpx.Response(status, json=payload or {}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(inbox_api.httpx, "get", fake_get)
     return calls

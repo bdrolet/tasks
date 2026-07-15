@@ -11,9 +11,7 @@ from tests.test_repo import FakeConn
 def _stub_db(monkeypatch):
     monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
     inserts = []
-    monkeypatch.setattr(
-        repo_tasks, "insert", lambda conn, **kw: inserts.append(kw)
-    )
+    monkeypatch.setattr(repo_tasks, "insert", lambda conn, **kw: inserts.append(kw))
     return inserts
 
 
@@ -40,8 +38,10 @@ def _capture_create(monkeypatch, result="42"):
 
     def fake_create(event, *, tag_gids=None, key_points=None, relevant_links=None, due_date=None):
         created.update(
-            tag_gids=tag_gids, key_points=key_points,
-            relevant_links=relevant_links, due_date=due_date,
+            tag_gids=tag_gids,
+            key_points=key_points,
+            relevant_links=relevant_links,
+            due_date=due_date,
         )
         if result is None:
             return None

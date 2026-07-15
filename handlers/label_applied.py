@@ -49,4 +49,6 @@ def handle(event: LabelAppliedEvent) -> None:
             "to_section": event["label"],
         },
     )
-    logger.info("Task %s moved to %s section (label from %s)", task_gid, event["label"], event["source"])
+    logger.info(
+        "Task %s moved to %s section (label from %s)", task_gid, event["label"], event["source"]
+    )

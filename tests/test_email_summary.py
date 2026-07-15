@@ -11,9 +11,7 @@ def test_generate_parses_key_points_and_extracts_links(monkeypatch):
 
 
 def test_generate_strips_markdown_fences(monkeypatch):
-    monkeypatch.setattr(
-        claude, "summarize", lambda prompt: '```json\n{"key_points": ["A"]}\n```'
-    )
+    monkeypatch.setattr(claude, "summarize", lambda prompt: '```json\n{"key_points": ["A"]}\n```')
     assert email_summary.generate(make_email_event()).key_points == ["A"]
 
 

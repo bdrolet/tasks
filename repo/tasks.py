@@ -14,9 +14,7 @@ def insert(conn: Any, *, task_gid: str, message_id: str, category: str, importan
 
 
 def get_gid_by_message(conn: Any, message_id: str) -> str | None:
-    row = conn.execute(
-        "SELECT task_gid FROM tasks WHERE message_id = %s", (message_id,)
-    ).fetchone()
+    row = conn.execute("SELECT task_gid FROM tasks WHERE message_id = %s", (message_id,)).fetchone()
     return row["task_gid"] if row else None
 
 
@@ -28,9 +26,7 @@ def mark_completed(conn: Any, task_gid: str) -> None:
 
 
 def mark_escalated(conn: Any, task_gid: str) -> None:
-    conn.execute(
-        "UPDATE tasks SET escalated_at = now() WHERE task_gid = %s", (task_gid,)
-    )
+    conn.execute("UPDATE tasks SET escalated_at = now() WHERE task_gid = %s", (task_gid,))
 
 
 def was_escalated(conn: Any, task_gid: str) -> bool:
