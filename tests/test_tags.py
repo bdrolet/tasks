@@ -42,3 +42,14 @@ def test_resolve_gids_falls_back_to_api_and_stores(monkeypatch):
 def test_resolve_gids_empty_without_key(monkeypatch):
     monkeypatch.setattr(asana, "ASANA_API_KEY", "")
     assert tags.resolve_gids(["finance"]) == []
+
+
+def test_resolve_gids_survives_db_failure(monkeypatch):
+    monkeypatch.setattr(asana, "ASANA_API_KEY", "test-key")
+
+    def boom():
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(tags, "get_conn", boom)
+
+    assert tags.resolve_gids(["finance"]) == []

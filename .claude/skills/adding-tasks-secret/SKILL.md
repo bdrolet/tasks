@@ -7,7 +7,7 @@ metadata:
 
 # Adding a Secret to the Tasks Stack
 
-**First check whether the secret already exists in Secret Manager** (`gcloud secrets list --project=bens-project-462804`). Secrets owned by the inbox repo (created there — currently `asana-api-key`, `grafana-otlp-*`, `webhook-label-token`) must be referenced as a `data` source here — add the name to the `for_each` set in `terraform/secrets.tf` `data "google_secret_manager_secret" "shared"` and skip steps 2, 3, and 6 below (no value needed anywhere in this repo).
+**First check whether the secret already exists in Secret Manager** (`gcloud secrets list --project=bens-project-462804`). Secrets owned by the inbox repo (created there — currently `asana-api-key`, `grafana-otlp-*`, `webhook-label-token`, `search-token`) must be referenced as a `data` source here — add the name to the `for_each` set in `terraform/secrets.tf` `data "google_secret_manager_secret" "shared"` and skip steps 2, 3, and 6 below (no value needed anywhere in this repo).
 
 For a NEW secret named `my-secret` (kebab-case) / `MY_SECRET` (env var), 6 places change:
 

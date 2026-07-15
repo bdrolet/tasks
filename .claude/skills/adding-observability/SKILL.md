@@ -1,6 +1,6 @@
 ---
 name: adding-observability
-description: Use when adding a new pipeline stage, service, handler, or Pub/Sub flow to the inbox project, or when modifying existing code that should emit new metrics or traces. Also use when asked how to add a span, record a metric, or propagate trace context through a new Pub/Sub publish.
+description: Use when adding a new pipeline stage, service, handler, or Pub/Sub flow to the tasks project, or when modifying existing code that should emit new metrics or traces. Also use when asked how to add a span, record a metric, or propagate trace context through a new Pub/Sub publish.
 ---
 
 ## OTel setup
@@ -75,7 +75,7 @@ publisher.publish(topic, data.encode(), **carrier)
 ```python
 from opentelemetry.propagate import extract
 ctx = extract(cloud_event.data["message"].get("attributes", {}))
-with tracer.start_as_current_span("inbox.<handler>", context=ctx):
+with tracer.start_as_current_span("tasks.<handler>", context=ctx):
     ...
 ```
 

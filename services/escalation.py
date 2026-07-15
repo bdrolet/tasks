@@ -1,6 +1,10 @@
 """Overdue-task escalation: incomplete tasks past their due date move to the
 Overdue section (and optionally get a tag). Triggered by Cloud Scheduler via
-POST /escalate on the tasks-webhook CF."""
+POST /escalate on the tasks-webhook CF.
+
+Escalation is one-time per task: once `escalated_at` is set, a task never
+re-escalates even if it later re-enters Overdue-eligible state (e.g. after a
+label move takes it out of Overdue and it becomes overdue again)."""
 
 import logging
 import os
