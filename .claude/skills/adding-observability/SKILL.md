@@ -17,7 +17,7 @@ No-ops when `GRAFANA_OTLP_ENDPOINT` is unset (local dev without credentials).
 
 ## Adding a span to a new pipeline stage
 
-Add a child span inside the existing `inbox.process` root span in `handlers/pipeline.py`:
+Add a span within the relevant handler function (e.g. `task_create`, `label_applied`, `task_complete`, `escalation`) — there's no existing pipeline root span to nest under in this repo's architecture:
 
 ```python
 with otel.get_tracer().start_as_current_span("tasks.<stage>") as span:
@@ -90,4 +90,4 @@ finally:
     otel.flush()  # blocks up to 30s; exports pending spans + metrics
 ```
 
-Add `setup_telemetry("inbox-<service>")` at module level (outside the handler) so providers survive across warm re-use. Add `GRAFANA_OTLP_ENDPOINT` and `GRAFANA_OTLP_TOKEN` secret env vars to the new CF in `terraform/cloud_functions.tf` following the existing pattern.
+Add `setup_telemetry(os.environ.get("K_SERVICE", "tasks-local"))` at module level (outside the handler) so providers survive across warm re-use — service name comes from `K_SERVICE` (set by Cloud Run), defaulting to `"tasks-local"` for local runs. Add `GRAFANA_OTLP_ENDPOINT` and `GRAFANA_OTLP_TOKEN` secret env vars to the new CF in `terraform/cloud_functions.tf` following the existing pattern.

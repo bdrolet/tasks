@@ -37,7 +37,7 @@ Shared Secret Manager secrets (`asana-api-key`, `grafana-otlp-endpoint`, `grafan
 
 ## Section mapping
 
-Env vars → section GIDs (set via terraform vars): `ASANA_SECTION_REVIEW_GID`, `ASANA_SECTION_RESPOND_GID`, `ASANA_SECTION_DONE_GID`, `ASANA_SECTION_OVERDUE_GID`. `services/sections.py` resolves category/label → GID. Find a GID: open the section in Asana, numeric ID at the URL end.
+Env vars → section GIDs (set via terraform vars): `ASANA_SECTION_REVIEW_GID`, `ASANA_SECTION_RESPOND_GID`, `ASANA_SECTION_URGENT_GID` (optional — unset leaves urgent tasks unsectioned), `ASANA_SECTION_DONE_GID`, `ASANA_SECTION_OVERDUE_GID`. `services/sections.py` resolves category/label → GID. Find a GID: open the section in Asana, numeric ID at the URL end.
 
 ## Asana webhook
 

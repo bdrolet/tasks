@@ -36,7 +36,7 @@ Or with curl:
 ```bash
 source ~/src/scripts/zsh/config/.secrets
 curl -su "$GRAFANA_PROM_INSTANCE_ID:$GRAFANA_PROM_TOKEN" \
-  --data-urlencode "query=inbox_emails_processed_total" \
+  --data-urlencode "query=asana_tasks_created_total" \
   "$GRAFANA_PROM_URL/api/v1/query" | python3 -m json.tool
 ```
 
