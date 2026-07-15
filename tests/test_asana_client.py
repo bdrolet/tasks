@@ -30,6 +30,51 @@ def _capture(monkeypatch, response):
     return calls
 
 
+def test_get_workspace_gid_fetches_and_caches(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", None)
+    calls = _capture(monkeypatch, _resp(200, {"data": {"workspace": {"gid": "ws-1"}}}))
+
+    assert asana.get_workspace_gid() == "ws-1"
+    assert asana.get_workspace_gid() == "ws-1"
+
+    assert len(calls) == 1
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["url"].endswith("/projects/proj-1")
+    assert calls[0]["params"] == {"opt_fields": "workspace"}
+
+
+def test_find_tag_returns_matching_gid(monkeypatch):
+    calls = _capture(
+        monkeypatch,
+        _resp(
+            200,
+            {
+                "data": [
+                    {"gid": "t1", "name": "Other"},
+                    {"gid": "t2", "name": "URGENT"},
+                ]
+            },
+        ),
+    )
+    assert asana.find_tag("urgent", "ws-1") == "t2"
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["url"].endswith("/workspaces/ws-1/typeahead")
+    assert calls[0]["params"] == {"resource_type": "tag", "query": "urgent"}
+
+
+def test_find_tag_returns_none_when_no_match(monkeypatch):
+    _capture(monkeypatch, _resp(200, {"data": [{"gid": "t1", "name": "Other"}]}))
+    assert asana.find_tag("urgent", "ws-1") is None
+
+
+def test_create_tag_posts_and_returns_gid(monkeypatch):
+    calls = _capture(monkeypatch, _resp(201, {"data": {"gid": "t9"}}))
+    assert asana.create_tag("Urgent", "ws-1") == "t9"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/tags")
+    assert calls[0]["json"] == {"data": {"name": "Urgent", "workspace": "ws-1"}}
+
+
 def test_create_task_builds_payload(monkeypatch):
     calls = _capture(
         monkeypatch, _resp(201, {"data": {"gid": "42", "permalink_url": "https://a/42"}})
