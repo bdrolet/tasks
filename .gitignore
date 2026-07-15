@@ -29,3 +29,6 @@ override.tf.json
 
 # macOS
 .DS_Store
+
+# Subagent-driven-development scratch (briefs, reports, review packages)
+.superpowers/
