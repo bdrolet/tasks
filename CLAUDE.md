@@ -24,7 +24,7 @@ stays in inbox; task-serving work lives here.
 
 - `email_classified` — one per processed email, ALL categories
   (urgent|respond|review|reference|ignore): message_id, category, importance
-  (P0–P3), confidence, subject/sender/to/cc/received_at, tags, reasoning, full
+  (P0–P3), confidence, subject/sender/sender_display/to/cc/received_at, tags, reasoning, full
   body (10k cap) + body_html (200k cap), web_link, draft_link? (respond),
   seed_key_points?/seed_links? (calendar-invite facts + RSVP links from inbox)
 - `label_applied` — message_id, task_gid (nullable — resolved via the tasks DB,
