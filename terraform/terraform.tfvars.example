@@ -1,0 +1,30 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+
+# Asana project GID — same value as inbox's asana_project_id tfvar
+# (grep asana_project_id /Users/ben/src/inbox/terraform/terraform.tfvars)
+asana_project_id = "..."
+
+# Section GIDs: open each section in Asana — the GID is the numeric ID at the
+# end of the URL. urgent is optional (unset → urgent tasks stay unsectioned).
+asana_section_review_gid  = "..."
+asana_section_respond_gid = "..."
+asana_section_urgent_gid  = ""
+asana_section_done_gid    = "..."
+asana_section_overdue_gid = "..."
+
+# Cloud SQL password for the tasks user — generate:
+#   openssl rand -base64 24 | tr -d '/+=' | head -c 32
+tasks_db_password = "..."
+
+# Dedicated Anthropic API key for enrichment — console.anthropic.com → API keys
+# → Create key, name it "tasks-cf". Do NOT reuse inbox's key (separate spend
+# tracking + rotation).
+tasks_anthropic_api_key = "sk-ant-..."
+
+# inbox-api Cloud Run URL (mailbox gateway for clients/inbox_api.py):
+#   gcloud run services describe inbox-api --region us-central1 --project bens-project-462804 --format='value(status.url)'
+inbox_api_url = "https://inbox-api-....run.app"
+
+# Leave empty until webhook registration (docs/asana-webhook-setup.md), then
+# paste the X-Hook-Secret captured from the tasks-webhook CF logs.
+asana_webhook_secret = ""
