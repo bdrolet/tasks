@@ -4529,7 +4529,7 @@ git commit -m "docs: README, CLAUDE.md, architecture + webhook runbook + metrics
 ### Task 16: Inbox repo changes
 
 > **Executed in a separate inbox chat, not this session.** Handoff prompt:
-> `/Users/ben/.claude/plans/inbox-email-events-extraction.md` (Phase A = this
+> `/Users/ben/src/inbox/docs/superpowers/plans/2026-07-16-email-events-extraction.md` (Phase A = this
 > task; Phase B = Task 20). This session hands the prompt over when Tasks 1–15
 > are done, and must not proceed to Task 18 until Phase A's terraform apply is
 > confirmed.
@@ -5254,7 +5254,7 @@ Touch any task in Asana (rename it), then check `tasks-webhook` logs for `signat
 ### Task 20: Deploy the inbox side
 
 > **Executed in the separate inbox chat** (Phase B of
-> `/Users/ben/.claude/plans/inbox-email-events-extraction.md`). This session's
+> `/Users/ben/src/inbox/docs/superpowers/plans/2026-07-16-email-events-extraction.md`). This session's
 > job is to confirm the preconditions below and tell Ben it's time to trigger
 > Phase B.
 
