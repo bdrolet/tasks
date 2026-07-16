@@ -27,7 +27,13 @@ import json
 import logging
 import os
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+# force=True: the Cloud Functions Python runtime pre-attaches a root logging
+# handler before main.py runs, which makes plain basicConfig() a silent no-op
+# (docs: "does nothing if the root logger already has handlers configured").
+# Without this, INFO-level logs — including the Asana webhook handshake secret,
+# which Asana only ever sends once — are silently dropped while WARNING+ still
+# gets through, since the pre-attached handler's default level is WARNING.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s", force=True)
 
 import functions_framework
 from cloudevents.http import CloudEvent
