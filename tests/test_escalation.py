@@ -79,3 +79,24 @@ def test_unconfigured_returns_zero(monkeypatch):
     monkeypatch.delenv("ASANA_SECTION_OVERDUE_GID", raising=False)
     monkeypatch.delenv("ASANA_OVERDUE_TAG_GID", raising=False)
     assert escalation.run() == {"scanned": 0, "escalated": 0}
+
+
+def test_is_authorized_matches_token(monkeypatch):
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "sekrit")
+    assert escalation.is_authorized("Bearer sekrit") is True
+
+
+def test_is_authorized_rejects_wrong_token(monkeypatch):
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "sekrit")
+    assert escalation.is_authorized("Bearer wrong") is False
+
+
+def test_is_authorized_rejects_when_unconfigured(monkeypatch):
+    monkeypatch.delenv("ASANA_ESCALATE_TOKEN", raising=False)
+    assert escalation.is_authorized("Bearer anything") is False
+
+
+def test_is_authorized_rejects_missing_header(monkeypatch):
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "sekrit")
+    assert escalation.is_authorized("") is False
+    assert escalation.is_authorized(None) is False

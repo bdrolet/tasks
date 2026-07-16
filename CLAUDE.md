@@ -67,11 +67,14 @@ Shared secrets (`asana-api-key`, `grafana-otlp-endpoint`,
 — referenced as data sources in `terraform/secrets.tf`; never create them
 here. (Ownership moves to a platform state in `~/src/infra` eventually — see
 `/Users/ben/.claude/plans/infra-platform-migration.md`.) `asana-webhook-secret`,
-`tasks-db-password`, and `tasks-anthropic-api-key` are owned here — the
-Anthropic key is **dedicated to this service** (Console key name `tasks-cf`),
-deliberately separate from inbox's `anthropic-api-key` for independent spend
-tracking and rotation. `ASANA_PROJECT_ID` and section GIDs are plain env vars,
-not secrets.
+`tasks-db-password`, `tasks-anthropic-api-key`, and `tasks-escalate-token` are
+owned here — the Anthropic key is **dedicated to this service** (Console key
+name `tasks-cf`), deliberately separate from inbox's `anthropic-api-key` for
+independent spend tracking and rotation; the escalate token is the bearer
+credential Cloud Scheduler sends on `POST /escalate` (webhook CF only —
+IAM can't restrict that route since the CF must stay publicly invokable for
+Asana's unauthenticated webhook posts). `ASANA_PROJECT_ID` and section GIDs
+are plain env vars, not secrets.
 
 ## Asana webhook
 

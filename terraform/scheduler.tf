@@ -10,6 +10,9 @@ resource "google_cloud_scheduler_job" "escalation" {
     http_method = "POST"
     uri         = "${google_cloudfunctions2_function.tasks_webhook.service_config[0].uri}/escalate"
     body        = base64encode("{}")
-    headers     = { "Content-Type" = "application/json" }
+    headers = {
+      "Content-Type"  = "application/json"
+      "Authorization" = "Bearer ${var.tasks_escalate_token}"
+    }
   }
 }

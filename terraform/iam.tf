@@ -66,5 +66,12 @@ resource "google_secret_manager_secret_iam_member" "webhook_cf_webhook_secret" {
   member    = "serviceAccount:${google_service_account.tasks_webhook_cf.email}"
 }
 
+# /escalate is only reachable through the webhook CF — events CF never needs this.
+resource "google_secret_manager_secret_iam_member" "webhook_cf_escalate_token" {
+  secret_id = google_secret_manager_secret.tasks_escalate_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_webhook_cf.email}"
+}
+
 # The email-events topic and inbox-process-cf's publisher binding live in the
 # INBOX repo's terraform (producer owns the stream) — see plan Task 16 Step 2.

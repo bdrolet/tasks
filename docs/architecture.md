@@ -45,7 +45,7 @@ See `models/events.py` — it is the authoritative schema. JSON arrives with
 | Cloud Scheduler | `tasks-escalation` |
 | GCS bucket | `bens-project-462804-tasks-cf-source` |
 | Cloud SQL | database `tasks` + user `tasks` on instance `inbox` (instance owned by inbox terraform) |
-| Secrets (owned here) | `asana-webhook-secret`, `tasks-db-password`, `tasks-anthropic-api-key` |
+| Secrets (owned here) | `asana-webhook-secret`, `tasks-db-password`, `tasks-anthropic-api-key`, `tasks-escalate-token` |
 
 Both CFs deploy from one repo-root zip with different entry points. Both SAs
 hold `roles/cloudsql.client`.
@@ -58,7 +58,12 @@ hold `roles/cloudsql.client`.
   inbox code (starts publishing) — events published before the subscription
   exists are dropped.
 - The webhook CF is public (`allUsers` invoker) because Asana posts
-  unauthenticated; authenticity comes from the HMAC signature.
+  unauthenticated; authenticity comes from the HMAC signature. Because IAM
+  can't restrict just one route on an otherwise-public Cloud Function,
+  `POST /escalate` — reachable through the same public CF — is gated at the
+  app level instead: Cloud Scheduler sends `Authorization: Bearer
+  <tasks_escalate_token>`, checked by `services/escalation.py::is_authorized`
+  (constant-time compare), independent of the Asana HMAC check.
 
 ## Asana webhook lifecycle
 

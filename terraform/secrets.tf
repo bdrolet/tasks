@@ -44,6 +44,22 @@ resource "google_secret_manager_secret_version" "tasks_db_password" {
   secret_data = var.tasks_db_password
 }
 
+# Owned by this repo — bearer token gating POST /escalate. The webhook CF must
+# stay publicly invokable for Asana's unauthenticated webhook posts, so IAM
+# can't restrict this route; this token is the actual access control for it.
+resource "google_secret_manager_secret" "tasks_escalate_token" {
+  secret_id = "tasks-escalate-token"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "tasks_escalate_token" {
+  secret      = google_secret_manager_secret.tasks_escalate_token.id
+  secret_data = var.tasks_escalate_token
+}
+
 # Owned by this repo — dedicated Anthropic key for task enrichment (separate
 # spend tracking and rotation from inbox's anthropic-api-key). Created in the
 # Anthropic Console, key name "tasks-cf" — see Task 17 / terraform.tfvars.example.

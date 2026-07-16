@@ -57,6 +57,12 @@ variable "tasks_db_password" {
   sensitive   = true
 }
 
+variable "tasks_escalate_token" {
+  description = "Bearer token Cloud Scheduler sends on POST /escalate — the webhook CF is publicly invokable (required for Asana's unauthenticated webhook posts), so this app-level token is what actually gates the escalation route. Generate with: openssl rand -base64 24 | tr -d '/+=' | head -c 32"
+  type        = string
+  sensitive   = true
+}
+
 variable "tasks_anthropic_api_key" {
   description = "Dedicated Anthropic API key for task enrichment — create at console.anthropic.com (key name: tasks-cf). Do NOT reuse inbox's key."
   type        = string

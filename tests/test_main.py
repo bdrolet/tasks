@@ -81,7 +81,30 @@ def test_webhook_dispatches_completion_events(monkeypatch):
 def test_webhook_escalate_route(monkeypatch):
     from services import escalation
 
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
     monkeypatch.setattr(escalation, "run", lambda: {"scanned": 0, "escalated": 0})
-    result, status = main.webhook(Req(path="/escalate"))
+    result, status = main.webhook(Req(path="/escalate", headers={"Authorization": "Bearer tok"}))
     assert status == 200
     assert result == {"scanned": 0, "escalated": 0}
+
+
+def test_webhook_escalate_rejects_bad_auth(monkeypatch):
+    from services import escalation
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    ran = []
+    monkeypatch.setattr(escalation, "run", lambda: ran.append(1))
+    _, status = main.webhook(Req(path="/escalate", headers={"Authorization": "Bearer wrong"}))
+    assert status == 401
+    assert ran == []
+
+
+def test_webhook_escalate_rejects_missing_auth(monkeypatch):
+    from services import escalation
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    ran = []
+    monkeypatch.setattr(escalation, "run", lambda: ran.append(1))
+    _, status = main.webhook(Req(path="/escalate"))
+    assert status == 401
+    assert ran == []

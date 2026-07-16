@@ -16,6 +16,7 @@ inbox's process/sweep). Required env vars:
   ANTHROPIC_API_KEY                          — enrichment (summary, deadline)
   ASANA_SECTION_{REVIEW,RESPOND,URGENT,DONE,OVERDUE}_GID — section mapping
   ASANA_WEBHOOK_SECRET                       — HMAC key for X-Hook-Signature (webhook CF)
+  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate (webhook CF)
   WEBHOOK_URL / WEBHOOK_LABEL_TOKEN          — inbox webhook CF, for task action links
   CLOUD_SQL_CONNECTION_NAME / POSTGRES_*     — tasks database
   GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN — OTel export (optional)
@@ -71,6 +72,8 @@ def webhook(request):
             return asana_webhook.handshake(hook_secret)
 
         if request.path == "/escalate" and request.method == "POST":
+            if not escalation.is_authorized(request.headers.get("Authorization")):
+                return "", 401
             return escalation.run(), 200
 
         if request.method != "POST":

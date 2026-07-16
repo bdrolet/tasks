@@ -6,6 +6,7 @@ Escalation is one-time per task: once `escalated_at` is set, a task never
 re-escalates even if it later re-enters Overdue-eligible state (e.g. after a
 label move takes it out of Overdue and it becomes overdue again)."""
 
+import hmac
 import logging
 import os
 
@@ -33,6 +34,21 @@ def _mark_escalated(task_gid: str) -> None:
             repo_tasks.mark_escalated(conn, task_gid)
     except Exception:
         logger.exception("escalated_at update failed for gid=%s", task_gid)
+
+
+def is_authorized(authorization_header: str | None) -> bool:
+    """Bearer-token check for the Cloud Scheduler-triggered /escalate route.
+
+    The webhook CF must stay publicly invokable for Asana's unauthenticated
+    webhook posts, so this route can't rely on IAM invoker restrictions —
+    it needs its own app-level check, same pattern as the Asana signature
+    validation in handlers/asana_webhook.py."""
+    token = os.environ.get("ASANA_ESCALATE_TOKEN", "")
+    if not token:
+        logger.warning("ASANA_ESCALATE_TOKEN not set — rejecting /escalate request")
+        return False
+    expected = f"Bearer {token}"
+    return hmac.compare_digest(expected, authorization_header or "")
 
 
 def run() -> dict[str, int]:

@@ -185,6 +185,12 @@ resource "google_cloudfunctions2_function" "tasks_webhook" {
       secret     = google_secret_manager_secret.tasks_db_password.secret_id
       version    = "latest"
     }
+    secret_environment_variables {
+      key        = "ASANA_ESCALATE_TOKEN"
+      project_id = var.project_id
+      secret     = google_secret_manager_secret.tasks_escalate_token.secret_id
+      version    = "latest"
+    }
 
     # Injected only after the second-pass apply (webhook registration done,
     # var.asana_webhook_secret set in tfvars / GH secret).
