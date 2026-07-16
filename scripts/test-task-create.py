@@ -11,8 +11,12 @@ duplicate external.gid check never trips on re-runs.
 """
 
 import argparse
+import sys
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 
