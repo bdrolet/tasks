@@ -35,3 +35,8 @@ async def request_metrics(request: Request, call_next):
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok"}
+
+
+from api.routers import search
+
+app.include_router(search.router)
