@@ -176,3 +176,77 @@ def test_current_section_picks_this_project(monkeypatch):
         ]
     }
     assert asana.current_section(task) == {"gid": "s1", "name": "Review"}
+
+
+def _capture_seq(monkeypatch, responses):
+    """Like _capture but consumes a list of responses in order."""
+    calls = []
+    queue = list(responses)
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        return queue.pop(0)
+
+    monkeypatch.setattr(asana.httpx, "request", fake_request)
+    return calls
+
+
+def test_list_projects_paginates(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(
+        monkeypatch,
+        [
+            _resp(200, {"data": [{"gid": "p1", "name": "Inbox"}], "next_page": {"offset": "abc"}}),
+            _resp(200, {"data": [{"gid": "p2", "name": "Chores"}], "next_page": None}),
+        ],
+    )
+    projects = asana.list_projects()
+    assert [p["gid"] for p in projects] == ["p1", "p2"]
+    assert calls[0]["url"].endswith("/projects")
+    assert calls[0]["params"]["workspace"] == "ws-1"
+    assert calls[0]["params"]["archived"] == "false"
+    assert calls[0]["params"]["limit"] == 100
+    assert "offset" not in calls[0]["params"]
+    assert calls[1]["params"]["offset"] == "abc"
+
+
+def test_list_project_tasks_single_page(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch,
+        [_resp(200, {"data": [{"gid": "t1", "name": "A", "notes": "", "completed": False}]})],
+    )
+    tasks = asana.list_project_tasks("p1")
+    assert tasks[0]["gid"] == "t1"
+    assert calls[0]["params"]["project"] == "p1"
+    assert calls[0]["params"]["opt_fields"] == asana.SEARCH_OPT_FIELDS
+
+
+def test_list_my_tasks(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": [{"gid": "t9"}]})])
+    assert asana.list_my_tasks()[0]["gid"] == "t9"
+    assert calls[0]["params"]["assignee"] == "me"
+    assert calls[0]["params"]["workspace"] == "ws-1"
+
+
+def test_get_task_detail_returns_none_on_404(monkeypatch):
+    _capture_seq(monkeypatch, [_resp(404, {"errors": [{"message": "Not Found"}]})])
+    assert asana.get_task_detail("nope") is None
+
+
+def test_get_task_detail_fetches_rich_fields(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {"gid": "t1", "name": "A"}})])
+    task = asana.get_task_detail("t1")
+    assert task == {"gid": "t1", "name": "A"}
+    assert calls[0]["url"].endswith("/tasks/t1")
+    assert calls[0]["params"]["opt_fields"] == asana.DETAIL_OPT_FIELDS
+
+
+def test_get_stories(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch,
+        [_resp(200, {"data": [{"gid": "s1", "type": "comment", "text": "hi"}]})],
+    )
+    stories = asana.get_stories("t1")
+    assert stories[0]["gid"] == "s1"
+    assert calls[0]["url"].endswith("/tasks/t1/stories")

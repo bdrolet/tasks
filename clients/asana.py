@@ -19,6 +19,18 @@ ASANA_API_KEY = os.environ.get("ASANA_API_KEY", "")
 ASANA_PROJECT_ID = os.environ.get("ASANA_PROJECT_ID", "")
 _BASE = "https://app.asana.com/api/1.0"
 
+SEARCH_OPT_FIELDS = (
+    "name,notes,due_on,completed,permalink_url,"
+    "memberships.project.gid,memberships.project.name,memberships.section.name"
+)
+DETAIL_OPT_FIELDS = (
+    "name,notes,html_notes,completed,due_on,due_at,created_at,modified_at,"
+    "permalink_url,tags.gid,tags.name,assignee.gid,assignee.name,"
+    "memberships.project.gid,memberships.project.name,"
+    "memberships.section.gid,memberships.section.name"
+)
+STORY_OPT_FIELDS = "type,text,created_by.name,created_at,is_editable"
+
 _workspace_gid: str | None = None
 
 
@@ -305,3 +317,68 @@ def get_incomplete_tasks_past_due(project_gid: str | None = None) -> list[dict]:
     resp.raise_for_status()
     today = date.today().isoformat()
     return [t for t in resp.json()["data"] if t.get("due_on") and t["due_on"] < today]
+
+
+def _paginate(path: str, params: dict, *, operation: str) -> list[dict]:
+    """Follow Asana offset pagination until exhausted (page size 100)."""
+    items: list[dict] = []
+    offset: str | None = None
+    while True:
+        page_params = dict(params, limit=100)
+        if offset:
+            page_params["offset"] = offset
+        resp = _request("GET", path, operation=operation, params=page_params)
+        resp.raise_for_status()
+        body = resp.json()
+        items.extend(body["data"])
+        offset = (body.get("next_page") or {}).get("offset")
+        if not offset:
+            return items
+
+
+def list_projects() -> list[dict]:
+    """Unarchived projects in the workspace: [{gid, name}]."""
+    return _paginate(
+        "/projects",
+        {"workspace": get_workspace_gid(), "archived": "false", "opt_fields": "name"},
+        operation="list_projects",
+    )
+
+
+def list_project_tasks(project_gid: str) -> list[dict]:
+    return _paginate(
+        "/tasks",
+        {"project": project_gid, "opt_fields": SEARCH_OPT_FIELDS},
+        operation="list_project_tasks",
+    )
+
+
+def list_my_tasks() -> list[dict]:
+    """Workspace tasks assigned to the token's user — catches My-Tasks items
+    that are in no project. Overlaps with project listings; callers de-dupe."""
+    return _paginate(
+        "/tasks",
+        {"assignee": "me", "workspace": get_workspace_gid(), "opt_fields": SEARCH_OPT_FIELDS},
+        operation="list_my_tasks",
+    )
+
+
+def get_task_detail(task_gid: str) -> dict | None:
+    resp = _request(
+        "GET",
+        f"/tasks/{task_gid}",
+        operation="get_task_detail",
+        params={"opt_fields": DETAIL_OPT_FIELDS},
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
+def get_stories(task_gid: str) -> list[dict]:
+    return _paginate(
+        f"/tasks/{task_gid}/stories",
+        {"opt_fields": STORY_OPT_FIELDS},
+        operation="get_stories",
+    )
