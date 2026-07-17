@@ -42,10 +42,11 @@ data "archive_file" "source" {
     ".pre-commit-config.yaml",
     "requirements-dev.txt",
     "conftest.py",
-    # Bytecode/test caches: not gitignored from the archive_file's view (it
-    # scans the filesystem, not git), so a local apply after running pytest
-    # picks up whatever cache happens to exist and produces a non-reproducible
-    # zip hash — every source package needs its own entry, no ** glob support.
+    # Bytecode/test/lint caches: not gitignored from the archive_file's view
+    # (it scans the filesystem, not git), so a local apply after running
+    # pytest/mypy/ruff picks up whatever cache happens to exist and produces
+    # a non-reproducible zip hash — every source package needs its own
+    # __pycache__ entry, no ** glob support.
     "__pycache__",
     "clients/__pycache__",
     "services/__pycache__",
@@ -53,6 +54,17 @@ data "archive_file" "source" {
     "models/__pycache__",
     "repo/__pycache__",
     ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    # SDD scratch (task briefs/reports/review diffs) — gitignored but that
+    # doesn't help archive_file, which scans the filesystem, not git.
+    ".superpowers",
+    # google-github-actions/auth@v2 writes its exchanged WIF credentials file
+    # into the job's working directory (this repo root, in CI) — must never
+    # ship in the deployed source. Confirmed one shipped in a real deploy
+    # (private bucket, no public access, but still a real leak) before this
+    # exclude was added.
+    "gha-creds-*.json",
   ]
 }
 
