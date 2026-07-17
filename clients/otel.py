@@ -28,6 +28,7 @@ escalations: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 errors: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 claude_tokens: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 api_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
+api_requests: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
