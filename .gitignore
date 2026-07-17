@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfvars.backup
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Secrets / tokens
+.env
+.env.*
+!.env.example
+*token*.json
+
+# macOS
+.DS_Store
+
+# Subagent-driven-development scratch (briefs, reports, review packages)
+.superpowers/

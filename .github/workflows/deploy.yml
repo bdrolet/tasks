@@ -1,0 +1,54 @@
+name: Deploy Functions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'clients/**'
+      - 'models/**'
+      - 'services/**'
+      - 'handlers/**'
+      - 'requirements.txt'
+      - 'terraform/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SA }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform apply
+        working-directory: terraform
+        env:
+          TF_VAR_project_id: bens-project-462804
+          TF_VAR_asana_project_id: ${{ vars.ASANA_PROJECT_ID }}
+          TF_VAR_asana_section_review_gid: ${{ vars.ASANA_SECTION_REVIEW_GID }}
+          TF_VAR_asana_section_respond_gid: ${{ vars.ASANA_SECTION_RESPOND_GID }}
+          TF_VAR_asana_section_urgent_gid: ${{ vars.ASANA_SECTION_URGENT_GID }}
+          TF_VAR_asana_section_done_gid: ${{ vars.ASANA_SECTION_DONE_GID }}
+          TF_VAR_asana_section_overdue_gid: ${{ vars.ASANA_SECTION_OVERDUE_GID }}
+          TF_VAR_inbox_api_url: ${{ vars.INBOX_API_URL }}
+          TF_VAR_tasks_db_password: ${{ secrets.TF_VAR_TASKS_DB_PASSWORD }}
+          TF_VAR_tasks_escalate_token: ${{ secrets.TF_VAR_TASKS_ESCALATE_TOKEN }}
+          TF_VAR_tasks_anthropic_api_key: ${{ secrets.TF_VAR_TASKS_ANTHROPIC_API_KEY }}
+          TF_VAR_asana_webhook_secret: ${{ secrets.TF_VAR_ASANA_WEBHOOK_SECRET }}
+        run: terraform apply -auto-approve

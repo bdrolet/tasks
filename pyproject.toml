@@ -1,0 +1,23 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+exclude = [".claude", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E402"]
+"scripts/*.py" = ["E402", "I001"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["repo.*", "clients.db"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
