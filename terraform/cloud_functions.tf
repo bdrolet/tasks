@@ -42,6 +42,17 @@ data "archive_file" "source" {
     ".pre-commit-config.yaml",
     "requirements-dev.txt",
     "conftest.py",
+    # Bytecode/test caches: not gitignored from the archive_file's view (it
+    # scans the filesystem, not git), so a local apply after running pytest
+    # picks up whatever cache happens to exist and produces a non-reproducible
+    # zip hash — every source package needs its own entry, no ** glob support.
+    "__pycache__",
+    "clients/__pycache__",
+    "services/__pycache__",
+    "handlers/__pycache__",
+    "models/__pycache__",
+    "repo/__pycache__",
+    ".pytest_cache",
   ]
 }
 
