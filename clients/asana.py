@@ -382,3 +382,64 @@ def get_stories(task_gid: str) -> list[dict]:
         {"opt_fields": STORY_OPT_FIELDS},
         operation="get_stories",
     )
+
+
+def create_task_from_fields(fields: dict) -> CreatedTask:
+    """Create a task from raw Asana fields (ad-hoc / API-driven creation —
+    contrast create_task, which builds fields from an email event)."""
+    resp = _request(
+        "POST",
+        "/tasks",
+        operation="create_task_from_fields",
+        params={"opt_fields": "gid,permalink_url"},
+        json={"data": fields},
+    )
+    resp.raise_for_status()
+    data = resp.json()["data"]
+    return CreatedTask(gid=data["gid"], permalink_url=data["permalink_url"])
+
+
+def update_task(task_gid: str, fields: dict) -> None:
+    resp = _request("PUT", f"/tasks/{task_gid}", operation="update_task", json={"data": fields})
+    resp.raise_for_status()
+
+
+def remove_tag(task_gid: str, tag_gid: str) -> None:
+    resp = _request(
+        "POST",
+        f"/tasks/{task_gid}/removeTag",
+        operation="remove_tag",
+        json={"data": {"tag": tag_gid}},
+    )
+    resp.raise_for_status()
+
+
+def _story_data(text: str | None, html_text: str | None) -> dict:
+    return {"text": text} if text is not None else {"html_text": html_text}
+
+
+def create_story(task_gid: str, *, text: str | None = None, html_text: str | None = None) -> dict:
+    resp = _request(
+        "POST",
+        f"/tasks/{task_gid}/stories",
+        operation="create_story",
+        params={"opt_fields": "gid,text,created_at"},
+        json={"data": _story_data(text, html_text)},
+    )
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
+def update_story(story_gid: str, *, text: str | None = None, html_text: str | None = None) -> None:
+    resp = _request(
+        "PUT",
+        f"/stories/{story_gid}",
+        operation="update_story",
+        json={"data": _story_data(text, html_text)},
+    )
+    resp.raise_for_status()
+
+
+def delete_story(story_gid: str) -> None:
+    resp = _request("DELETE", f"/stories/{story_gid}", operation="delete_story")
+    resp.raise_for_status()

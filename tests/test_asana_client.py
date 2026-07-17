@@ -250,3 +250,59 @@ def test_get_stories(monkeypatch):
     stories = asana.get_stories("t1")
     assert stories[0]["gid"] == "s1"
     assert calls[0]["url"].endswith("/tasks/t1/stories")
+
+
+def test_create_task_from_fields(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch, [_resp(201, {"data": {"gid": "77", "permalink_url": "https://a/77"}})]
+    )
+    created = asana.create_task_from_fields({"name": "Buy milk", "projects": ["p1"]})
+    assert created.gid == "77"
+    assert created.permalink_url == "https://a/77"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/tasks")
+    assert calls[0]["json"] == {"data": {"name": "Buy milk", "projects": ["p1"]}}
+
+
+def test_update_task_puts_fields(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {"gid": "77"}})])
+    asana.update_task("77", {"completed": True, "due_on": None})
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["url"].endswith("/tasks/77")
+    assert calls[0]["json"] == {"data": {"completed": True, "due_on": None}}
+
+
+def test_remove_tag(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {}})])
+    asana.remove_tag("77", "tag-1")
+    assert calls[0]["url"].endswith("/tasks/77/removeTag")
+    assert calls[0]["json"] == {"data": {"tag": "tag-1"}}
+
+
+def test_create_story_text(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(201, {"data": {"gid": "s1", "text": "hi"}})])
+    story = asana.create_story("77", text="hi")
+    assert story["gid"] == "s1"
+    assert calls[0]["url"].endswith("/tasks/77/stories")
+    assert calls[0]["json"] == {"data": {"text": "hi"}}
+
+
+def test_create_story_html(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(201, {"data": {"gid": "s1"}})])
+    asana.create_story("77", html_text="<body>hi</body>")
+    assert calls[0]["json"] == {"data": {"html_text": "<body>hi</body>"}}
+
+
+def test_update_story(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {"gid": "s1"}})])
+    asana.update_story("s1", text="edited")
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["url"].endswith("/stories/s1")
+    assert calls[0]["json"] == {"data": {"text": "edited"}}
+
+
+def test_delete_story(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {}})])
+    asana.delete_story("s1")
+    assert calls[0]["method"] == "DELETE"
+    assert calls[0]["url"].endswith("/stories/s1")
