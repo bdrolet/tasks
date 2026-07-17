@@ -35,3 +35,17 @@ def was_escalated(conn: Any, task_gid: str) -> bool:
         (task_gid,),
     ).fetchone()
     return row is not None
+
+
+def email_context_by_gids(conn: Any, task_gids: list[str]) -> dict[str, dict]:
+    """Email metadata for email-derived tasks, keyed by task_gid. Tasks not
+    created from emails simply won't appear in the result."""
+    if not task_gids:
+        return {}
+    placeholders = ",".join(["%s"] * len(task_gids))
+    rows = conn.execute(
+        f"SELECT task_gid, message_id, category, importance FROM tasks"
+        f" WHERE task_gid IN ({placeholders})",
+        tuple(task_gids),
+    ).fetchall()
+    return {r["task_gid"]: r for r in rows}
