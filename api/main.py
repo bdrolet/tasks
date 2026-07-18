@@ -35,8 +35,10 @@ async def request_metrics(request: Request, call_next):
     return response
 
 
-@app.get("/healthz")
-def healthz() -> dict:
+# /health, not /healthz: Google Frontend reserves /healthz on run.app domains
+# and returns its own 404 before the request ever reaches the container.
+@app.get("/health")
+def health() -> dict:
     return {"status": "ok"}
 
 

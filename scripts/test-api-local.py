@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke-test a running tasks-api (local uvicorn or deployed Cloud Run).
 
-Read-only by default: healthz → search → fetch first hit. --write also
+Read-only by default: health → search → fetch first hit. --write also
 creates a task named "[smoke] tasks-api" in the default project, comments
 on it, completes it (REAL Asana writes).
 
@@ -32,9 +32,9 @@ def main() -> int:
         headers["Authorization"] = f"Bearer {token}"
     client = httpx.Client(base_url=args.base, headers=headers, timeout=60)
 
-    health = client.get("/healthz")
+    health = client.get("/health")
     health.raise_for_status()
-    print("healthz:", health.json())
+    print("health:", health.json())
 
     resp = client.post("/search", json={"query": "", "limit": 3})
     resp.raise_for_status()

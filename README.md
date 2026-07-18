@@ -100,7 +100,7 @@ Cloud Functions.
 | `POST` | `/tasks/{gid}/comments` | add a comment |
 | `PUT` | `/comments/{story_gid}` | edit a comment |
 | `DELETE` | `/comments/{story_gid}` | delete a comment |
-| `GET` | `/healthz` | health check (no auth) |
+| `GET` | `/health` | health check (no auth) |
 
 Auth: bearer token (`Authorization: Bearer <token>`) checked against the
 `tasks-api-token` secret (`terraform.tfvars` var `tasks_api_token`); unset
