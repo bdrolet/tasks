@@ -80,3 +80,14 @@ variable "inbox_api_url" {
   type        = string
   default     = ""
 }
+
+variable "tasks_api_token" {
+  description = "Bearer token for tasks-api (skills + other clients). Generate with: openssl rand -base64 24 | tr -d '/+=' | head -c 32"
+  type        = string
+  sensitive   = true
+}
+
+variable "deployer_sa" {
+  description = "Service account email used by GitHub Actions to deploy (GCP_DEPLOYER_SA secret). Granted AR writer + Cloud Run developer on tasks-api."
+  type        = string
+}
