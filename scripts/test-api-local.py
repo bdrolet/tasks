@@ -54,8 +54,12 @@ def main() -> int:
         created.raise_for_status()
         gid = created.json()["task_gid"]
         print("created:", created.json())
-        print("comment:", client.post(f"/tasks/{gid}/comments", json={"text": "smoke"}).json())
-        print("complete:", client.patch(f"/tasks/{gid}", json={"completed": True}).json())
+        comment = client.post(f"/tasks/{gid}/comments", json={"text": "smoke"})
+        comment.raise_for_status()
+        print("comment:", comment.json())
+        complete = client.patch(f"/tasks/{gid}", json={"completed": True})
+        complete.raise_for_status()
+        print("complete:", complete.json())
 
     return 0
 
