@@ -81,3 +81,43 @@ Push to `main` touching `main.py`, `clients/`, `services/`, `handlers/`,
    ```
 4. Register the Asana webhook: `docs/asana-webhook-setup.md`.
 5. See `docs/architecture.md` for the full design.
+
+## tasks-api
+
+A Cloud Run FastAPI service (`api/`) that exposes the same task data as a
+small HTTP API — search across Asana projects, fetch a task with its
+comments, create/update tasks, and add/edit/delete comments. It reuses the
+`clients/`, `repo/`, and `services/` layers rather than duplicating Asana or
+DB logic; `api/routers/` are thin transport, same role as `handlers/` for the
+Cloud Functions.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/search` | search tasks (query, project, completed, due range) |
+| `GET` | `/tasks/{gid}` | fetch a task with comments |
+| `POST` | `/tasks` | create a task |
+| `PATCH` | `/tasks/{gid}` | update a task (fields, section, tags, complete) |
+| `POST` | `/tasks/{gid}/comments` | add a comment |
+| `PUT` | `/comments/{story_gid}` | edit a comment |
+| `DELETE` | `/comments/{story_gid}` | delete a comment |
+| `GET` | `/healthz` | health check (no auth) |
+
+Auth: bearer token (`Authorization: Bearer <token>`) checked against the
+`tasks-api-token` secret (`terraform.tfvars` var `tasks_api_token`); unset
+`TASKS_API_TOKEN` disables the check for local dev.
+
+Search is project-enumeration based, not full-text: Asana's free tier has no
+search API (returns HTTP 402 on that plan), so `/search` lists tasks across
+projects (or one project, if given) and filters client-side.
+
+```bash
+(set -a; source .env; set +a; .venv/bin/uvicorn api.main:app --port 8080)  # run locally
+.venv/bin/python scripts/test-api-local.py                                  # smoke it (--write creates a REAL task)
+```
+
+Deploy: push to `main` touching `api/`, `clients/`, `repo/`, `services/`,
+`models/`, `Dockerfile`, or `requirements.txt` auto-deploys via
+`.github/workflows/deploy-api.yml` (build + push image, `gcloud run deploy`,
+read-only post-deploy smoke). First deploy after merge needs a manual
+runbook (image doesn't exist yet for Terraform to reference) — see
+`docs/superpowers/plans/2026-07-17-tasks-api.md`, Task 14 Step 3.

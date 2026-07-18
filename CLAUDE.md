@@ -15,6 +15,7 @@ stays in inbox; task-serving work lives here.
 | **Events CF** | `tasks-events` — Pub/Sub trigger on the inbox-owned `email-events` topic, entry point `process` in `main.py` |
 | **Enrichment** | Claude via `clients/claude.py` (Haiku summary, Sonnet deadline extraction) — `ANTHROPIC_API_KEY` |
 | **Webhook CF** | `tasks-webhook` — HTTP public, entry point `webhook` in `main.py` (same source zip) |
+| **API** | `tasks-api` — Cloud Run FastAPI service (`api/`), search/fetch/add/update for tasks + comments; bearer auth via `tasks-api-token`; image in AR repo `tasks`, deployed by `deploy-api.yml`; `tasks-api.drolet.cloud` |
 | **Escalation** | Cloud Scheduler `tasks-escalation`, `0 6 * * *` America/New_York → `POST <webhook-url>/escalate` |
 | **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`; schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
@@ -53,6 +54,8 @@ vars → CF env). `services/sections.py` maps category/label → GID. Optional
 - `repo/` — DB read/write only; takes an open connection, never opens its own
 - `services/` — business logic, one concern per file; no direct HTTP
 - `handlers/` — orchestrate clients + repo + services; called only from `main.py`
+  (`api/routers/` play the same role for the tasks-api service — thin
+  transport, called only from `api/main.py`)
 - `models/` — pure types, no imports from other layers
 - `main.py` — CF entry points only; always `otel.flush()` in `finally`
 
@@ -67,14 +70,16 @@ Shared secrets (`asana-api-key`, `grafana-otlp-endpoint`,
 — referenced as data sources in `terraform/secrets.tf`; never create them
 here. (Ownership moves to a platform state in `~/src/infra` eventually — see
 `/Users/ben/.claude/plans/infra-platform-migration.md`.) `asana-webhook-secret`,
-`tasks-db-password`, `tasks-anthropic-api-key`, and `tasks-escalate-token` are
-owned here — the Anthropic key is **dedicated to this service** (Console key
-name `tasks-cf`), deliberately separate from inbox's `anthropic-api-key` for
-independent spend tracking and rotation; the escalate token is the bearer
-credential Cloud Scheduler sends on `POST /escalate` (webhook CF only —
-IAM can't restrict that route since the CF must stay publicly invokable for
-Asana's unauthenticated webhook posts). `ASANA_PROJECT_ID` and section GIDs
-are plain env vars, not secrets.
+`tasks-db-password`, `tasks-anthropic-api-key`, `tasks-escalate-token`, and
+`tasks-api-token` are owned here — the Anthropic key is **dedicated to this
+service** (Console key name `tasks-cf`), deliberately separate from inbox's
+`anthropic-api-key` for independent spend tracking and rotation; the escalate
+token is the bearer credential Cloud Scheduler sends on `POST /escalate`
+(webhook CF only — IAM can't restrict that route since the CF must stay
+publicly invokable for Asana's unauthenticated webhook posts); the API token
+is the bearer credential for the tasks-api Cloud Run service — skills read it
+from `terraform.tfvars`. `ASANA_PROJECT_ID` and section GIDs are plain env
+vars, not secrets.
 
 ## Asana webhook
 
@@ -88,6 +93,8 @@ CF URL changes): `docs/asana-webhook-setup.md`.
 scripts/fetch-env.sh        # .env from Secret Manager + terraform.tfvars
 .venv/bin/pytest tests/ -q
 .venv/bin/python scripts/test-task-create.py   # creates a REAL Asana task
+(set -a; source .env; set +a; .venv/bin/uvicorn api.main:app --port 8080)  # run tasks-api locally
+.venv/bin/python scripts/test-api-local.py                                  # smoke it (--write creates a REAL task)
 ```
 
 ## Development workflow
