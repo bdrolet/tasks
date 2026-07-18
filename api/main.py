@@ -37,7 +37,8 @@ def healthz() -> dict:
     return {"status": "ok"}
 
 
-from api.routers import search, tasks
+from api.routers import comments, search, tasks
 
 app.include_router(search.router)
 app.include_router(tasks.router)
+app.include_router(comments.router)
