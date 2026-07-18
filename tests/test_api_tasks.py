@@ -155,3 +155,73 @@ def test_create_task_unknown_section_400(monkeypatch):
     )
     assert resp.status_code == 400
     assert "This week" in str(resp.json()["detail"])
+
+
+def _patch_env(monkeypatch, detail=None):
+    captured = {"update": None, "added_tags": [], "removed_tags": [], "moved": None}
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: detail or dict(DETAIL))
+    monkeypatch.setattr(
+        asana, "update_task", lambda gid, fields: captured.__setitem__("update", fields)
+    )
+    monkeypatch.setattr(asana, "add_tag", lambda gid, tag: captured["added_tags"].append(tag))
+    monkeypatch.setattr(asana, "remove_tag", lambda gid, tag: captured["removed_tags"].append(tag))
+    monkeypatch.setattr(
+        asana,
+        "add_task_to_section",
+        lambda task_gid, section_gid: captured.__setitem__("moved", section_gid),
+    )
+    return captured
+
+
+def test_patch_name_and_completion(monkeypatch):
+    captured = _patch_env(monkeypatch)
+    resp = client.patch("/tasks/t1", json={"name": "New name", "completed": True}, headers=AUTH)
+    assert resp.status_code == 200
+    assert captured["update"] == {"name": "New name", "completed": True}
+
+
+def test_patch_explicit_null_clears_due(monkeypatch):
+    captured = _patch_env(monkeypatch)
+    client.patch("/tasks/t1", json={"due_on": None}, headers=AUTH)
+    assert captured["update"] == {"due_on": None}
+
+
+def test_patch_omitted_fields_untouched(monkeypatch):
+    captured = _patch_env(monkeypatch)
+    client.patch("/tasks/t1", json={"description": "new body"}, headers=AUTH)
+    assert captured["update"] == {"notes": "new body"}
+
+
+def test_patch_section_move(monkeypatch):
+    captured = _patch_env(monkeypatch)
+    monkeypatch.setattr(asana, "get_sections", lambda gid: [{"gid": "s-done", "name": "Done"}])
+    client.patch("/tasks/t1", json={"section": "done"}, headers=AUTH)
+    assert captured["moved"] == "s-done"
+    assert captured["update"] is None  # no PUT when only moving section
+
+
+def test_patch_tags_add_and_remove(monkeypatch):
+    from api.routers import tasks as tasks_router
+
+    captured = _patch_env(monkeypatch)
+    monkeypatch.setattr(tasks_router.tags_service, "resolve_gids", lambda names: ["tg-new"])
+    client.patch(
+        "/tasks/t1",
+        json={"add_tags": ["urgent"], "remove_tags": ["finance", "ghost"]},
+        headers=AUTH,
+    )
+    assert captured["added_tags"] == ["tg-new"]
+    # "finance" resolves from the task's current tags (gid tag1); "ghost" ignored
+    assert captured["removed_tags"] == ["tag1"]
+
+
+def test_patch_unknown_task_404(monkeypatch):
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: None)
+    assert client.patch("/tasks/nope", json={"name": "x"}, headers=AUTH).status_code == 404
+
+
+def test_patch_section_move_task_without_project_400(monkeypatch):
+    detail = dict(DETAIL, memberships=[])
+    _patch_env(monkeypatch, detail=detail)
+    resp = client.patch("/tasks/t1", json={"section": "Done"}, headers=AUTH)
+    assert resp.status_code == 400

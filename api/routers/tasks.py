@@ -59,6 +59,19 @@ class CreatedTaskResponse(BaseModel):
     permalink_url: str
 
 
+class UpdateTaskRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    html_description: str | None = None
+    completed: bool | None = None
+    due_on: str | None = None  # explicit null clears
+    due_at: str | None = None  # explicit null clears
+    section: str | None = None
+    add_tags: list[str] = []
+    remove_tags: list[str] = []
+    assignee: str | None = None  # explicit null unassigns
+
+
 def wrap_html_body(html: str) -> str:
     """Asana html_notes/html_text require a <body> root element."""
     return html if html.lstrip().startswith("<body>") else f"<body>{html}</body>"
@@ -175,3 +188,53 @@ def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> Cre
             asana.add_task_to_section(created.gid, section_gid)
 
     return CreatedTaskResponse(task_gid=created.gid, permalink_url=created.permalink_url)
+
+
+@router.patch("/tasks/{gid}")
+def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token)) -> dict:
+    if body.description is not None and body.html_description is not None:
+        raise HTTPException(
+            status_code=400, detail="pass description or html_description, not both"
+        )
+
+    with translate_asana_errors():
+        task = asana.get_task_detail(gid)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"unknown task: {gid}")
+
+        fields: dict = {}
+        if body.name is not None:
+            fields["name"] = body.name
+        if body.description is not None:
+            fields["notes"] = body.description
+        if body.html_description is not None:
+            fields["html_notes"] = wrap_html_body(body.html_description)
+        if body.completed is not None:
+            fields["completed"] = body.completed
+        # Nullable fields: explicit null in the request body clears the value.
+        for field in ("due_on", "due_at", "assignee"):
+            if field in body.model_fields_set:
+                fields[field] = getattr(body, field)
+        if fields:
+            asana.update_task(gid, fields)
+
+        if body.section:
+            memberships = task.get("memberships") or []
+            project_gid = (memberships[0].get("project") or {}).get("gid") if memberships else None
+            if not project_gid:
+                raise HTTPException(
+                    status_code=400, detail="task is in no project — cannot move sections"
+                )
+            asana.add_task_to_section(gid, resolve_section(project_gid, body.section))
+
+        if body.add_tags:
+            for tag_gid in tags_service.resolve_gids(body.add_tags):
+                asana.add_tag(gid, tag_gid)
+        if body.remove_tags:
+            current: dict[str, str] = {(t.get("name") or "").casefold(): t["gid"] for t in task.get("tags") or []}
+            for name in body.remove_tags:
+                tag_gid_opt = current.get(name.casefold())
+                if tag_gid_opt:  # unknown removes are ignored (idempotent)
+                    asana.remove_tag(gid, tag_gid_opt)
+
+    return {"status": "updated", "task_gid": gid}
