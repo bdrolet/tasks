@@ -68,6 +68,7 @@ def membership(task: dict) -> tuple[str | None, str | None]:
 
 @router.post("/search", response_model=SearchResponse)
 def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchResponse:
+    only_open = body.completed is False
     with translate_asana_errors():
         projects = asana.list_projects()
         if body.project:
@@ -80,11 +81,18 @@ def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchRespon
                         "known_projects": [p["name"] for p in projects],
                     },
                 )
-            raw = asana.list_project_tasks(project["gid"])
+            raw = asana.list_project_tasks(project["gid"], only_open=only_open)
         else:
             with ThreadPoolExecutor(max_workers=8) as pool:
-                per_project = list(pool.map(lambda p: asana.list_project_tasks(p["gid"]), projects))
-            raw = [t for batch in per_project for t in batch] + asana.list_my_tasks()
+                per_project = list(
+                    pool.map(
+                        lambda p: asana.list_project_tasks(p["gid"], only_open=only_open),
+                        projects,
+                    )
+                )
+            raw = [t for batch in per_project for t in batch] + asana.list_my_tasks(
+                only_open=only_open
+            )
 
     filtered = task_search.filter_tasks(
         raw,

@@ -16,6 +16,7 @@ def test_healthz_returns_ok():
 def test_verify_token_noop_when_env_unset(monkeypatch):
     from api.auth import verify_token
 
+    monkeypatch.delenv("K_SERVICE", raising=False)
     monkeypatch.delenv("TASKS_API_TOKEN", raising=False)
     assert verify_token(None) is None  # no exception
 
@@ -27,6 +28,51 @@ def test_verify_token_rejects_missing_and_wrong(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         verify_token(None)
     assert exc.value.status_code == 401
+
+
+def test_verify_token_fails_closed_when_k_service_set_and_token_unset(monkeypatch):
+    from api.auth import verify_token
+
+    monkeypatch.setenv("K_SERVICE", "tasks-api")
+    monkeypatch.delenv("TASKS_API_TOKEN", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        verify_token(None)
+    assert exc.value.status_code == 503
+
+
+def test_verify_token_noop_when_k_service_unset_and_token_unset(monkeypatch):
+    from api.auth import verify_token
+
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("TASKS_API_TOKEN", raising=False)
+    assert verify_token(None) is None
+
+
+def test_verify_token_allows_correct_token_when_k_service_set(monkeypatch):
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from api.auth import verify_token
+
+    monkeypatch.setenv("K_SERVICE", "tasks-api")
+    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="sekrit")
+    assert verify_token(creds) is None
+
+
+def test_unmatched_route_metric_uses_bounded_label(monkeypatch):
+    import api.main as main_mod
+
+    calls = []
+
+    class FakeCounter:
+        def add(self, amount, attributes=None):
+            calls.append(attributes)
+
+    monkeypatch.setattr(main_mod.otel, "api_requests", FakeCounter())
+
+    resp = TestClient(main_mod.app).get("/nope")
+    assert resp.status_code == 404
+    assert calls[-1]["route"] == "unmatched"
 
 
 def _status_error(status: int, body: dict | None = None) -> httpx.HTTPStatusError:

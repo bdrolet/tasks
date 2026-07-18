@@ -221,12 +221,38 @@ def test_list_project_tasks_single_page(monkeypatch):
     assert calls[0]["params"]["opt_fields"] == asana.SEARCH_OPT_FIELDS
 
 
+def test_list_project_tasks_only_open_adds_completed_since(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_project_tasks("p1", only_open=True)
+    assert calls[0]["params"]["completed_since"] == "now"
+
+
+def test_list_project_tasks_default_omits_completed_since(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_project_tasks("p1")
+    assert "completed_since" not in calls[0]["params"]
+
+
 def test_list_my_tasks(monkeypatch):
     monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
     calls = _capture_seq(monkeypatch, [_resp(200, {"data": [{"gid": "t9"}]})])
     assert asana.list_my_tasks()[0]["gid"] == "t9"
     assert calls[0]["params"]["assignee"] == "me"
     assert calls[0]["params"]["workspace"] == "ws-1"
+
+
+def test_list_my_tasks_only_open_adds_completed_since(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_my_tasks(only_open=True)
+    assert calls[0]["params"]["completed_since"] == "now"
+
+
+def test_list_my_tasks_default_omits_completed_since(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_my_tasks()
+    assert "completed_since" not in calls[0]["params"]
 
 
 def test_get_task_detail_returns_none_on_404(monkeypatch):

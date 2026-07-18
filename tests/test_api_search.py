@@ -43,9 +43,9 @@ def test_search_workspace_wide(monkeypatch):
     monkeypatch.setattr(
         asana,
         "list_project_tasks",
-        lambda gid: [_task("t1", "Renew passport", notes="expires soon")],
+        lambda gid, **kw: [_task("t1", "Renew passport", notes="expires soon")],
     )
-    monkeypatch.setattr(asana, "list_my_tasks", lambda: [_task("t2", "passport photos")])
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [_task("t2", "passport photos")])
 
     resp = client.post("/search", json={"query": "passport"}, headers=AUTH)
     assert resp.status_code == 200
@@ -64,7 +64,7 @@ def test_search_project_narrowing_by_name(monkeypatch):
     )
     calls = []
 
-    def fake_list(gid):
+    def fake_list(gid, **kw):
         calls.append(gid)
         return [_task("t1", "Mow lawn", project="Chores")]
 
@@ -86,8 +86,8 @@ def test_search_decorates_email_context(monkeypatch):
     from api.routers import search as search_router
 
     monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
-    monkeypatch.setattr(asana, "list_project_tasks", lambda gid: [_task("t1", "[P1] Budget")])
-    monkeypatch.setattr(asana, "list_my_tasks", lambda: [])
+    monkeypatch.setattr(asana, "list_project_tasks", lambda gid, **kw: [_task("t1", "[P1] Budget")])
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
     monkeypatch.setattr(
         search_router,
         "email_context",
@@ -100,11 +100,74 @@ def test_search_decorates_email_context(monkeypatch):
     assert r["category"] == "respond"
 
 
+def test_search_passes_only_open_true_by_default(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    calls: dict = {}
+
+    def fake_list_project_tasks(gid, **kwargs):
+        calls["project_only_open"] = kwargs.get("only_open")
+        return []
+
+    def fake_list_my_tasks(**kwargs):
+        calls["my_only_open"] = kwargs.get("only_open")
+        return []
+
+    monkeypatch.setattr(asana, "list_project_tasks", fake_list_project_tasks)
+    monkeypatch.setattr(asana, "list_my_tasks", fake_list_my_tasks)
+
+    resp = client.post("/search", json={"query": "x"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert calls["project_only_open"] is True
+    assert calls["my_only_open"] is True
+
+
+def test_search_passes_only_open_false_when_completed_null(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    calls: dict = {}
+
+    def fake_list_project_tasks(gid, **kwargs):
+        calls["project_only_open"] = kwargs.get("only_open")
+        return []
+
+    def fake_list_my_tasks(**kwargs):
+        calls["my_only_open"] = kwargs.get("only_open")
+        return []
+
+    monkeypatch.setattr(asana, "list_project_tasks", fake_list_project_tasks)
+    monkeypatch.setattr(asana, "list_my_tasks", fake_list_my_tasks)
+
+    resp = client.post("/search", json={"query": "x", "completed": None}, headers=AUTH)
+    assert resp.status_code == 200
+    assert calls["project_only_open"] is False
+    assert calls["my_only_open"] is False
+
+
+def test_search_project_narrowed_passes_only_open(monkeypatch):
+    monkeypatch.setattr(
+        asana,
+        "list_projects",
+        lambda: [{"gid": "p1", "name": "Inbox"}, {"gid": "p2", "name": "Chores"}],
+    )
+    calls: dict = {}
+
+    def fake_list_project_tasks(gid, **kwargs):
+        calls["only_open"] = kwargs.get("only_open")
+        return []
+
+    monkeypatch.setattr(asana, "list_project_tasks", fake_list_project_tasks)
+
+    resp = client.post("/search", json={"query": "mow", "project": "chores"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert calls["only_open"] is True
+
+
 def test_search_limit(monkeypatch):
     monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
     monkeypatch.setattr(
-        asana, "list_project_tasks", lambda gid: [_task(f"t{i}", f"item {i}") for i in range(30)]
+        asana,
+        "list_project_tasks",
+        lambda gid, **kw: [_task(f"t{i}", f"item {i}") for i in range(30)],
     )
-    monkeypatch.setattr(asana, "list_my_tasks", lambda: [])
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
     resp = client.post("/search", json={"query": "item", "limit": 5}, headers=AUTH)
     assert len(resp.json()["results"]) == 5

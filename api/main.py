@@ -21,12 +21,15 @@ async def request_metrics(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
-        otel.api_requests.add(1, {"route": request.url.path, "status": "500"})
+        route = getattr(request.scope.get("route"), "path", None) or "unmatched"
+        otel.api_requests.add(1, {"route": route, "status": "500"})
         otel.flush()
         raise
     # scope["route"] is the matched route object (template path, bounded
     # cardinality) — only available after routing, hence read post-call.
-    route = getattr(request.scope.get("route"), "path", request.url.path)
+    # Unmatched routes (404s) label as "unmatched" rather than the raw path,
+    # which would otherwise let arbitrary request URLs blow up cardinality.
+    route = getattr(request.scope.get("route"), "path", None) or "unmatched"
     otel.api_requests.add(1, {"route": route, "status": str(response.status_code)})
     otel.flush()
     return response

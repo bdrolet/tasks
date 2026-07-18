@@ -345,22 +345,24 @@ def list_projects() -> list[dict]:
     )
 
 
-def list_project_tasks(project_gid: str) -> list[dict]:
-    return _paginate(
-        "/tasks",
-        {"project": project_gid, "opt_fields": SEARCH_OPT_FIELDS},
-        operation="list_project_tasks",
-    )
+def list_project_tasks(project_gid: str, *, only_open: bool = False) -> list[dict]:
+    params: dict = {"project": project_gid, "opt_fields": SEARCH_OPT_FIELDS}
+    if only_open:
+        params["completed_since"] = "now"
+    return _paginate("/tasks", params, operation="list_project_tasks")
 
 
-def list_my_tasks() -> list[dict]:
+def list_my_tasks(*, only_open: bool = False) -> list[dict]:
     """Workspace tasks assigned to the token's user — catches My-Tasks items
     that are in no project. Overlaps with project listings; callers de-dupe."""
-    return _paginate(
-        "/tasks",
-        {"assignee": "me", "workspace": get_workspace_gid(), "opt_fields": SEARCH_OPT_FIELDS},
-        operation="list_my_tasks",
-    )
+    params: dict = {
+        "assignee": "me",
+        "workspace": get_workspace_gid(),
+        "opt_fields": SEARCH_OPT_FIELDS,
+    }
+    if only_open:
+        params["completed_since"] = "now"
+    return _paginate("/tasks", params, operation="list_my_tasks")
 
 
 def get_task_detail(task_gid: str) -> dict | None:
