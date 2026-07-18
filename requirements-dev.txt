@@ -12,3 +12,4 @@ cloud-sql-python-connector>=1.7.0
 opentelemetry-sdk>=1.24
 opentelemetry-exporter-otlp-proto-http>=1.24
 python-dotenv>=1.0.0
+fastapi>=0.111

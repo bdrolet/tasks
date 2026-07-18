@@ -34,3 +34,8 @@ inbox_api_url = "https://inbox-api-....run.app"
 # Leave empty until webhook registration (docs/asana-webhook-setup.md), then
 # paste the X-Hook-Secret captured from the tasks-webhook CF logs.
 asana_webhook_secret = ""
+
+# tasks-api bearer token — openssl rand -base64 24 | tr -d '/+=' | head -c 32
+tasks_api_token = "CHANGE-ME"
+# GitHub Actions deployer SA (same value as the GCP_DEPLOYER_SA repo secret)
+deployer_sa = "inbox-deployer@bens-project-462804.iam.gserviceaccount.com"

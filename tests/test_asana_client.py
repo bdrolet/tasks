@@ -176,3 +176,159 @@ def test_current_section_picks_this_project(monkeypatch):
         ]
     }
     assert asana.current_section(task) == {"gid": "s1", "name": "Review"}
+
+
+def _capture_seq(monkeypatch, responses):
+    """Like _capture but consumes a list of responses in order."""
+    calls = []
+    queue = list(responses)
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        return queue.pop(0)
+
+    monkeypatch.setattr(asana.httpx, "request", fake_request)
+    return calls
+
+
+def test_list_projects_paginates(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(
+        monkeypatch,
+        [
+            _resp(200, {"data": [{"gid": "p1", "name": "Inbox"}], "next_page": {"offset": "abc"}}),
+            _resp(200, {"data": [{"gid": "p2", "name": "Chores"}], "next_page": None}),
+        ],
+    )
+    projects = asana.list_projects()
+    assert [p["gid"] for p in projects] == ["p1", "p2"]
+    assert calls[0]["url"].endswith("/projects")
+    assert calls[0]["params"]["workspace"] == "ws-1"
+    assert calls[0]["params"]["archived"] == "false"
+    assert calls[0]["params"]["limit"] == 100
+    assert "offset" not in calls[0]["params"]
+    assert calls[1]["params"]["offset"] == "abc"
+
+
+def test_list_project_tasks_single_page(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch,
+        [_resp(200, {"data": [{"gid": "t1", "name": "A", "notes": "", "completed": False}]})],
+    )
+    tasks = asana.list_project_tasks("p1")
+    assert tasks[0]["gid"] == "t1"
+    assert calls[0]["params"]["project"] == "p1"
+    assert calls[0]["params"]["opt_fields"] == asana.SEARCH_OPT_FIELDS
+
+
+def test_list_project_tasks_only_open_adds_completed_since(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_project_tasks("p1", only_open=True)
+    assert calls[0]["params"]["completed_since"] == "now"
+
+
+def test_list_project_tasks_default_omits_completed_since(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_project_tasks("p1")
+    assert "completed_since" not in calls[0]["params"]
+
+
+def test_list_my_tasks(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": [{"gid": "t9"}]})])
+    assert asana.list_my_tasks()[0]["gid"] == "t9"
+    assert calls[0]["params"]["assignee"] == "me"
+    assert calls[0]["params"]["workspace"] == "ws-1"
+
+
+def test_list_my_tasks_only_open_adds_completed_since(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_my_tasks(only_open=True)
+    assert calls[0]["params"]["completed_since"] == "now"
+
+
+def test_list_my_tasks_default_omits_completed_since(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": []})])
+    asana.list_my_tasks()
+    assert "completed_since" not in calls[0]["params"]
+
+
+def test_get_task_detail_returns_none_on_404(monkeypatch):
+    _capture_seq(monkeypatch, [_resp(404, {"errors": [{"message": "Not Found"}]})])
+    assert asana.get_task_detail("nope") is None
+
+
+def test_get_task_detail_fetches_rich_fields(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {"gid": "t1", "name": "A"}})])
+    task = asana.get_task_detail("t1")
+    assert task == {"gid": "t1", "name": "A"}
+    assert calls[0]["url"].endswith("/tasks/t1")
+    assert calls[0]["params"]["opt_fields"] == asana.DETAIL_OPT_FIELDS
+
+
+def test_get_stories(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch,
+        [_resp(200, {"data": [{"gid": "s1", "type": "comment", "text": "hi"}]})],
+    )
+    stories = asana.get_stories("t1")
+    assert stories[0]["gid"] == "s1"
+    assert calls[0]["url"].endswith("/tasks/t1/stories")
+
+
+def test_create_task_from_fields(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch, [_resp(201, {"data": {"gid": "77", "permalink_url": "https://a/77"}})]
+    )
+    created = asana.create_task_from_fields({"name": "Buy milk", "projects": ["p1"]})
+    assert created.gid == "77"
+    assert created.permalink_url == "https://a/77"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/tasks")
+    assert calls[0]["json"] == {"data": {"name": "Buy milk", "projects": ["p1"]}}
+
+
+def test_update_task_puts_fields(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {"gid": "77"}})])
+    asana.update_task("77", {"completed": True, "due_on": None})
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["url"].endswith("/tasks/77")
+    assert calls[0]["json"] == {"data": {"completed": True, "due_on": None}}
+
+
+def test_remove_tag(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {}})])
+    asana.remove_tag("77", "tag-1")
+    assert calls[0]["url"].endswith("/tasks/77/removeTag")
+    assert calls[0]["json"] == {"data": {"tag": "tag-1"}}
+
+
+def test_create_story_text(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(201, {"data": {"gid": "s1", "text": "hi"}})])
+    story = asana.create_story("77", text="hi")
+    assert story["gid"] == "s1"
+    assert calls[0]["url"].endswith("/tasks/77/stories")
+    assert calls[0]["json"] == {"data": {"text": "hi"}}
+
+
+def test_create_story_html(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(201, {"data": {"gid": "s1"}})])
+    asana.create_story("77", html_text="<body>hi</body>")
+    assert calls[0]["json"] == {"data": {"html_text": "<body>hi</body>"}}
+
+
+def test_update_story(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {"gid": "s1"}})])
+    asana.update_story("s1", text="edited")
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["url"].endswith("/stories/s1")
+    assert calls[0]["json"] == {"data": {"text": "edited"}}
+
+
+def test_delete_story(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": {}})])
+    asana.delete_story("s1")
+    assert calls[0]["method"] == "DELETE"
+    assert calls[0]["url"].endswith("/stories/s1")

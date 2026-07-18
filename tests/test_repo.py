@@ -54,3 +54,42 @@ def test_mark_completed_and_escalated():
 def test_was_escalated():
     assert repo_tasks.was_escalated(FakeConn(row={"escalated_at": "2026-07-15"}), "42")
     assert not repo_tasks.was_escalated(FakeConn(row=None), "42")
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.queries = []
+
+    def execute(self, query, params=None):
+        self.queries.append((query, params))
+        return _FakeCursor(self.rows)
+
+
+def test_email_context_by_gids_keys_by_task_gid():
+    conn = _FakeConn(
+        [
+            {"task_gid": "t1", "message_id": "m1", "category": "respond", "importance": "P1"},
+        ]
+    )
+    ctx = repo_tasks.email_context_by_gids(conn, ["t1", "t2"])
+    assert ctx == {
+        "t1": {"task_gid": "t1", "message_id": "m1", "category": "respond", "importance": "P1"}
+    }
+    query, params = conn.queries[0]
+    assert "IN (%s,%s)" in query
+    assert params == ("t1", "t2")
+
+
+def test_email_context_by_gids_empty_input_skips_query():
+    conn = _FakeConn([])
+    assert repo_tasks.email_context_by_gids(conn, []) == {}
+    assert conn.queries == []
