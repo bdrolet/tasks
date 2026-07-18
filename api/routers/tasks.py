@@ -231,7 +231,9 @@ def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token
             for tag_gid in tags_service.resolve_gids(body.add_tags):
                 asana.add_tag(gid, tag_gid)
         if body.remove_tags:
-            current: dict[str, str] = {(t.get("name") or "").casefold(): t["gid"] for t in task.get("tags") or []}
+            current: dict[str, str] = {
+                (t.get("name") or "").casefold(): t["gid"] for t in task.get("tags") or []
+            }
             for name in body.remove_tags:
                 tag_gid_opt = current.get(name.casefold())
                 if tag_gid_opt:  # unknown removes are ignored (idempotent)
