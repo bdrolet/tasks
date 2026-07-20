@@ -5,7 +5,7 @@ import clients.otel as otel
 from clients.db import get_conn
 from models.events import EmailClassifiedEvent
 from repo import tasks as repo_tasks
-from services import deadline, email_summary, policy, sections, tags
+from services import deadline, email_summary, policy, sections, tags, task_content
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +30,14 @@ def handle(event: EmailClassifiedEvent) -> None:
             logger.exception("Deadline extraction failed for message_id=%s", event["message_id"])
 
     tag_gids = tags.resolve_gids(event.get("tags") or [])
+    html_notes = task_content.render_html_notes(
+        task_content.for_email(event, key_points, relevant_links)
+    )
     task = asana.create_task(
         event,
         tag_gids=tag_gids,
-        key_points=key_points,
-        relevant_links=relevant_links,
         due_date=due_date,
+        html_notes=html_notes,
     )
     if task is None:
         logger.info(

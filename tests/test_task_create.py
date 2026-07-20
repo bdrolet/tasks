@@ -36,13 +36,8 @@ def _stub_enrichment(monkeypatch, key_points=None, links=None, due=None):
 def _capture_create(monkeypatch, result="42"):
     created = {}
 
-    def fake_create(event, *, tag_gids=None, key_points=None, relevant_links=None, due_date=None):
-        created.update(
-            tag_gids=tag_gids,
-            key_points=key_points,
-            relevant_links=relevant_links,
-            due_date=due_date,
-        )
+    def fake_create(event, *, tag_gids=None, due_date=None, html_notes=""):
+        created.update(tag_gids=tag_gids, due_date=due_date, html_notes=html_notes)
         if result is None:
             return None
         return CreatedTask(gid=result, permalink_url=f"https://a/{result}")
@@ -68,8 +63,11 @@ def test_handle_enriches_creates_places_and_stores(monkeypatch):
     task_create.handle(event)
 
     assert created["tag_gids"] == ["tg1"]
-    assert created["key_points"] == ["Summarized point", "Calendar invite: Standup"]
-    assert created["relevant_links"] == [["https://x", "Doc"], ["https://z", "RSVP: Accept"]]
+    # merged summary + seed key points render into the description
+    assert "<li>Summarized point</li>" in created["html_notes"]
+    assert "<li>Calendar invite: Standup</li>" in created["html_notes"]
+    assert '<a href="https://x">Doc</a>' in created["html_notes"]
+    assert '<a href="https://z">RSVP: Accept</a>' in created["html_notes"]
     assert created["due_date"] == "2026-07-31"  # P1 → deadline extraction ran
     assert moves == [("42", "sec-review")]
     assert inserts == [
