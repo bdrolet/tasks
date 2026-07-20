@@ -111,7 +111,9 @@ def test_create_task_empty_content_gets_source_footer(monkeypatch):
     monkeypatch.setattr(
         asana,
         "create_task_from_fields",
-        lambda fields: captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9"),
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
     )
     client.post("/tasks", json={"name": "Bare task"}, headers=AUTH)
     assert captured["html_notes"] == "<body><strong>Source:</strong> Created manually</body>"
@@ -123,7 +125,9 @@ def test_create_task_priority_prefixes_title(monkeypatch):
     monkeypatch.setattr(
         asana,
         "create_task_from_fields",
-        lambda fields: captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9"),
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
     )
     client.post("/tasks", json={"name": "Ship it", "priority": "P1"}, headers=AUTH)
     assert captured["name"] == "[P1] Ship it"
@@ -269,8 +273,9 @@ def test_create_task_links_and_action_items_render(monkeypatch):
     monkeypatch.setattr(
         asana,
         "create_task_from_fields",
-        lambda fields: captured.update(fields)
-        or CreatedTask(gid="t9", permalink_url="https://a/t9"),
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
     )
     client.post(
         "/tasks",

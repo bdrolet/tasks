@@ -14,10 +14,7 @@ from models.task_content import Source, TaskContent
 
 def _esc(text: str) -> str:
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 
@@ -121,7 +118,8 @@ def for_email(
         ("From", f"{event['sender_display']} ({event['sender']})"),
         ("Received", event["received_at"]),
     ]
-    links = [(event["web_link"], "Open in Outlook")] if event.get("web_link") else []
+    web_link = event.get("web_link")
+    links = [(web_link, "Open in Outlook")] if web_link else []
     source = Source(origin="Email", rows=rows, links=links, note=event["reasoning"])
 
     return TaskContent(
