@@ -264,6 +264,40 @@ def list_tags() -> list[dict]:
     )
 
 
+def create_project(name: str, sections: list[str] | None = None) -> dict:
+    """Create a workspace project and its sections in order.
+    Returns {gid, permalink_url, sections: {name: gid}}."""
+    resp = _request(
+        "POST",
+        "/projects",
+        operation="create_project",
+        params={"opt_fields": "gid,permalink_url"},
+        json={"data": {"name": name, "workspace": get_workspace_gid()}},
+    )
+    resp.raise_for_status()
+    data = resp.json()["data"]
+    project_gid = data["gid"]
+
+    section_gids: dict[str, str] = {}
+    for section_name in sections or []:
+        s = _request(
+            "POST",
+            f"/projects/{project_gid}/sections",
+            operation="create_section",
+            params={"opt_fields": "gid,name"},
+            json={"data": {"name": section_name}},
+        )
+        s.raise_for_status()
+        sd = s.json()["data"]
+        section_gids[sd["name"]] = sd["gid"]
+
+    return {
+        "gid": project_gid,
+        "permalink_url": data.get("permalink_url"),
+        "sections": section_gids,
+    }
+
+
 def list_project_tasks(project_gid: str, *, only_open: bool = False) -> list[dict]:
     params: dict = {"project": project_gid, "opt_fields": SEARCH_OPT_FIELDS}
     if only_open:

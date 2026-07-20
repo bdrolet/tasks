@@ -162,13 +162,13 @@ def test_current_section_picks_this_project(monkeypatch):
 
 
 def _capture_seq(monkeypatch, responses):
-    """Like _capture but consumes a list of responses in order."""
+    """Like _capture but returns responses in order, one per call."""
     calls = []
-    queue = list(responses)
+    it = iter(responses)
 
     def fake_request(method, url, **kwargs):
         calls.append({"method": method, "url": url, **kwargs})
-        return queue.pop(0)
+        return next(it)
 
     monkeypatch.setattr(asana.httpx, "request", fake_request)
     return calls
@@ -331,3 +331,40 @@ def test_list_tags_returns_workspace_tags(monkeypatch):
     assert calls[0]["method"] == "GET"
     assert calls[0]["url"].endswith("/workspaces/ws-1/tags")
     assert calls[0]["params"]["opt_fields"] == "name"
+
+
+def test_create_project_creates_project_then_sections(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(
+        monkeypatch,
+        [
+            _resp(201, {"data": {"gid": "proj-new",
+                                 "permalink_url": "https://app.asana.com/x/proj-new"}}),
+            _resp(201, {"data": {"gid": "sec-a", "name": "Planning"}}),
+            _resp(201, {"data": {"gid": "sec-b", "name": "Build"}}),
+        ],
+    )
+
+    result = asana.create_project("Kitchen Remodel", ["Planning", "Build"])
+
+    assert result["gid"] == "proj-new"
+    assert result["permalink_url"] == "https://app.asana.com/x/proj-new"
+    assert result["sections"] == {"Planning": "sec-a", "Build": "sec-b"}
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/projects")
+    assert calls[0]["json"]["data"] == {"name": "Kitchen Remodel", "workspace": "ws-1"}
+    assert calls[1]["url"].endswith("/projects/proj-new/sections")
+    assert calls[1]["json"]["data"] == {"name": "Planning"}
+    assert calls[2]["json"]["data"] == {"name": "Build"}
+
+
+def test_create_project_no_sections(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture_seq(
+        monkeypatch,
+        [_resp(201, {"data": {"gid": "proj-x", "permalink_url": None}})],
+    )
+    result = asana.create_project("Solo")
+    assert result["gid"] == "proj-x"
+    assert result["sections"] == {}
+    assert len(calls) == 1
