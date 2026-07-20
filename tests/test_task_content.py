@@ -1,5 +1,6 @@
 from models.task_content import Source, TaskContent
-from services.task_content import render_html_notes
+from services.task_content import for_email, render_html_notes
+from tests.test_events import make_email_event
 
 
 def test_taskcontent_defaults_are_empty():
@@ -65,10 +66,6 @@ def test_render_sections_in_order_and_escaped():
 def test_render_is_deterministic():
     c = TaskContent(key_points=["a", "b"], source=Source(origin="Email"))
     assert render_html_notes(c) == render_html_notes(c)
-
-
-from services.task_content import for_email
-from tests.test_events import make_email_event
 
 
 def _action_labels(content):
