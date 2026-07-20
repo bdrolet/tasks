@@ -193,11 +193,12 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
 
 @router.post("/tasks", response_model=CreatedTaskResponse, status_code=201)
 def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> CreatedTaskResponse:
+    title = _title(body.name, body.priority)  # validates priority before any Asana I/O
     with translate_asana_errors():
         project_gid = _resolve_project_gid(body.project)
 
         fields: dict = {
-            "name": _title(body.name, body.priority),
+            "name": title,
             "projects": [project_gid],
             "html_notes": _render_content(body),
         }

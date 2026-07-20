@@ -21,6 +21,11 @@ the description holds prose in a fixed order.
 `context → key points → links → actions → source footer`. Sections omit when
 empty; the source footer is always present (`Created manually` for manual tasks).
 
+A PATCH that sets any content field (`context`, `key_points`, `links`,
+`action_items`) rewrites the entire description from those fields, including
+the source footer — patching an email-originated task's content via the API
+resets its footer to `Source: Created manually`.
+
 ## Conventions
 
 - **Priority** — the `[P0–P3]` title prefix, nothing else. Don't put priority

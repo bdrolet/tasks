@@ -68,6 +68,15 @@ def test_render_is_deterministic():
     assert render_html_notes(c) == render_html_notes(c)
 
 
+def test_render_escapes_double_quotes_in_urls():
+    html = render_html_notes(
+        TaskContent(links=[('https://x?a="b"', 'label "q"')], source=Source(origin="Email"))
+    )
+    assert '<a href="https://x?a=&quot;b&quot;">label &quot;q&quot;</a>' in html
+    assert 'a="b"' not in html
+    assert 'label "q"' not in html
+
+
 def _action_labels(content):
     return [label for label, _ in content.action_items]
 
