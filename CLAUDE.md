@@ -102,6 +102,13 @@ scripts/fetch-env.sh        # .env from Secret Manager + terraform.tfvars
 Open a PR rather than committing to `main` (auto-deploy watches `main`):
 branch off `main`, implement + verify, then use the `/pr-open` skill.
 
+**Before merging any PR** (`/pr-merge`), run the `verifying-pr-locally` skill —
+static CI plus a local runtime E2E against real Asana. Unit tests mock Asana, so
+only a real create proves the rendered `html_notes` is accepted. **After merging
+to `main`**, monitor the triggered deploys to green (`Deploy Functions`,
+`Deploy API`, `CI` — `gh run list --branch main`), since the merge auto-deploys
+tasks-events, tasks-webhook, and tasks-api.
+
 ## Terraform
 
 Use the `/terraform-plan` and `/terraform-apply` skills — they are repo-aware
