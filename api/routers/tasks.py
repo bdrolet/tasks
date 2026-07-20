@@ -88,6 +88,9 @@ def wrap_html_body(html: str) -> str:
 _VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
 
 
+# Manual/API title assembly. Follow the "Title" section of
+# docs/task-content-standard.md (authoritative — doc wins): callers should pass a
+# verb-first {verb} {object} name; this applies the [PX] prefix.
 def _title(name: str, priority: str | None) -> str:
     if priority is None:
         return name

@@ -9,6 +9,10 @@ description: Use when the user asks how the tasks service works, how events flow
 
 Inbox classifies every email and publishes `email_classified` facts; **this repo decides which become tasks** (`services/policy.py`: urgent/review/respond) and enriches them (Claude summary + deadline) before creating.
 
+Task titles follow the "Title" section of `docs/task-content-standard.md` —
+`[PX] {verb} {object}`, a verb-first action generated in
+`services/email_summary.py`.
+
 ```
 inbox CF ──publish──▶ email-events (Pub/Sub, INBOX-owned) ──trigger──▶ tasks-events CF (main.py process)
                                                                         │ email_classified → policy → enrich → create + section
