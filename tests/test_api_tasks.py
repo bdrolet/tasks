@@ -240,3 +240,46 @@ def test_patch_section_move_task_without_project_400(monkeypatch):
     _patch_env(monkeypatch, detail=detail)
     resp = client.patch("/tasks/t1", json={"section": "Done"}, headers=AUTH)
     assert resp.status_code == 400
+
+
+def test_create_task_invalid_priority_400(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    resp = client.post("/tasks", json={"name": "X", "priority": "P9"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "invalid priority" in str(resp.json()["detail"])
+
+
+def test_patch_priority_requires_name_400(monkeypatch):
+    _patch_env(monkeypatch)
+    resp = client.patch("/tasks/t1", json={"priority": "P1"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "priority requires name" in str(resp.json()["detail"])
+
+
+def test_patch_invalid_priority_400(monkeypatch):
+    _patch_env(monkeypatch)
+    resp = client.patch("/tasks/t1", json={"name": "n", "priority": "P9"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "invalid priority" in str(resp.json()["detail"])
+
+
+def test_create_task_links_and_action_items_render(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: captured.update(fields)
+        or CreatedTask(gid="t9", permalink_url="https://a/t9"),
+    )
+    client.post(
+        "/tasks",
+        json={
+            "name": "X",
+            "links": [["https://x", "Doc"]],
+            "action_items": [["Do it", "https://y"]],
+        },
+        headers=AUTH,
+    )
+    assert '<a href="https://x">Doc</a>' in captured["html_notes"]
+    assert '<a href="https://y">Do it</a>' in captured["html_notes"]
