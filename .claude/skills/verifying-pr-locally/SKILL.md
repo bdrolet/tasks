@@ -72,6 +72,9 @@ export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libpq/lib
   tags (e.g. `<p>`) with 400 "XML is invalid". Any change touching
   `services/task_content` or `clients/asana.create_task*` MUST do a real create
   (manual via the API, pipeline via `scripts/test-task-create.py`).
+- A created task's title should read as an action, e.g. `[P1] Review Q3 board
+  deck` — the `[PX] {verb} {object}` standard in the "Title" section of
+  `docs/task-content-standard.md`, not a raw email subject.
 - **Auth is a no-op locally** — the `.env` from `fetch-env.sh` has no
   `TASKS_API_TOKEN`, and off Cloud Run `verify_token` allows all. So local calls
   need no bearer. To probe auth, restart with `TASKS_API_TOKEN=probe` set and expect

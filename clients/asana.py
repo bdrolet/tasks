@@ -95,6 +95,7 @@ def create_task(
     tag_gids: list[str] | None = None,
     due_date: str | None = None,
     html_notes: str = "",
+    title: str | None = None,
 ) -> CreatedTask | None:
     """Create an Asana task from an email_classified event. The description is
     pre-rendered by the caller (handlers/task_create.py via services/task_content).
@@ -104,7 +105,10 @@ def create_task(
         return None
 
     payload: dict = {
-        "name": f"[{event['importance']}] {event['subject'] or '(no subject)'}",
+        # Enriched title comes from the caller; this is only the last-resort
+        # fallback. Standard: "Title" section of docs/task-content-standard.md
+        # (authoritative — doc wins).
+        "name": title or f"[{event['importance']}] {event['subject'] or '(no subject)'}",
         "html_notes": html_notes,
         "projects": [ASANA_PROJECT_ID],
         "external": {"gid": event["message_id"], "data": "inbox"},

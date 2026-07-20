@@ -15,12 +15,12 @@ def _stub_db(monkeypatch):
     return inserts
 
 
-def _stub_enrichment(monkeypatch, key_points=None, links=None, due=None):
+def _stub_enrichment(monkeypatch, key_points=None, links=None, due=None, title=None):
     summary_calls = []
 
     def fake_generate(event):
         summary_calls.append(event)
-        return EmailSummary(key_points=key_points or [], relevant_links=links or [])
+        return EmailSummary(key_points=key_points or [], relevant_links=links or [], title=title)
 
     monkeypatch.setattr(email_summary, "generate", fake_generate)
     deadline_calls = []
@@ -36,8 +36,8 @@ def _stub_enrichment(monkeypatch, key_points=None, links=None, due=None):
 def _capture_create(monkeypatch, result="42"):
     created = {}
 
-    def fake_create(event, *, tag_gids=None, due_date=None, html_notes=""):
-        created.update(tag_gids=tag_gids, due_date=due_date, html_notes=html_notes)
+    def fake_create(event, *, tag_gids=None, due_date=None, html_notes="", title=None):
+        created.update(tag_gids=tag_gids, due_date=due_date, html_notes=html_notes, title=title)
         if result is None:
             return None
         return CreatedTask(gid=result, permalink_url=f"https://a/{result}")
@@ -73,6 +73,28 @@ def test_handle_enriches_creates_places_and_stores(monkeypatch):
     assert inserts == [
         {"task_gid": "42", "message_id": "msg-123", "category": "review", "importance": "P1"}
     ]
+
+
+def test_handle_passes_enriched_title(monkeypatch):
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch, title="Review Q3 board deck")
+    created = _capture_create(monkeypatch)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+
+    task_create.handle(make_email_event(importance="P1"))
+
+    assert created["title"] == "[P1] Review Q3 board deck"
+
+
+def test_handle_passes_none_title_when_unenriched(monkeypatch):
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch)  # title defaults to None
+    created = _capture_create(monkeypatch)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+
+    task_create.handle(make_email_event())
+
+    assert created["title"] is None
 
 
 def test_handle_skips_non_task_categories_without_enrichment(monkeypatch):
