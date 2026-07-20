@@ -44,6 +44,7 @@ class LabelAppliedEvent(TypedDict):
 class EmailSummary:
     key_points: list[str] = field(default_factory=list)
     relevant_links: list[list[str]] = field(default_factory=list)  # [url, label]
+    title: str | None = None  # normalized "{verb} {object}", no [PX] prefix
 
 
 @dataclass
