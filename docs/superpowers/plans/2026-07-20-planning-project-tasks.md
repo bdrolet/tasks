@@ -523,16 +523,62 @@ git commit -m "tasks-api: GET /projects, GET /tags, POST /projects"
 
 ### Task 5: `planning-project-tasks` skill + docs
 
+Skill structure follows the creating-skills standard: a lean `SKILL.md` that
+**references** `editing-tasks`/`searching-tasks` instead of repeating their
+curls, plus one `fast` subagent that absorbs the verbose inspection I/O and
+returns a compact digest. No `references/` — the container-decision logic is the
+skill's core and stays in the body (<500 words). No creation subagent — the
+writes are the approval-gated, irreversible step and stay visible in the parent.
+
 **Files:**
 - Create: `~/.claude/skills/planning-project-tasks/SKILL.md` (outside this repo)
+- Create: `~/.claude/skills/planning-project-tasks/agents/inspecting-asana-state.md` (outside this repo)
 - Modify: `CLAUDE.md` (tasks-api endpoint description, ~the API row of the Stack table)
 - Modify: `~/.claude/projects/-Users-ben-src-tasks/memory/tasks-api-service.md` (outside this repo)
 
 **Interfaces:**
 - Consumes: the endpoints from Tasks 1-4, plus existing `POST /search`, `POST /tasks`. Auth token from `~/src/tasks/terraform/terraform.tfvars` (`tasks_api_token`), base `https://tasks-api.drolet.cloud` — identical to the `editing-tasks` skill.
-- Produces: a skill file (documentation/behavior only — verified manually, no pytest).
+- Produces: a skill directory (documentation/behavior only — verified via the validate-skill subagent, no pytest). The subagent takes candidate task names + returns `{projects:[{name,sections}], tags:[...], dedup:[{candidate, matches:[{name,gid,project}]}]}`.
 
-- [ ] **Step 1: Write the skill file**
+- [ ] **Step 1: Write the inspection subagent**
+
+Create `~/.claude/skills/planning-project-tasks/agents/inspecting-asana-state.md`:
+
+````markdown
+---
+name: inspecting-asana-state
+description: Fetch Asana projects/sections/tags and dedup-search candidate task names; return a compact digest.
+model: fast
+---
+
+# Inspecting Asana State
+
+## Inputs
+- A list of candidate task names (the parent's decomposition of the brief).
+
+## Steps
+1. Resolve auth:
+   ```bash
+   TOKEN=$(grep 'tasks_api_token' ~/src/tasks/terraform/terraform.tfvars | grep -o '"[^"]*"' | tr -d '"')
+   BASE=https://tasks-api.drolet.cloud
+   ```
+2. `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"` — projects + sections.
+3. `curl -s "$BASE/tags" -H "Authorization: Bearer $TOKEN"` — tag vocabulary.
+4. For each candidate name, dedup-search (open + completed):
+   ```bash
+   curl -s -XPOST "$BASE/search" -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" -d '{"query":"<name>","completed":null}'
+   ```
+
+## Output
+A compact digest ONLY (no raw JSON dumps):
+- **Projects**: each project name → its section names.
+- **Tags**: the existing tag names.
+- **Dedup**: per candidate, any close-match existing tasks as `name (gid) — project`,
+  or "no matches". Do not decide skips — just report matches.
+````
+
+- [ ] **Step 2: Write the skill file**
 
 Create `~/.claude/skills/planning-project-tasks/SKILL.md`:
 
@@ -542,10 +588,9 @@ name: planning-project-tasks
 version: 1.0.0
 description: >
   Use when the user hands over a project brief or a detailed list of things to
-  be done and wants it turned into well-defined Asana tasks — "plan this
-  project", "turn this into tasks", "ingest these into Asana". Inspects existing
-  Asana state, decides the structure itself, and proposes the full plan for one
-  approval before creating anything.
+  be done and wants them created as Asana tasks — "plan this project", "turn
+  this into tasks", "ingest these into Asana", "break this down into tasks". For
+  creating or editing a single task, use editing-tasks instead.
 metadata:
   depends-on: "searching-tasks, editing-tasks"
 ---
@@ -553,105 +598,66 @@ metadata:
 # Planning Project Tasks
 
 Turn a prose brief into a reviewed set of Asana tasks. You decide the structure
-from what already exists; you always show the plan before writing.
+from what already exists; you always show the plan before writing anything.
 
-## Auth token
+## 1. Understand the brief
 
-```bash
-TOKEN=$(grep 'tasks_api_token' ~/src/tasks/terraform/terraform.tfvars | grep -o '"[^"]*"' | tr -d '"')
-BASE=https://tasks-api.drolet.cloud
-```
+Draft the candidate task breakdown. Ask clarifying questions ONLY where it is
+genuinely ambiguous: scope boundaries, hard deadlines, or priority. Don't over-ask.
 
-## Step 1 — Understand the brief
+## 2. Inspect existing state
 
-Read the brief. Ask clarifying questions ONLY where the breakdown is genuinely
-ambiguous: scope boundaries, hard deadlines, or priority. Do not over-ask.
+Dispatch the **inspecting-asana-state** subagent (`agents/inspecting-asana-state.md`)
+with your candidate task names. It returns a digest: existing projects + their
+sections, the tag vocabulary, and per-candidate duplicate matches. (Fallback if
+dispatch fails: run the curls in that agent file inline.)
 
-## Step 2 — Inspect existing state
+## 3. Decide the container (your call)
 
-```bash
-curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"   # projects + their sections
-curl -s "$BASE/tags"     -H "Authorization: Bearer $TOKEN"   # existing tag vocabulary
-```
-
-For each candidate task, check for duplicates with the existing search
-(see the searching-tasks skill / `POST /search`):
-
-```bash
-curl -s -XPOST "$BASE/search" -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{"query":"get quotes","completed":null}'
-```
-
-## Step 3 — Decide the container (your call)
-
-Pick ONE based on what you saw:
+Pick ONE from the digest:
 
 - **New project** — a big or distinct initiative with no good existing home →
   create a project with sections.
 - **Nest in an existing project** — the brief clearly belongs to one that exists
-  → put tasks into its EXISTING sections (you cannot create new sections in an
-  existing project through this skill).
+  → tasks into its EXISTING sections (this skill can't add sections to an
+  existing project).
 - **Parent + subtasks** — a small list → one parent task in the default tasks
-  project, the items as subtasks.
+  project, items as subtasks.
 
-Reuse existing sections and existing tags rather than inventing near-duplicates.
+Reuse existing sections and tags rather than inventing near-duplicates.
 
-## Step 4 — Propose the plan, get ONE approval
+## 4. Propose the plan, get ONE approval
 
-Show the user, before writing anything:
-- the container choice (which of the three, and the project/section names),
-- the full task tree (names, priorities, due dates, key points),
-- subtasks nested under their parents,
-- **dedup flags**: for each likely duplicate, name the existing task and ask
-  whether to skip it. Never auto-skip.
+Show the user before any write: the container choice (names), the full task tree
+(names, priorities, due dates, key points) with subtasks nested, and **dedup
+flags** — for each likely duplicate, name the existing task and ask whether to
+skip. Never auto-skip. Wait for explicit approval; revise if asked.
 
-Wait for explicit approval. Revise if asked.
+## 5. Create (orchestrate, in order)
 
-## Step 5 — Create (orchestrate primitives, in order)
+Create tasks with the **editing-tasks** skill's `POST /tasks` (same fields). Order:
 
-1. If a new project is warranted:
-   ```bash
-   curl -s -XPOST "$BASE/projects" -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"Kitchen Remodel","sections":["Planning","Build"]}'
-   # -> {"project_gid":"...","permalink_url":"...","sections":{"Planning":"...","Build":"..."}}
-   ```
-2. Create each top-level task (into a section by name; omit `parent`). Fields are
-   the same as the editing-tasks skill (`name`, `priority`, `context`,
-   `key_points`, `links`, `action_items`, `due_on`/`due_at`, `tags`, `project`,
-   `section`, `assignee`):
-   ```bash
-   curl -s -XPOST "$BASE/tasks" -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"Get quotes","project":"Kitchen Remodel","section":"Planning","priority":"P2","key_points":["3 contractors"]}'
-   # -> {"task_gid":"...","permalink_url":"..."}
-   ```
-3. Create each subtask with `parent` set to the parent's `task_gid`. A subtask
-   takes NO `project`/`section` (it belongs to its parent):
-   ```bash
-   curl -s -XPOST "$BASE/tasks" -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"Rent dumpster","parent":"<parent task_gid>","key_points":["book online"]}'
-   ```
+1. If a new project is warranted → `POST /projects` with
+   `{"name":..., "sections":[...]}`; keep the returned `sections` name→gid map.
+2. Each top-level task → `POST /tasks` into its section (omit `parent`).
+3. Each subtask → `POST /tasks` with `parent` = the parent's `task_gid` and NO
+   `project`/`section` (a subtask belongs to its parent, never a section).
 
-Report each created task's `permalink_url`. If a call fails partway, there is no
-rollback — list what was created and what failed, and offer to retry the
-remainder.
-
-## Notes
-
-- Priority `P0`–`P3` prefixes the title; there is no free-form description — the
-  API renders a uniform description from the structured fields.
-- Unknown `section`/`project` names return 400 with the valid names — retry with
-  a listed one (or fall back to creating a new project).
+Report each created `permalink_url`. There is no rollback — if a call fails
+partway, list what was created vs. failed and offer to retry the remainder.
 ````
 
-- [ ] **Step 2: Verify the skill file is well-formed**
+- [ ] **Step 3: Validate the skill**
 
-Run: `head -20 ~/.claude/skills/planning-project-tasks/SKILL.md`
-Expected: valid YAML frontmatter with `name: planning-project-tasks` and a `description`.
+Read `~/.claude/skills/creating-skills/agents/validate-skill.md`, then spawn the
+**validate-skill** subagent with the absolute path
+`~/.claude/skills/planning-project-tasks`. Fix any **FAIL** items; address
+**WARN** items if practical.
 
-- [ ] **Step 3: Update in-repo docs**
+Expected: no FAIL items (name matches directory, description is triggers-only,
+body under 500 words, dependencies declared, subagent has Inputs/Steps/Output).
+
+- [ ] **Step 4: Update in-repo docs**
 
 In `CLAUDE.md`, extend the `tasks-api` row of the Stack table so it lists the new endpoints. Change the API cell text from:
 
@@ -665,7 +671,7 @@ to:
 search/fetch/add/update for tasks + comments; list/create projects, list tags, subtasks
 ```
 
-- [ ] **Step 4: Update the memory pointer (outside repo)**
+- [ ] **Step 5: Update the memory pointer (outside repo)**
 
 Append to `~/.claude/projects/-Users-ben-src-tasks/memory/tasks-api-service.md` a line noting the new endpoints:
 
@@ -673,14 +679,14 @@ Append to `~/.claude/projects/-Users-ben-src-tasks/memory/tasks-api-service.md` 
 - `GET /projects` (with sections), `GET /tags`, `POST /projects`, and `parent` on `POST /tasks` (subtasks) back the planning-project-tasks skill.
 ```
 
-- [ ] **Step 5: Commit in-repo docs**
+- [ ] **Step 6: Commit in-repo docs**
 
 ```bash
 git add CLAUDE.md
 git commit -m "docs: note project/tag/subtask endpoints for planning-project-tasks"
 ```
 
-(The skill file and memory file live outside this repo — no repo commit for those.)
+(The skill files and memory file live outside this repo — no repo commit for those.)
 
 ---
 
