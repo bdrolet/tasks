@@ -14,10 +14,8 @@ def token(monkeypatch):
 
 
 def test_get_projects_includes_sections(monkeypatch):
-    monkeypatch.setattr(asana, "list_projects",
-                        lambda: [{"gid": "p1", "name": "Home"}])
-    monkeypatch.setattr(asana, "get_sections",
-                        lambda gid: [{"gid": "s1", "name": "Planning"}])
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Home"}])
+    monkeypatch.setattr(asana, "get_sections", lambda gid: [{"gid": "s1", "name": "Planning"}])
 
     resp = client.get("/projects", headers=AUTH)
     assert resp.status_code == 200
@@ -27,8 +25,7 @@ def test_get_projects_includes_sections(monkeypatch):
 
 
 def test_get_tags(monkeypatch):
-    monkeypatch.setattr(asana, "list_tags",
-                        lambda: [{"gid": "t1", "name": "home"}])
+    monkeypatch.setattr(asana, "list_tags", lambda: [{"gid": "t1", "name": "home"}])
     resp = client.get("/tags", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["tags"] == [{"gid": "t1", "name": "home"}]
@@ -36,15 +33,15 @@ def test_get_tags(monkeypatch):
 
 def test_create_project(monkeypatch):
     monkeypatch.setattr(
-        asana, "create_project",
+        asana,
+        "create_project",
         lambda name, sections: {
             "gid": "p-new",
             "permalink_url": "https://app.asana.com/x/p-new",
             "sections": {"Planning": "s1"},
         },
     )
-    resp = client.post("/projects", headers=AUTH,
-                       json={"name": "Reno", "sections": ["Planning"]})
+    resp = client.post("/projects", headers=AUTH, json={"name": "Reno", "sections": ["Planning"]})
     assert resp.status_code == 201
     body = resp.json()
     assert body["project_gid"] == "p-new"

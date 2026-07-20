@@ -321,8 +321,13 @@ def test_list_tags_returns_workspace_tags(monkeypatch):
     monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
     calls = _capture(
         monkeypatch,
-        _resp(200, {"data": [{"gid": "t1", "name": "home"},
-                             {"gid": "t2", "name": "urgent"}], "next_page": None}),
+        _resp(
+            200,
+            {
+                "data": [{"gid": "t1", "name": "home"}, {"gid": "t2", "name": "urgent"}],
+                "next_page": None,
+            },
+        ),
     )
     assert asana.list_tags() == [
         {"gid": "t1", "name": "home"},
@@ -338,8 +343,10 @@ def test_create_project_creates_project_then_sections(monkeypatch):
     calls = _capture_seq(
         monkeypatch,
         [
-            _resp(201, {"data": {"gid": "proj-new",
-                                 "permalink_url": "https://app.asana.com/x/proj-new"}}),
+            _resp(
+                201,
+                {"data": {"gid": "proj-new", "permalink_url": "https://app.asana.com/x/proj-new"}},
+            ),
             _resp(201, {"data": {"gid": "sec-a", "name": "Planning"}}),
             _resp(201, {"data": {"gid": "sec-b", "name": "Build"}}),
         ],

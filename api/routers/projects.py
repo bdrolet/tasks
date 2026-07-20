@@ -51,8 +51,9 @@ def get_projects(_: None = Depends(verify_token)) -> ProjectsResponse:
             ProjectInfo(
                 gid=p["gid"],
                 name=p["name"],
-                sections=[SectionInfo(gid=s["gid"], name=s["name"])
-                          for s in asana.get_sections(p["gid"])],
+                sections=[
+                    SectionInfo(gid=s["gid"], name=s["name"]) for s in asana.get_sections(p["gid"])
+                ],
             )
             for p in projects
         ]

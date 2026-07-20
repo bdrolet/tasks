@@ -299,16 +299,19 @@ def test_create_subtask_with_parent(monkeypatch):
 
     monkeypatch.setattr(asana, "create_task_from_fields", fake_create)
     monkeypatch.setattr(
-        asana, "add_task_to_section",
+        asana,
+        "add_task_to_section",
         lambda *a, **k: pytest.fail("subtask must not be sectioned"),
     )
     monkeypatch.setattr(
-        asana, "list_projects",
+        asana,
+        "list_projects",
         lambda: pytest.fail("subtask must not resolve a project"),
     )
 
     resp = client.post(
-        "/tasks", headers=AUTH,
+        "/tasks",
+        headers=AUTH,
         json={"name": "Rent dumpster", "parent": "t-parent", "key_points": ["book online"]},
     )
 
