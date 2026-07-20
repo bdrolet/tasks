@@ -315,3 +315,19 @@ def test_delete_story(monkeypatch):
     asana.delete_story("s1")
     assert calls[0]["method"] == "DELETE"
     assert calls[0]["url"].endswith("/stories/s1")
+
+
+def test_list_tags_returns_workspace_tags(monkeypatch):
+    monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
+    calls = _capture(
+        monkeypatch,
+        _resp(200, {"data": [{"gid": "t1", "name": "home"},
+                             {"gid": "t2", "name": "urgent"}], "next_page": None}),
+    )
+    assert asana.list_tags() == [
+        {"gid": "t1", "name": "home"},
+        {"gid": "t2", "name": "urgent"},
+    ]
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["url"].endswith("/workspaces/ws-1/tags")
+    assert calls[0]["params"]["opt_fields"] == "name"

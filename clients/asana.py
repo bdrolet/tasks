@@ -255,6 +255,15 @@ def list_projects() -> list[dict]:
     )
 
 
+def list_tags() -> list[dict]:
+    """All tags in the workspace: [{gid, name}]."""
+    return _paginate(
+        f"/workspaces/{get_workspace_gid()}/tags",
+        {"opt_fields": "name"},
+        operation="list_tags",
+    )
+
+
 def list_project_tasks(project_gid: str, *, only_open: bool = False) -> list[dict]:
     params: dict = {"project": project_gid, "opt_fields": SEARCH_OPT_FIELDS}
     if only_open:
