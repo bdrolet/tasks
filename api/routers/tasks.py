@@ -46,7 +46,7 @@ class CreateTaskRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str | None = None
     html_description: str | None = None
-    project: str | None = None  # name or GID; default = email-tasks project
+    project: str | None = None  # name or GID; default = configured tasks project (ASANA_PROJECT_ID)
     section: str | None = None  # name or GID within the project
     due_on: str | None = None
     due_at: str | None = None
