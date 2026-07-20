@@ -288,3 +288,32 @@ def test_create_task_links_and_action_items_render(monkeypatch):
     )
     assert '<a href="https://x">Doc</a>' in captured["html_notes"]
     assert '<a href="https://y">Do it</a>' in captured["html_notes"]
+
+
+def test_create_subtask_with_parent(monkeypatch):
+    captured: dict = {}
+
+    def fake_create(fields):
+        captured.update(fields)
+        return CreatedTask(gid="sub-1", permalink_url="https://app.asana.com/x/sub-1")
+
+    monkeypatch.setattr(asana, "create_task_from_fields", fake_create)
+    monkeypatch.setattr(
+        asana, "add_task_to_section",
+        lambda *a, **k: pytest.fail("subtask must not be sectioned"),
+    )
+    monkeypatch.setattr(
+        asana, "list_projects",
+        lambda: pytest.fail("subtask must not resolve a project"),
+    )
+
+    resp = client.post(
+        "/tasks", headers=AUTH,
+        json={"name": "Rent dumpster", "parent": "t-parent", "key_points": ["book online"]},
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["task_gid"] == "sub-1"
+    assert captured["parent"] == "t-parent"
+    assert "projects" not in captured
+    assert "<body>" in captured["html_notes"]  # rendered content still applies

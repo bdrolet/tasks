@@ -57,6 +57,7 @@ class CreateTaskRequest(BaseModel):
     due_at: str | None = None
     tags: list[str] = []
     assignee: str | None = None  # "me", email, or GID — passed through to Asana
+    parent: str | None = None  # task GID; when set, created as a subtask (no project/section)
 
 
 class CreatedTaskResponse(BaseModel):
@@ -198,11 +199,8 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
 def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> CreatedTaskResponse:
     title = _title(body.name, body.priority)  # validates priority before any Asana I/O
     with translate_asana_errors():
-        project_gid = _resolve_project_gid(body.project)
-
         fields: dict = {
             "name": title,
-            "projects": [project_gid],
             "html_notes": _render_content(body),
         }
         if body.due_on is not None:
@@ -216,10 +214,17 @@ def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> Cre
             if gids:
                 fields["tags"] = gids
 
-        section_gid = resolve_section(project_gid, body.section) if body.section else None
-        created = asana.create_task_from_fields(fields)
-        if section_gid:
-            asana.add_task_to_section(created.gid, section_gid)
+        if body.parent is not None:
+            # Subtask: belongs to its parent, not a project section.
+            fields["parent"] = body.parent
+            created = asana.create_task_from_fields(fields)
+        else:
+            project_gid = _resolve_project_gid(body.project)
+            fields["projects"] = [project_gid]
+            section_gid = resolve_section(project_gid, body.section) if body.section else None
+            created = asana.create_task_from_fields(fields)
+            if section_gid:
+                asana.add_task_to_section(created.gid, section_gid)
 
     return CreatedTaskResponse(task_gid=created.gid, permalink_url=created.permalink_url)
 
