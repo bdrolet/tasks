@@ -40,14 +40,16 @@ def _render_source(source: Source | None) -> str:
             + "</ul>"
         )
     if source.note:
-        parts.append(f"<p>{_esc(source.note)}</p>")
+        # Asana html_notes rich text does not support <p>; use a newline break.
+        parts.append(f"\n{_esc(source.note)}")
     return "".join(parts)
 
 
 def render_html_notes(content: TaskContent) -> str:
     parts: list[str] = []
     if content.context:
-        parts.append(f"<p>{_esc(content.context)}</p>")
+        # Asana html_notes rich text does not support <p>; use a newline break.
+        parts.append(f"{_esc(content.context)}\n")
     if content.key_points:
         parts.append(
             "<strong>Key points:</strong><ul>"

@@ -68,6 +68,16 @@ def test_render_is_deterministic():
     assert render_html_notes(c) == render_html_notes(c)
 
 
+def test_render_avoids_p_tags_unsupported_by_asana():
+    # Asana html_notes rich text rejects <p> (400 "XML is invalid"); context
+    # and source.note render as text, not paragraphs.
+    html = render_html_notes(
+        TaskContent(context="lead prose", source=Source(origin="Email", note="reasoning here"))
+    )
+    assert "<p>" not in html and "</p>" not in html
+    assert "lead prose" in html and "reasoning here" in html
+
+
 def test_render_escapes_double_quotes_in_urls():
     html = render_html_notes(
         TaskContent(links=[('https://x?a="b"', 'label "q"')], source=Source(origin="Email"))
