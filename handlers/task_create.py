@@ -1,5 +1,4 @@
 import logging
-import re
 
 import clients.asana as asana
 import clients.otel as otel
@@ -34,15 +33,11 @@ def handle(event: EmailClassifiedEvent) -> None:
     html_notes = task_content.render_html_notes(
         task_content.for_email(event, key_points, relevant_links)
     )
-    # Prepend the [PX] prefix per the "Title" section of docs/task-content-standard.md
-    # (authoritative — doc wins over code). The model should return only {verb} {object};
-    # strip a leading [Pn] tag defensively so the authoritative prefix is applied once.
-    # Falls back to [PX] {subject} in create_task when there is no enriched title.
-    if summary.title:
-        body = re.sub(r"^\[P\d\]\s*", "", summary.title).strip()
-        title = f"[{event['importance']}] {body}"
-    else:
-        title = None
+    # Prepend the authoritative [PX] prefix per the "Title" section of
+    # docs/task-content-standard.md (doc wins over code). email_summary already
+    # produced a clean {verb} {object} (no priority tag); create_task falls back
+    # to [PX] {subject} when there is no enriched title.
+    title = f"[{event['importance']}] {summary.title}" if summary.title else None
     task = asana.create_task(
         event,
         tag_gids=tag_gids,

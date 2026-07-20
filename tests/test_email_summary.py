@@ -46,6 +46,14 @@ def test_normalize_title_truncates_on_word_boundary():
     assert long.startswith(out)  # truncated, not reworded
 
 
+def test_normalize_title_strips_leading_priority_tag():
+    assert email_summary._normalize_title("[P3] Review the deck") == "Review the deck"
+
+
+def test_normalize_title_priority_tag_only_is_none():
+    assert email_summary._normalize_title("[P3]") is None
+
+
 def test_generate_survives_claude_failure(monkeypatch):
     def boom(prompt):
         raise RuntimeError("api down")

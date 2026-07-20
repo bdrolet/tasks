@@ -30,10 +30,12 @@ MAX_TITLE_CHARS = 60
 
 def _normalize_title(raw: str | None) -> str | None:
     """Clean a model-produced "{verb} {object}" title per the Title section of
-    docs/task-content-standard.md (authoritative — doc wins). None if empty."""
+    docs/task-content-standard.md (authoritative — doc wins). Strips a stray
+    leading [Pn] tag the model shouldn't emit; None if empty."""
     if not raw:
         return None
     title = " ".join(raw.split()).rstrip(".!,;:")
+    title = re.sub(r"^\[P\d\]\s*", "", title).strip()
     if len(title) > MAX_TITLE_CHARS:
         title = title[:MAX_TITLE_CHARS].rsplit(" ", 1)[0].rstrip()
     return title or None

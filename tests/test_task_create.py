@@ -97,17 +97,6 @@ def test_handle_passes_none_title_when_unenriched(monkeypatch):
     assert created["title"] is None
 
 
-def test_handle_strips_model_emitted_priority_tag(monkeypatch):
-    _stub_db(monkeypatch)
-    _stub_enrichment(monkeypatch, title="[P3] Review Q3 board deck")
-    created = _capture_create(monkeypatch)
-    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
-
-    task_create.handle(make_email_event(importance="P1"))
-
-    assert created["title"] == "[P1] Review Q3 board deck"
-
-
 def test_handle_skips_non_task_categories_without_enrichment(monkeypatch):
     summary_calls, _ = _stub_enrichment(monkeypatch)
     created = _capture_create(monkeypatch)
