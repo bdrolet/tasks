@@ -65,3 +65,66 @@ def test_render_sections_in_order_and_escaped():
 def test_render_is_deterministic():
     c = TaskContent(key_points=["a", "b"], source=Source(origin="Email"))
     assert render_html_notes(c) == render_html_notes(c)
+
+
+from services.task_content import for_email
+from tests.test_events import make_email_event
+
+
+def _action_labels(content):
+    return [label for label, _ in content.action_items]
+
+
+def test_for_email_review_action_items_and_source(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    monkeypatch.setenv("WEBHOOK_LABEL_TOKEN", "tok")
+    content = for_email(
+        make_email_event(category="review"),
+        key_points=["Point one"],
+        relevant_links=[["https://x", "Doc"]],
+    )
+    assert content.key_points == ["Point one"]
+    assert content.context is None  # key points present → no preview
+    assert content.links == [("https://x", "Doc")]
+    assert _action_labels(content) == [
+        "Confirmed review",
+        "Respond instead",
+        "Reference",
+        "Ignore",
+    ]
+    # action URLs carry the message id, chosen label, source, and token
+    confirm_url = content.action_items[0][1]
+    assert "id=msg-123" in confirm_url and "label=review" in confirm_url
+    assert "source=human_confirmation" in confirm_url and "token=tok" in confirm_url
+    assert content.source.origin == "Email"
+    assert content.source.rows == [
+        ("From", "Alice (alice@example.com)"),
+        ("Received", "2026-07-15T12:00:00Z"),
+    ]
+    assert content.source.links == [("https://outlook.example/msg-123", "Open in Outlook")]
+    assert content.source.note == "Needs review"
+
+
+def test_for_email_respond_swaps_confirm_and_alt(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    content = for_email(make_email_event(category="respond"), key_points=["p"], relevant_links=[])
+    assert _action_labels(content)[:2] == ["Confirmed respond", "Review instead"]
+
+
+def test_for_email_preview_fallback_without_key_points(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    content = for_email(make_email_event(body="y" * 900), key_points=[], relevant_links=[])
+    assert content.key_points == []
+    assert content.context is not None
+    assert content.context.startswith("y" * 500)
+    assert content.context.endswith("...")
+
+
+def test_for_email_includes_draft_reply_action(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    content = for_email(
+        make_email_event(draft_link="https://outlook/draft"),
+        key_points=["p"],
+        relevant_links=[],
+    )
+    assert ("Open draft reply in Outlook", "https://outlook/draft") in content.action_items
