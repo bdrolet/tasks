@@ -27,7 +27,8 @@ This design separates them.
 
 ## Problem
 
-Tasks land in the Asana email-tasks project from two independent paths with no
+Tasks land in the configured Asana project (`ASANA_PROJECT_ID`) from two
+independent paths with no
 shared notion of how a task should be shaped:
 
 1. **Automated pipeline** — `handlers/task_create.py` → `clients/asana.py::create_task`.
