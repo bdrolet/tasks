@@ -92,6 +92,14 @@ def test_create_task_builds_payload(monkeypatch):
     assert payload["html_notes"] == "<body>hi</body>"  # passed through, not built here
 
 
+def test_create_task_uses_enriched_title(monkeypatch):
+    calls = _capture(
+        monkeypatch, _resp(201, {"data": {"gid": "42", "permalink_url": "https://a/42"}})
+    )
+    asana.create_task(make_email_event(), title="[P1] Review the quarterly report")
+    assert calls[0]["json"]["data"]["name"] == "[P1] Review the quarterly report"
+
+
 def test_create_task_duplicate_returns_none(monkeypatch):
     _capture(
         monkeypatch,
