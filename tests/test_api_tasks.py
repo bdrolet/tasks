@@ -75,7 +75,7 @@ def test_get_task_404(monkeypatch):
     assert client.get("/tasks/nope", headers=AUTH).status_code == 404
 
 
-def test_create_task_defaults_to_email_project(monkeypatch):
+def test_create_task_renders_structured_content(monkeypatch):
     captured = {}
 
     def fake_create(fields):
@@ -87,37 +87,50 @@ def test_create_task_defaults_to_email_project(monkeypatch):
 
     resp = client.post(
         "/tasks",
-        json={"name": "Buy milk", "description": "2%", "due_on": "2026-07-20"},
+        json={
+            "name": "Renew passport",
+            "context": "expires in October",
+            "key_points": ["book appointment"],
+            "due_on": "2026-08-01",
+        },
         headers=AUTH,
     )
     assert resp.status_code == 201
-    assert resp.json() == {"task_gid": "t9", "permalink_url": "https://a/t9"}
     assert captured["projects"] == ["p-email"]
-    assert captured["notes"] == "2%"
-    assert captured["due_on"] == "2026-07-20"
+    assert captured["due_on"] == "2026-08-01"
+    assert captured["name"] == "Renew passport"  # no priority → plain title
+    assert captured["html_notes"].startswith("<body>")
+    assert "expires in October" in captured["html_notes"]
+    assert "<li>book appointment</li>" in captured["html_notes"]
+    assert "Created manually" in captured["html_notes"]  # mandatory source footer
 
 
-def test_create_task_html_description_wrapped(monkeypatch):
+def test_create_task_empty_content_gets_source_footer(monkeypatch):
     captured = {}
-
-    def fake_create(fields):
-        captured.update(fields)
-        return CreatedTask(gid="t9", permalink_url="https://a/t9")
-
     monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
-    monkeypatch.setattr(asana, "create_task_from_fields", fake_create)
-
-    client.post("/tasks", json={"name": "X", "html_description": "<b>hi</b>"}, headers=AUTH)
-    assert captured["html_notes"] == "<body><b>hi</b></body>"
-
-
-def test_create_task_rejects_both_descriptions():
-    resp = client.post(
-        "/tasks",
-        json={"name": "X", "description": "a", "html_description": "b"},
-        headers=AUTH,
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
     )
-    assert resp.status_code == 400
+    client.post("/tasks", json={"name": "Bare task"}, headers=AUTH)
+    assert captured["html_notes"] == "<body><strong>Source:</strong> Created manually</body>"
+
+
+def test_create_task_priority_prefixes_title(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
+    )
+    client.post("/tasks", json={"name": "Ship it", "priority": "P1"}, headers=AUTH)
+    assert captured["name"] == "[P1] Ship it"
 
 
 def test_create_task_with_section_and_tags(monkeypatch):
@@ -186,10 +199,16 @@ def test_patch_explicit_null_clears_due(monkeypatch):
     assert captured["update"] == {"due_on": None}
 
 
-def test_patch_omitted_fields_untouched(monkeypatch):
+def test_patch_rewrites_description_from_content(monkeypatch):
     captured = _patch_env(monkeypatch)
-    client.patch("/tasks/t1", json={"description": "new body"}, headers=AUTH)
-    assert captured["update"] == {"notes": "new body"}
+    client.patch("/tasks/t1", json={"key_points": ["new point"]}, headers=AUTH)
+    assert "<li>new point</li>" in captured["update"]["html_notes"]
+
+
+def test_patch_without_content_leaves_description(monkeypatch):
+    captured = _patch_env(monkeypatch)
+    client.patch("/tasks/t1", json={"name": "New name"}, headers=AUTH)
+    assert captured["update"] == {"name": "New name"}  # no html_notes touched
 
 
 def test_patch_section_move(monkeypatch):
@@ -225,3 +244,47 @@ def test_patch_section_move_task_without_project_400(monkeypatch):
     _patch_env(monkeypatch, detail=detail)
     resp = client.patch("/tasks/t1", json={"section": "Done"}, headers=AUTH)
     assert resp.status_code == 400
+
+
+def test_create_task_invalid_priority_400(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    resp = client.post("/tasks", json={"name": "X", "priority": "P9"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "invalid priority" in str(resp.json()["detail"])
+
+
+def test_patch_priority_requires_name_400(monkeypatch):
+    _patch_env(monkeypatch)
+    resp = client.patch("/tasks/t1", json={"priority": "P1"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "priority requires name" in str(resp.json()["detail"])
+
+
+def test_patch_invalid_priority_400(monkeypatch):
+    _patch_env(monkeypatch)
+    resp = client.patch("/tasks/t1", json={"name": "n", "priority": "P9"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "invalid priority" in str(resp.json()["detail"])
+
+
+def test_create_task_links_and_action_items_render(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
+    )
+    client.post(
+        "/tasks",
+        json={
+            "name": "X",
+            "links": [["https://x", "Doc"]],
+            "action_items": [["Do it", "https://y"]],
+        },
+        headers=AUTH,
+    )
+    assert '<a href="https://x">Doc</a>' in captured["html_notes"]
+    assert '<a href="https://y">Do it</a>' in captured["html_notes"]

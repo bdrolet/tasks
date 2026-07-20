@@ -79,7 +79,9 @@ def test_create_task_builds_payload(monkeypatch):
     calls = _capture(
         monkeypatch, _resp(201, {"data": {"gid": "42", "permalink_url": "https://a/42"}})
     )
-    task = asana.create_task(make_email_event(), tag_gids=["tg1"], due_date="2026-07-20")
+    task = asana.create_task(
+        make_email_event(), tag_gids=["tg1"], due_date="2026-07-20", html_notes="<body>hi</body>"
+    )
     assert task is not None and task.gid == "42"
     payload = calls[0]["json"]["data"]
     assert payload["name"] == "[P1] Quarterly report"
@@ -87,34 +89,7 @@ def test_create_task_builds_payload(monkeypatch):
     assert payload["due_on"] == "2026-07-20"
     assert payload["tags"] == ["tg1"]
     assert payload["projects"] == ["proj-1"]
-    assert "Confirmed review" in payload["html_notes"]
-    assert "Respond instead" in payload["html_notes"]
-    assert "<li><strong>To:</strong> ben@drolet.cloud</li>" in payload["html_notes"]
-    assert "<li><strong>Cc:</strong> team@example.com</li>" in payload["html_notes"]
-
-
-def test_create_task_key_points_render(monkeypatch):
-    calls = _capture(
-        monkeypatch, _resp(201, {"data": {"gid": "42", "permalink_url": "https://a/42"}})
-    )
-    asana.create_task(
-        make_email_event(),
-        key_points=["Point one"],
-        relevant_links=[["https://x", "Doc"]],
-    )
-    notes = calls[0]["json"]["data"]["html_notes"]
-    assert "<li>Point one</li>" in notes
-    assert '<a href="https://x">Doc</a>' in notes
-
-
-def test_create_task_preview_fallback_without_key_points(monkeypatch):
-    calls = _capture(
-        monkeypatch, _resp(201, {"data": {"gid": "42", "permalink_url": "https://a/42"}})
-    )
-    asana.create_task(make_email_event(body="x" * 900))
-    notes = calls[0]["json"]["data"]["html_notes"]
-    assert "Preview:" in notes
-    assert "x" * 500 + "..." in notes
+    assert payload["html_notes"] == "<body>hi</body>"  # passed through, not built here
 
 
 def test_create_task_duplicate_returns_none(monkeypatch):

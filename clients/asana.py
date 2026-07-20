@@ -5,7 +5,6 @@ links, due date) computed by handlers/task_create.py."""
 import logging
 import os
 import time
-import urllib.parse
 from datetime import date
 
 import httpx
@@ -90,116 +89,23 @@ def create_tag(name: str, workspace_gid: str) -> str:
     return resp.json()["data"]["gid"]
 
 
-def _esc(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _html_notes(
-    event: EmailClassifiedEvent,
-    key_points: list[str] | None,
-    relevant_links: list[list[str]] | None,
-) -> str:
-    message_id = event["message_id"]
-    webhook_url = os.environ.get("WEBHOOK_URL", "")
-    label_token = os.environ.get("WEBHOOK_LABEL_TOKEN", "")
-
-    def action_url(label: str, source: str) -> str:
-        params = f"id={message_id}&label={label}&source={source}"
-        if label_token:
-            params += f"&token={urllib.parse.quote(label_token, safe='')}"
-        return f"{webhook_url}/label?{params}"
-
-    web_link = event.get("web_link")
-    outlook_link = f'<a href="{_esc(web_link)}">Open in Outlook</a>\n' if web_link else ""
-
-    if event["category"] == "respond":
-        confirm_label, confirm_text = "respond", "Confirmed respond"
-        alt_label, alt_text = "review", "Review instead"
-    else:
-        confirm_label, confirm_text = "review", "Confirmed review"
-        alt_label, alt_text = "respond", "Respond instead"
-
-    action_items = (
-        f'<li><a href="{_esc(action_url(confirm_label, "human_confirmation"))}">{confirm_text}</a></li>'
-        f'<li><a href="{_esc(action_url(alt_label, "human_correction"))}">{alt_text}</a></li>'
-        f'<li><a href="{_esc(action_url("reference", "human_correction"))}">Reference</a></li>'
-        f'<li><a href="{_esc(action_url("ignore", "human_correction"))}">Ignore</a></li>'
-    )
-
-    draft_link = event.get("draft_link")
-    draft_item = (
-        f'<li><a href="{_esc(draft_link)}">Open draft reply in Outlook</a></li>'
-        if draft_link
-        else ""
-    )
-
-    if key_points:
-        key_points_html = (
-            "<strong>Key points:</strong><ul>"
-            + "".join(f"<li>{_esc(p)}</li>" for p in key_points)
-            + "</ul>"
-        )
-    else:
-        body = event["body"] or ""
-        preview = _esc(body[:500]) + ("..." if len(body) > 500 else "")
-        key_points_html = f"<strong>Preview:</strong>\n{preview}\n"
-
-    if relevant_links:
-        links_html = (
-            "<strong>Links:</strong><ul>"
-            + "".join(
-                f'<li><a href="{_esc(url)}">{_esc(label)}</a></li>' for url, label in relevant_links
-            )
-            + "</ul>"
-        )
-    else:
-        links_html = ""
-
-    to_item = (
-        f"<li><strong>To:</strong> {_esc(', '.join(event['to']))}</li>" if event.get("to") else ""
-    )
-    cc_item = (
-        f"<li><strong>Cc:</strong> {_esc(', '.join(event['cc']))}</li>" if event.get("cc") else ""
-    )
-
-    return (
-        "<body>"
-        "<ul>"
-        f"<li><strong>From:</strong> {_esc(event['sender_display'])} ({_esc(event['sender'])})</li>"
-        f"{to_item}"
-        f"{cc_item}"
-        f"<li><strong>Received:</strong> {_esc(event['received_at'])}</li>"
-        f"<li><strong>Importance:</strong> {_esc(event['importance'])}</li>"
-        f"<li><strong>Tags:</strong> {_esc(', '.join(event['tags']) or 'none')}</li>"
-        f"{draft_item}"
-        "</ul>"
-        f"<strong>AI reasoning:</strong> {_esc(event['reasoning'])}\n"
-        f"\n{key_points_html}"
-        f"\n{links_html}"
-        f"\n{outlook_link}"
-        "\n<strong>Actions</strong>"
-        f"<ul>{action_items}</ul>"
-        "</body>"
-    )
-
-
 def create_task(
     event: EmailClassifiedEvent,
     *,
     tag_gids: list[str] | None = None,
-    key_points: list[str] | None = None,
-    relevant_links: list[list[str]] | None = None,
     due_date: str | None = None,
+    html_notes: str = "",
 ) -> CreatedTask | None:
-    """Create an Asana task from an email_classified event plus enrichment
-    results. Returns None if Asana is not configured or a task for this
-    message_id already exists."""
+    """Create an Asana task from an email_classified event. The description is
+    pre-rendered by the caller (handlers/task_create.py via services/task_content).
+    Returns None if Asana is not configured or a task for this message_id already
+    exists."""
     if not ASANA_API_KEY or not ASANA_PROJECT_ID:
         return None
 
     payload: dict = {
         "name": f"[{event['importance']}] {event['subject'] or '(no subject)'}",
-        "html_notes": _html_notes(event, key_points, relevant_links),
+        "html_notes": html_notes,
         "projects": [ASANA_PROJECT_ID],
         "external": {"gid": event["message_id"], "data": "inbox"},
     }
