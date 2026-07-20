@@ -266,7 +266,10 @@ def list_tags() -> list[dict]:
 
 def create_project(name: str, sections: list[str] | None = None) -> dict:
     """Create a workspace project and its sections in order.
-    Returns {gid, permalink_url, sections: {name: gid}}."""
+    Returns {gid, permalink_url, sections: {name: gid}}.
+    No rollback: a section-create failure leaves the project and any
+    already-created sections in place (Asana has no transaction) — the caller
+    retries or cleans up."""
     resp = _request(
         "POST",
         "/projects",
