@@ -7,8 +7,10 @@ import clients.asana as asana
 from api.auth import verify_token
 from api.errors import translate_asana_errors
 from api.routers.search import email_context, membership
+from models.task_content import TaskContent
 from services import tags as tags_service
 from services import task_search
+from services.task_content import render_html_notes
 
 router = APIRouter()
 
@@ -44,9 +46,12 @@ class TaskDetail(BaseModel):
 
 class CreateTaskRequest(BaseModel):
     name: str = Field(min_length=1)
-    description: str | None = None
-    html_description: str | None = None
-    project: str | None = None  # name or GID; default = configured tasks project (ASANA_PROJECT_ID)
+    priority: str | None = None  # "P0".."P3" — prefixes the title
+    context: str | None = None
+    key_points: list[str] = []
+    links: list[tuple[str, str]] = []  # (url, label)
+    action_items: list[tuple[str, str]] = []  # (label, url)
+    project: str | None = None  # name or GID; default = configured tasks project
     section: str | None = None  # name or GID within the project
     due_on: str | None = None
     due_at: str | None = None
@@ -61,8 +66,11 @@ class CreatedTaskResponse(BaseModel):
 
 class UpdateTaskRequest(BaseModel):
     name: str | None = None
-    description: str | None = None
-    html_description: str | None = None
+    priority: str | None = None  # requires name in the same request
+    context: str | None = None
+    key_points: list[str] = []
+    links: list[tuple[str, str]] = []
+    action_items: list[tuple[str, str]] = []
     completed: bool | None = None
     due_on: str | None = None  # explicit null clears
     due_at: str | None = None  # explicit null clears
@@ -75,6 +83,33 @@ class UpdateTaskRequest(BaseModel):
 def wrap_html_body(html: str) -> str:
     """Asana html_notes/html_text require a <body> root element."""
     return html if html.lstrip().startswith("<body>") else f"<body>{html}</body>"
+
+
+_VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
+
+
+def _title(name: str, priority: str | None) -> str:
+    if priority is None:
+        return name
+    if priority not in _VALID_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"invalid priority: {priority}")
+    return f"[{priority}] {name}"
+
+
+def _content_fields_set(body) -> bool:
+    """True if any description-content field was provided in the request."""
+    return bool(body.model_fields_set & {"context", "key_points", "links", "action_items"})
+
+
+def _render_content(body) -> str:
+    return render_html_notes(
+        TaskContent(
+            context=body.context,
+            key_points=body.key_points,
+            links=[tuple(pair) for pair in body.links],
+            action_items=[tuple(pair) for pair in body.action_items],
+        )
+    )
 
 
 def resolve_section(project_gid: str, ref: str) -> str:
@@ -158,19 +193,14 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
 
 @router.post("/tasks", response_model=CreatedTaskResponse, status_code=201)
 def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> CreatedTaskResponse:
-    if body.description is not None and body.html_description is not None:
-        raise HTTPException(
-            status_code=400, detail="pass description or html_description, not both"
-        )
-
     with translate_asana_errors():
         project_gid = _resolve_project_gid(body.project)
 
-        fields: dict = {"name": body.name, "projects": [project_gid]}
-        if body.description is not None:
-            fields["notes"] = body.description
-        if body.html_description is not None:
-            fields["html_notes"] = wrap_html_body(body.html_description)
+        fields: dict = {
+            "name": _title(body.name, body.priority),
+            "projects": [project_gid],
+            "html_notes": _render_content(body),
+        }
         if body.due_on is not None:
             fields["due_on"] = body.due_on
         if body.due_at is not None:
@@ -192,10 +222,8 @@ def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> Cre
 
 @router.patch("/tasks/{gid}")
 def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token)) -> dict:
-    if body.description is not None and body.html_description is not None:
-        raise HTTPException(
-            status_code=400, detail="pass description or html_description, not both"
-        )
+    if body.priority is not None and body.name is None:
+        raise HTTPException(status_code=400, detail="priority requires name in the same request")
 
     with translate_asana_errors():
         task = asana.get_task_detail(gid)
@@ -204,11 +232,9 @@ def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token
 
         fields: dict = {}
         if body.name is not None:
-            fields["name"] = body.name
-        if body.description is not None:
-            fields["notes"] = body.description
-        if body.html_description is not None:
-            fields["html_notes"] = wrap_html_body(body.html_description)
+            fields["name"] = _title(body.name, body.priority)
+        if _content_fields_set(body):
+            fields["html_notes"] = _render_content(body)
         if body.completed is not None:
             fields["completed"] = body.completed
         # Nullable fields: explicit null in the request body clears the value.
