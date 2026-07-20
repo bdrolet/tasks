@@ -149,20 +149,25 @@ today's.
 
 ## Documentation
 
-The user asked for solid, referenced documentation of the standard — a
-**standalone living document**, not a reference buried in this spec:
+The user asked for solid, referenced documentation of the standard, with the
+canonical rules living in **one** doc (not split across files). Since
+`docs/task-content-standard.md` already owns the `[PX]` title-prefix convention,
+the standard is added there as a new **"Title" section** rather than in a
+separate file — avoiding two title docs that could drift.
 
-- **`docs/task-title-standard.md`** — the **authoritative** standalone document.
-  It states the `[PX] {verb} {object}` format, rules, examples, and where each
-  piece is implemented, and declares that if code and the doc disagree, the doc
-  wins. This — not this spec — is the canonical source. This spec is design
-  history the standard links back to.
-- **Code comments at every title site** — `services/email_summary.py` (module
-  docstring + `_normalize_title`), `handlers/task_create.py` (prefix line),
-  `clients/asana.py::create_task` (fallback line) — each points to
-  `docs/task-title-standard.md` and states the doc is authoritative / wins over
-  the code.
-- **`CLAUDE.md`** — a short "Task title standard" note pointing to the doc.
+- **`docs/task-content-standard.md` → "Title" section** — the **authoritative**
+  definition: `[PX] {verb} {object}` format, rules, examples, and where each
+  piece is implemented, declaring that if code and the section disagree, the
+  section wins. This — not this spec — is the canonical source. This spec is
+  design history the standard links back to.
+- **Code comments at every title site** — each points to the "Title" section and
+  states the doc wins over the code:
+  - `services/email_summary.py` (module docstring + `_normalize_title`),
+  - `handlers/task_create.py` (prefix line),
+  - `clients/asana.py::create_task` (fallback line),
+  - `api/routers/tasks.py::_title` (manual/API title assembly — found during the
+    completeness sweep; already applies `[PX] {name}`, now tied to the standard).
+- **`CLAUDE.md`** — a short "Task title standard" note pointing to the section.
 - **Skills** — reference the standard where task titles are described:
   - `tasks-architecture` (how a task is shaped in the pipeline),
   - `verifying-pr-locally` (what a correct title looks like in E2E output),

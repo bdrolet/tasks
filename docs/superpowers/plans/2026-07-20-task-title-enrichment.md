@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the pipeline's `[PX] {subject}` task title with a context-driven `[PX] {verb} {object}` action title generated inside the existing `email_summary` Haiku call, governed by a standalone authoritative standard document that the code defers to.
+**Goal:** Replace the pipeline's `[PX] {subject}` task title with a context-driven `[PX] {verb} {object}` action title generated inside the existing `email_summary` Haiku call, governed by the existing task-shape standard doc (extended with an authoritative "Title" section) that the code defers to.
 
-**Architecture:** The Haiku call in `services/email_summary.py` already reads each qualifying email and returns JSON; we widen its output to include a normalized `title` string (verb + object, no priority tag). `handlers/task_create.py` prepends `[PX]` and passes the result to `clients/asana.py::create_task`, which uses it as the Asana `name` or falls back to `[{importance}] {subject}` when absent. A standalone doc — `docs/task-title-standard.md` — is the authoritative definition; every code site that touches titles carries a comment pointing to it and declaring the doc wins over the code. Title enrichment is best-effort — a failed or empty model response never blocks task creation.
+**Architecture:** The Haiku call in `services/email_summary.py` already reads each qualifying email and returns JSON; we widen its output to include a normalized `title` string (verb + object, no priority tag). `handlers/task_create.py` prepends `[PX]` and passes the result to `clients/asana.py::create_task`, which uses it as the Asana `name` or falls back to `[{importance}] {subject}` when absent. The single source of truth is a new **"Title" section in the existing `docs/task-content-standard.md`** (not a separate file — that doc already owns the `[PX]` prefix convention); every code site that touches titles carries a comment pointing to it and declaring the doc wins over the code. Title enrichment is best-effort — a failed or empty model response never blocks task creation.
 
 **Tech Stack:** Python 3.13, pytest, Anthropic Claude Haiku (via `clients/claude.py`), Asana REST.
 
@@ -13,82 +13,95 @@
 - **Layer rules:** `clients/` = I/O only (no title *logic*, only the last-resort default string); `services/` = business logic incl. the title prompt/guidance; `handlers/` orchestrate. Prompt text lives in `services/`, never in `clients/claude.py`.
 - **Best-effort enrichment:** a Haiku failure or missing/garbled `title` must never crash the event or block task creation — fall back to `[{importance}] {subject}`.
 - **`[PX]` applied in code**, never by the model: the model emits only `{verb} {object}`; the handler prepends the priority token so a bad response can't corrupt it.
-- **Authoritative standard = `docs/task-title-standard.md`** (a standalone living document, created in Task 1). It is the single source of truth for title shape. Code comments at every title site point to it and state the doc wins over the code. The brainstorming spec (`docs/superpowers/specs/2026-07-20-task-title-enrichment-design.md`) is design history, not the standard.
+- **Authoritative standard = the "Title" section of `docs/task-content-standard.md`** (extended in Task 1). It is the single source of truth for title shape — there is NO separate title-standard file. Code comments at every title site point to it and state the doc wins over the code. The brainstorming spec (`docs/superpowers/specs/2026-07-20-task-title-enrichment-design.md`) is design history, not the standard.
 - **Standard, in brief:** imperative verb first, then 2–5 word object; sentence case; no trailing punctuation; ≤ ~60 chars / ~8 words after the prefix.
 - Run tests with `.venv/bin/pytest`.
 
+## Title-touching sites (complete inventory)
+
+Every place that generates, shapes, documents, or instructs on a task title — each must end up pointing at the "Title" section:
+
+- **Code:** `services/email_summary.py` (generates `{verb} {object}`), `handlers/task_create.py` (prepends `[PX]`), `clients/asana.py::create_task` (email fallback), `api/routers/tasks.py::_title` (manual/API path, applies `[PX] {name}`).
+- **Docs:** `docs/task-content-standard.md` (the standard itself), `CLAUDE.md`.
+- **Skills:** `.claude/skills/tasks-architecture`, `.claude/skills/verifying-pr-locally`, and `~/.claude/skills/editing-tasks` (user-global, outside this repo — updated separately).
+
 ---
 
-### Task 1: Author the standalone title-standard document
+### Task 1: Add the authoritative "Title" section to the task-content standard
 
 **Files:**
-- Create: `docs/task-title-standard.md`
+- Modify: `docs/task-content-standard.md`
 
-This is the authoritative doc that later tasks reference from code comments and other docs. No test cycle — its deliverable is the document itself; the grep in Task 5 verifies everything points back to it.
+This section is the single source of truth that later tasks reference from code comments and other docs. No test cycle — its deliverable is the doc; the grep in Task 5 verifies everything points back to it.
 
-- [ ] **Step 1: Write the document**
+- [ ] **Step 1: Update the Priority row to point at the new section**
 
-Create `docs/task-title-standard.md` with exactly this content:
+In `docs/task-content-standard.md`, change the table row (line 11) from:
 
 ```markdown
-# Task Title Standard
-
-**This document is authoritative.** It defines how pipeline task titles are
-written. Any code that generates, prefixes, normalizes, or falls back on a task
-title must conform to this document. If code and this document ever disagree,
-**this document wins** — fix the code, not the standard.
-
-## Format
-
-    [PX] {verb} {object}
-
-- `[PX]` — the importance prefix (`P0`–`P3`). Added in code
-  (`handlers/task_create.py`), never by the model. Fastest scan signal.
-- `{verb}` — an imperative, present-tense verb chosen from the email's actual
-  content (context-driven, not a fixed category→verb map). The verb carries the
-  "what do I do" signal.
-- `{object}` — 2–5 words naming what the action is on, specific enough to tell
-  the task apart from its siblings. Drop `Re:`/`Fwd:`, list tags, and sender
-  pleasantries.
-
-## Rules
-
-- Sentence case. No trailing punctuation.
-- ≤ ~60 characters / ~8 words after the `[PX]` prefix, so the title never
-  truncates in Asana's list view.
-- The model produces only `{verb} {object}`; code prepends `[PX]`.
-- Best-effort: if enrichment produces no usable title, fall back to
-  `[PX] {subject}`. A missing title must never block task creation.
-
-## Examples
-
-| Raw email subject | Task title |
-|---|---|
-| `Re: FW: contract redlines` | `[P1] Reply to Sarah on contract redlines` |
-| `Q3 board deck — please review by EOD` | `[P0] Review Q3 board deck` |
-| `URGENT: prod db at 95% disk` | `[P0] Resolve prod DB disk alert` |
-
-## Where this is implemented
-
-- `{verb} {object}` generated: `services/email_summary.py`
-- `[PX]` prefix + fallback wiring: `handlers/task_create.py`
-- Fallback default: `clients/asana.py::create_task`
-
-## Scope
-
-Applies to the automated pipeline (email → task). The manual/API path
-(`tasks-api`, `editing-tasks` skill) should follow this standard when a human or
-agent sets a title, but it is not auto-enforced in code.
-
-Design history:
-`docs/superpowers/specs/2026-07-20-task-title-enrichment-design.md`
+| Priority (P0–P3) | Title prefix `[P1] …` (automatic on email tasks; optional on manual) |
 ```
 
-- [ ] **Step 2: Commit**
+to:
+
+```markdown
+| Priority (P0–P3) | Title prefix `[P1] …` — see **Title** below |
+```
+
+- [ ] **Step 2: Insert the "Title" section**
+
+Immediately after the "## Where each thing goes" table (before "## Description template"), insert:
+
+```markdown
+## Title
+
+`[PX] {verb} {object}` — an actionable next step, not the raw email subject.
+**This section is authoritative:** any code that generates, prefixes, normalizes,
+or falls back on a title must conform; if code and this section ever disagree,
+**this section wins** (fix the code).
+
+- `[PX]` — the priority prefix (`P0`–`P3`), added in code, never by the model
+  (automatic on email tasks; optional on manual/API tasks).
+- `{verb}` — an imperative, present-tense verb chosen from the email's actual
+  content (context-driven, not a fixed category→verb map). Carries the "what do
+  I do" signal.
+- `{object}` — 2–5 words naming what the action is on, specific enough to tell
+  the task apart from its siblings. Drop `Re:`/`Fwd:`, list tags, and pleasantries.
+
+Sentence case, no trailing punctuation, ≤ ~60 chars after the prefix so the
+title never truncates in the list view. Best-effort: if enrichment yields no
+usable title, fall back to `[PX] {subject}`; a missing title never blocks task
+creation.
+
+Implemented in: `services/email_summary.py` (generates `{verb} {object}`),
+`handlers/task_create.py` (prepends `[PX]`), `clients/asana.py::create_task`
+(fallback), `api/routers/tasks.py::_title` (manual/API path).
+
+Examples: `[P0] Review Q3 board deck`, `[P1] Reply to Sarah on contract
+redlines`, `[P0] Resolve prod DB disk alert`.
+```
+
+- [ ] **Step 3: Update the Priority convention bullet**
+
+In the "## Conventions" section, change the Priority bullet (lines 31-32) from:
+
+```markdown
+- **Priority** — the `[P0–P3]` title prefix, nothing else. Don't put priority
+  in a tag or a description line.
+```
+
+to:
+
+```markdown
+- **Priority** — the `[P0–P3]` title prefix, nothing else (see **Title**). Don't
+  put priority in a tag or a description line.
+```
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add docs/task-title-standard.md
-git commit -m "docs: add authoritative task title standard"
+git add docs/task-content-standard.md
+git commit -m "docs: add authoritative Title section to task content standard"
 ```
 
 ---
@@ -183,16 +196,17 @@ class EmailSummary:
 
 - [ ] **Step 4: Add the normalizer and extend the prompt/parse in `email_summary.py`**
 
-Add a module docstring at the very top of `services/email_summary.py` (above `import json`). It points to the authoritative doc and declares it wins:
+Add a module docstring at the very top of `services/email_summary.py` (above `import json`). It points to the authoritative section and declares it wins:
 
 ```python
 """Claude Haiku enrichment for a qualifying email: key points, relevant links,
 and an actionable task title.
 
-Task titles MUST follow docs/task-title-standard.md — that document is
-authoritative; if this code and the doc ever disagree, the DOC WINS (fix the
-code). In brief: "{verb} {object}", imperative verb first, sentence case, no
-trailing punctuation, <= ~60 chars, and NO [PX] prefix (the caller adds it).
+Task titles MUST follow the "Title" section of docs/task-content-standard.md —
+that section is authoritative; if this code and the doc ever disagree, the DOC
+WINS (fix the code). In brief: "{verb} {object}", imperative verb first, sentence
+case, no trailing punctuation, <= ~60 chars, and NO [PX] prefix (the caller adds
+it).
 """
 ```
 
@@ -203,8 +217,8 @@ MAX_TITLE_CHARS = 60
 
 
 def _normalize_title(raw: str | None) -> str | None:
-    """Clean a model-produced "{verb} {object}" title per docs/task-title-standard.md
-    (authoritative — doc wins). Returns None if empty."""
+    """Clean a model-produced "{verb} {object}" title per the Title section of
+    docs/task-content-standard.md (authoritative — doc wins). None if empty."""
     if not raw:
         return None
     title = " ".join(raw.split()).rstrip(".!,;:")
@@ -312,7 +326,8 @@ to (note the comment deferring to the standard):
 
 ```python
         # Enriched title comes from the caller; this is only the last-resort
-        # fallback. Standard: docs/task-title-standard.md (authoritative — doc wins).
+        # fallback. Standard: "Title" section of docs/task-content-standard.md
+        # (authoritative — doc wins).
         "name": title or f"[{event['importance']}] {event['subject'] or '(no subject)'}",
 ```
 
@@ -419,9 +434,9 @@ In `handlers/task_create.py`, after the `html_notes` is built and before the `as
     html_notes = task_content.render_html_notes(
         task_content.for_email(event, key_points, relevant_links)
     )
-    # Prepend the [PX] prefix per docs/task-title-standard.md (authoritative —
-    # doc wins over code). The model produces only {verb} {object}; when
-    # enrichment yields no title, create_task falls back to [PX] {subject}.
+    # Prepend the [PX] prefix per the "Title" section of docs/task-content-standard.md
+    # (authoritative — doc wins over code). The model produces only {verb} {object};
+    # when enrichment yields no title, create_task falls back to [PX] {subject}.
     title = f"[{event['importance']}] {summary.title}" if summary.title else None
     task = asana.create_task(
         event,
@@ -451,16 +466,30 @@ git commit -m "feat: wire enriched [PX] {verb} {object} title through task_creat
 
 ---
 
-### Task 5: Reference the standard from CLAUDE.md and skills
+### Task 5: Point every remaining title site at the standard
+
+Covers the sites that only need a pointer (no behavior change): the manual/API title helper, `CLAUDE.md`, and the two in-repo skills. `api/routers/tasks.py::_title` already applies `[PX] {name}` correctly — it only needs a comment tying it to the standard, so there is no test.
 
 **Files:**
+- Modify: `api/routers/tasks.py:91-96` (comment on `_title`)
 - Modify: `CLAUDE.md` (add a "Task title standard" note pointing to the doc)
-- Modify: `.claude/skills/tasks-architecture/SKILL.md` (reference the standard)
-- Modify: `.claude/skills/verifying-pr-locally/SKILL.md` (what a correct title looks like in E2E output)
+- Modify: `.claude/skills/tasks-architecture/SKILL.md`
+- Modify: `.claude/skills/verifying-pr-locally/SKILL.md`
 
-(Note: `~/.claude/skills/editing-tasks/SKILL.md` is a user-global skill outside this repo. Update it separately if desired — it is not part of this repo's commit.)
+(Note: `~/.claude/skills/editing-tasks/SKILL.md` is user-global, outside this repo. Update its "prefixes the title" line to point at the standard separately — it is not part of this repo's commit.)
 
-- [ ] **Step 1: Add the standard pointer to `CLAUDE.md`**
+- [ ] **Step 1: Comment the manual/API title helper**
+
+In `api/routers/tasks.py`, add a comment above `def _title` (line 91):
+
+```python
+# Manual/API title assembly. Follow the "Title" section of
+# docs/task-content-standard.md (authoritative — doc wins): callers should pass a
+# verb-first {verb} {object} name; this applies the [PX] prefix.
+def _title(name: str, priority: str | None) -> str:
+```
+
+- [ ] **Step 2: Add the standard pointer to `CLAUDE.md`**
 
 Insert a new section immediately after the "## Task policy" section:
 
@@ -468,42 +497,45 @@ Insert a new section immediately after the "## Task policy" section:
 ## Task title standard
 
 Pipeline task titles are `[PX] {verb} {object}` — a context-driven action, not
-the raw subject. Authoritative definition: **`docs/task-title-standard.md`** (the
-code defers to that doc). The `{verb} {object}` is generated by the
-`email_summary` Haiku call (`services/email_summary.py`); the `[PX]` prefix is
-added in `handlers/task_create.py`; `create_task` falls back to `[PX] {subject}`
-if enrichment yields no title.
+the raw subject. Authoritative definition: the **"Title" section of
+`docs/task-content-standard.md`** (the code defers to that doc). The
+`{verb} {object}` is generated by the `email_summary` Haiku call
+(`services/email_summary.py`); the `[PX]` prefix is added in
+`handlers/task_create.py`; `create_task` falls back to `[PX] {subject}` if
+enrichment yields no title; the manual/API path builds titles in
+`api/routers/tasks.py::_title`.
 ```
 
-- [ ] **Step 2: Reference the standard in `tasks-architecture`**
+- [ ] **Step 3: Reference the standard in `tasks-architecture`**
 
 Read `.claude/skills/tasks-architecture/SKILL.md`, find where task creation / shaping is described, and add one sentence:
 
 ```markdown
-Task titles follow `docs/task-title-standard.md` — `[PX] {verb} {object}`, a
-verb-first action generated in `services/email_summary.py`.
+Task titles follow the "Title" section of `docs/task-content-standard.md` —
+`[PX] {verb} {object}`, a verb-first action generated in
+`services/email_summary.py`.
 ```
 
-- [ ] **Step 3: Reference the standard in `verifying-pr-locally`**
+- [ ] **Step 4: Reference the standard in `verifying-pr-locally`**
 
 Read `.claude/skills/verifying-pr-locally/SKILL.md`, find where the E2E create output is described, and note the expected title shape:
 
 ```markdown
 A created task's title should read as an action, e.g. `[P1] Review Q3 board
-deck` — the `[PX] {verb} {object}` standard in `docs/task-title-standard.md`,
-not a raw email subject.
+deck` — the `[PX] {verb} {object}` standard in the "Title" section of
+`docs/task-content-standard.md`, not a raw email subject.
 ```
 
-- [ ] **Step 4: Verify every reference resolves to the doc**
+- [ ] **Step 5: Verify every reference resolves to the standard**
 
-Run: `grep -rl "task-title-standard.md" CLAUDE.md services/ clients/ handlers/ .claude/skills/`
-Expected: lists `CLAUDE.md`, `services/email_summary.py`, `clients/asana.py`, `handlers/task_create.py`, `.claude/skills/tasks-architecture/SKILL.md`, `.claude/skills/verifying-pr-locally/SKILL.md`.
+Run: `grep -rl "task-content-standard.md" CLAUDE.md services/ clients/ handlers/ api/ .claude/skills/`
+Expected: lists `CLAUDE.md`, `services/email_summary.py`, `clients/asana.py`, `handlers/task_create.py`, `api/routers/tasks.py`, `.claude/skills/tasks-architecture/SKILL.md`, `.claude/skills/verifying-pr-locally/SKILL.md`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add CLAUDE.md .claude/skills/tasks-architecture/SKILL.md .claude/skills/verifying-pr-locally/SKILL.md
-git commit -m "docs: reference the task title standard from CLAUDE.md and skills"
+git add api/routers/tasks.py CLAUDE.md .claude/skills/tasks-architecture/SKILL.md .claude/skills/verifying-pr-locally/SKILL.md
+git commit -m "docs: point every title site at the task content standard"
 ```
 
 ---
