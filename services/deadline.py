@@ -19,7 +19,11 @@ def extract_deadline(event: EmailClassifiedEvent) -> str | None:
         "If yes, reply with ONLY the date in ISO 8601 format (YYYY-MM-DD).\n"
         "If no explicit deadline is stated, reply with ONLY the word null.\n\n"
         f"Subject: {event['subject']}\n\n"
-        f"{(event['body'] or '')[:1000]}"
+        # Match the 3000-char window services/email_summary.py reads, so the
+        # deadline pass and the summary pass always see identical context.
+        # A narrower slice silently dropped deadlines stated further down the
+        # body (e.g. "within 12 weeks" past char 1000) that the summary caught.
+        f"{(event['body'] or '')[:3000]}"
     )
     raw = claude.extract(prompt)
     result = None if raw.lower() == "null" else raw
