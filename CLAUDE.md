@@ -98,6 +98,14 @@ Handshake = POST with `X-Hook-Secret` header (CF echoes + logs it). Events
 validated via `X-Hook-Signature` HMAC-SHA256. Re-registration (needed if the
 CF URL changes): `docs/asana-webhook-setup.md`.
 
+## Consumer skills
+
+The Asana consumer skills (`searching-tasks`, `fetching-task`,
+`editing-tasks`, `creating-tasks`, `planning-project-tasks`) and the
+`task-builder` agent live in `.claude/skills/` / `.claude/agents/` and are
+symlinked into `~/.claude/` by `scripts/link-skills.sh` (per-skill
+symlinks — never the parent directory; run once per machine).
+
 ## Local dev
 
 ```bash
