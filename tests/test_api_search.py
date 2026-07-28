@@ -29,8 +29,22 @@ def _task(gid, name, notes="", project="Inbox", section=None, **kw):
         "notes": notes,
         "completed": kw.get("completed", False),
         "due_on": kw.get("due_on"),
+        "num_subtasks": kw.get("num_subtasks", 0),
         "permalink_url": f"https://app.asana.com/x/{gid}",
         "memberships": [{"project": {"gid": "p1", "name": project}, "section": {"name": section}}],
+    }
+
+
+def _subtask(gid, name, **kw):
+    return {
+        "gid": gid,
+        "name": name,
+        "notes": kw.get("notes", ""),
+        "completed": kw.get("completed", False),
+        "due_on": kw.get("due_on"),
+        "num_subtasks": 0,
+        "permalink_url": f"https://app.asana.com/x/{gid}",
+        "memberships": [],
     }
 
 
@@ -171,3 +185,69 @@ def test_search_limit(monkeypatch):
     monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
     resp = client.post("/search", json={"query": "item", "limit": 5}, headers=AUTH)
     assert len(resp.json()["results"]) == 5
+
+
+def test_search_includes_subtasks_with_parent(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "list_project_tasks",
+        lambda gid, **kw: [_task("t1", "Plan trip", num_subtasks=1)],
+    )
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
+    monkeypatch.setattr(asana, "get_subtasks", lambda gid: [_subtask("s1", "Book flights")])
+
+    resp = client.post("/search", json={"query": "flights"}, headers=AUTH)
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert [r["task_gid"] for r in results] == ["s1"]
+    assert results[0]["parent"] == "Plan trip"
+    assert results[0]["project"] is None
+
+
+def test_search_skips_subtask_fetch_when_none(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(asana, "list_project_tasks", lambda gid, **kw: [_task("t1", "Plan trip")])
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
+
+    def boom(gid):
+        raise AssertionError("get_subtasks must not be called")
+
+    monkeypatch.setattr(asana, "get_subtasks", boom)
+
+    resp = client.post("/search", json={"query": "trip"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["parent"] is None
+
+
+def test_search_subtask_parent_survives_dedupe(monkeypatch):
+    # A subtask assigned to me shows up in my-tasks too; whichever copy the
+    # de-dupe keeps, the result still carries the parent name.
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "list_project_tasks",
+        lambda gid, **kw: [_task("t1", "Plan trip", num_subtasks=1)],
+    )
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [_subtask("s1", "Book flights")])
+    monkeypatch.setattr(asana, "get_subtasks", lambda gid: [_subtask("s1", "Book flights")])
+
+    results = client.post("/search", json={"query": "flights"}, headers=AUTH).json()["results"]
+    assert len(results) == 1
+    assert results[0]["parent"] == "Plan trip"
+
+
+def test_search_project_narrowed_also_sweeps_subtasks(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p2", "name": "Chores"}])
+    monkeypatch.setattr(
+        asana,
+        "list_project_tasks",
+        lambda gid, **kw: [_task("t1", "Yard work", project="Chores", num_subtasks=1)],
+    )
+    monkeypatch.setattr(asana, "get_subtasks", lambda gid: [_subtask("s1", "Mow lawn")])
+
+    results = client.post(
+        "/search", json={"query": "mow", "project": "Chores"}, headers=AUTH
+    ).json()["results"]
+    assert [r["task_gid"] for r in results] == ["s1"]
+    assert results[0]["parent"] == "Yard work"
