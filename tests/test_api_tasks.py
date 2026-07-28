@@ -320,3 +320,49 @@ def test_create_subtask_with_parent(monkeypatch):
     assert captured["parent"] == "t-parent"
     assert "projects" not in captured
     assert "<body>" in captured["html_notes"]  # rendered content still applies
+
+
+def test_get_task_includes_parent_and_subtasks(monkeypatch):
+    detail = dict(DETAIL, num_subtasks=2, parent={"gid": "t0", "name": "[P1] Plan trip"})
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: detail)
+    monkeypatch.setattr(asana, "get_stories", lambda gid: [])
+    monkeypatch.setattr(
+        asana,
+        "get_subtasks",
+        lambda gid: [
+            {
+                "gid": "s1",
+                "name": "Book flights",
+                "completed": False,
+                "due_on": "2026-08-01",
+                "permalink_url": "https://app.asana.com/x/s1",
+            },
+            {
+                "gid": "s2",
+                "name": "Reserve hotel",
+                "completed": True,
+                "due_on": None,
+                "permalink_url": "https://app.asana.com/x/s2",
+            },
+        ],
+    )
+
+    body = client.get("/tasks/t1", headers=AUTH).json()
+    assert body["parent"] == {"gid": "t0", "name": "[P1] Plan trip"}
+    assert [s["task_gid"] for s in body["subtasks"]] == ["s1", "s2"]
+    assert body["subtasks"][1]["completed"] is True
+    assert body["subtasks"][0]["due_on"] == "2026-08-01"
+
+
+def test_get_task_skips_subtask_fetch_when_none(monkeypatch):
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: dict(DETAIL))
+    monkeypatch.setattr(asana, "get_stories", lambda gid: [])
+
+    def boom(gid):
+        raise AssertionError("get_subtasks must not be called")
+
+    monkeypatch.setattr(asana, "get_subtasks", boom)
+
+    body = client.get("/tasks/t1", headers=AUTH).json()
+    assert body["parent"] is None
+    assert body["subtasks"] == []
