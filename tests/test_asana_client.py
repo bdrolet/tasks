@@ -375,3 +375,28 @@ def test_create_project_no_sections(monkeypatch):
     assert result["gid"] == "proj-x"
     assert result["sections"] == {}
     assert len(calls) == 1
+
+
+def test_search_opt_fields_include_num_subtasks():
+    assert "num_subtasks" in asana.SEARCH_OPT_FIELDS
+
+
+def test_detail_opt_fields_include_parent_and_num_subtasks():
+    assert "parent.gid" in asana.DETAIL_OPT_FIELDS
+    assert "parent.name" in asana.DETAIL_OPT_FIELDS
+    assert "num_subtasks" in asana.DETAIL_OPT_FIELDS
+
+
+def test_get_subtasks_paginates(monkeypatch):
+    calls = _capture_seq(
+        monkeypatch,
+        [
+            _resp(200, {"data": [{"gid": "s1", "name": "A"}], "next_page": {"offset": "abc"}}),
+            _resp(200, {"data": [{"gid": "s2", "name": "B"}], "next_page": None}),
+        ],
+    )
+    subs = asana.get_subtasks("t1")
+    assert [s["gid"] for s in subs] == ["s1", "s2"]
+    assert calls[0]["url"].endswith("/tasks/t1/subtasks")
+    assert calls[0]["params"]["opt_fields"] == asana.SEARCH_OPT_FIELDS
+    assert calls[1]["params"]["offset"] == "abc"
