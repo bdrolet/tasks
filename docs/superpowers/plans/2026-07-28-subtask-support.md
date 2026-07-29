@@ -217,21 +217,25 @@ In `get_task`, extend the Asana block:
 And add to the `TaskDetail(...)` construction (after `importance=...`):
 
 ```python
-        parent=(
-            TaskParent(gid=task["parent"]["gid"], name=task["parent"].get("name"))
-            if task.get("parent")
-            else None
-        ),
-        subtasks=[
-            SubtaskSummary(
-                task_gid=s["gid"],
-                name=s.get("name") or "",
-                completed=bool(s.get("completed")),
-                due_on=s.get("due_on"),
-                permalink_url=s.get("permalink_url"),
-            )
-            for s in raw_subtasks
-        ],
+parent = (
+    (
+        TaskParent(gid=task["parent"]["gid"], name=task["parent"].get("name"))
+        if task.get("parent")
+        else None
+    ),
+)
+subtasks = (
+    [
+        SubtaskSummary(
+            task_gid=s["gid"],
+            name=s.get("name") or "",
+            completed=bool(s.get("completed")),
+            due_on=s.get("due_on"),
+            permalink_url=s.get("permalink_url"),
+        )
+        for s in raw_subtasks
+    ],
+)
 ```
 
 - [ ] **Step 4: Run the full suite**
@@ -343,9 +347,7 @@ def test_search_subtask_parent_survives_dedupe(monkeypatch):
 
 
 def test_search_project_narrowed_also_sweeps_subtasks(monkeypatch):
-    monkeypatch.setattr(
-        asana, "list_projects", lambda: [{"gid": "p2", "name": "Chores"}]
-    )
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p2", "name": "Chores"}])
     monkeypatch.setattr(
         asana,
         "list_project_tasks",
@@ -398,7 +400,7 @@ In `search`, extend the `with translate_asana_errors():` block — after the `if
 Add to the `SearchResult(...)` construction (after `importance=...`):
 
 ```python
-                parent=parent_names.get(t["gid"]),
+parent = (parent_names.get(t["gid"]),)
 ```
 
 Note: `parent_names` must be initialized before the `with translate_asana_errors():` block exits — it is referenced in the result loop below. Initialize `parent_names: dict[str, str] = {}` at the top of the function if the narrowed-project branch structure makes in-block init awkward.

@@ -81,20 +81,22 @@ A pure dataclass, no imports from other layers (per layer rules):
 ```python
 @dataclass
 class TaskContent:
-    context: str | None = None                                        # optional lead prose ("what / why")
-    key_points: list[str] = field(default_factory=list)               # the substance
-    links: list[tuple[str, str]] = field(default_factory=list)        # (url, label)
-    action_items: list[tuple[str, str]] = field(default_factory=list) # (label, url) — e.g. confirm/review links
-    source: Source | None = None                                      # origin footer
+    context: str | None = None  # optional lead prose ("what / why")
+    key_points: list[str] = field(default_factory=list)  # the substance
+    links: list[tuple[str, str]] = field(default_factory=list)  # (url, label)
+    action_items: list[tuple[str, str]] = field(
+        default_factory=list
+    )  # (label, url) — e.g. confirm/review links
+    source: Source | None = None  # origin footer
 ```
 
 ```python
 @dataclass
 class Source:
-    origin: str                                # e.g. "Created manually", "Email"
+    origin: str  # e.g. "Created manually", "Email"
     rows: list[tuple[str, str]] = field(default_factory=list)  # (label, value): From, Received, …
-    links: list[tuple[str, str]] = field(default_factory=list) # (url, label): "Open in Outlook"
-    note: str | None = None                    # freeform provenance note (automated: AI reasoning)
+    links: list[tuple[str, str]] = field(default_factory=list)  # (url, label): "Open in Outlook"
+    note: str | None = None  # freeform provenance note (automated: AI reasoning)
 ```
 
 Field meanings:
