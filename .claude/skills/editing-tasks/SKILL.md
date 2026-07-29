@@ -42,6 +42,22 @@ instead of `due_on`), `tags` (kebab-case topic names — created if missing),
 `assignee` (`"me"`, an email, or a GID). There is no free-form `description` —
 the API renders the description from these fields so every task looks the same.
 
+## Subtasks
+
+Create with `parent` (task GID) and **no `project`/`section`** — a subtask
+belongs to its parent, never a section:
+
+```bash
+curl -s -XPOST "$BASE/tasks" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Book flights","parent":"<parent_gid>"}'
+```
+
+All other create fields work as usual. An existing subtask is edited,
+completed, and commented on like any task via its GID — [[fetching-task]]
+on the parent lists subtask GIDs. Two operations don't apply to subtasks:
+`section` moves (400 — no project membership) and moving under a different
+parent (unsupported — do that in Asana).
+
 ## Update a task
 
 `PATCH $BASE/tasks/<task_gid>` — send only what changes:

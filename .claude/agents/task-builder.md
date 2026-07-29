@@ -95,6 +95,10 @@ Against the standard you read in step 1:
 - **`project` / `section`** — omit for the default tasks project unless the request
   clearly belongs elsewhere. `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"`
   lists projects with their sections.
+- **`parent`** — when the dispatch names a parent task (a subtask request),
+  send its GID in `parent` and omit `project`/`section` entirely; report
+  `subtask of <parent name>` in place of `<project>/<section>` in your
+  output.
 - **`context`** — a sentence or two of why this exists and what "done" means.
 - **`key_points`** — the facts needed to act, including the people involved.
 - **`links`** — `[url, label]` pairs: the email `web_link`, the related task, the page

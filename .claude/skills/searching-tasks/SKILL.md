@@ -46,14 +46,19 @@ curl -s -X POST https://tasks-api.drolet.cloud/search \
 
 Results are sorted due-date ascending, undated last. Each result:
 `task_gid`, `name`, `project`, `section`, `due_on`, `completed`,
-`permalink_url`, `snippet` (description fragment matching the query), and for
+`permalink_url`, `snippet` (description fragment matching the query),
+`parent` (parent task name — set only for subtask hits), and for
 email-derived tasks `message_id`/`category`/`importance`.
+
+Subtasks are searched too (one level deep). A subtask hit has `parent` set
+and null `project`/`section` — it belongs to its parent task, not a section.
 
 Unknown `project` returns 400 with `known_projects` — retry with one of those.
 
 ## Presenting results
 
 - List as: `due_on` | `name` | `project`/`section` | `permalink_url`
+- Subtask hits: present as `name — subtask of <parent>`.
 - Offer to open one with [[fetching-task]] or act on it with [[editing-tasks]].
 - Email-derived tasks (`message_id` set): the inbox skills can fetch the
   underlying email.

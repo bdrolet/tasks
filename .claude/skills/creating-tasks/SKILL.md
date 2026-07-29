@@ -26,6 +26,8 @@ cannot see this conversation. Pass along anything relevant:
 - the request in the user's own words, not your paraphrase
 - a message ID / email under discussion, and its mailbox label
 - a person, project, file, or PR named earlier in the session
+- the parent task GID when the request is a subtask ("add a subtask under
+  X") — find X with searching-tasks first if the GID isn't at hand
 - any deadline or priority the user stated explicitly
 - today's date
 
