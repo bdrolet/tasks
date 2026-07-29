@@ -588,12 +588,8 @@ def setup_telemetry(service_name: str) -> None:
     tasks_completed = meter.create_counter(
         "asana.tasks.completed", description="Asana tasks completed (via webhook)"
     )
-    escalations = meter.create_counter(
-        "asana.escalations", description="Overdue tasks escalated"
-    )
-    errors = meter.create_counter(
-        "asana.errors", description="Handler errors by handler name"
-    )
+    escalations = meter.create_counter("asana.escalations", description="Overdue tasks escalated")
+    errors = meter.create_counter("asana.errors", description="Handler errors by handler name")
     claude_tokens = meter.create_counter(
         "asana.claude.tokens", description="Claude tokens spent on task enrichment"
     )
@@ -942,8 +938,7 @@ def _html_notes(
         links_html = (
             "<strong>Links:</strong><ul>"
             + "".join(
-                f'<li><a href="{_esc(url)}">{_esc(label)}</a></li>'
-                for url, label in relevant_links
+                f'<li><a href="{_esc(url)}">{_esc(label)}</a></li>' for url, label in relevant_links
             )
             + "</ul>"
         )
@@ -1207,9 +1202,7 @@ class FakeConn:
 
 def test_insert_is_idempotent_on_message_id():
     conn = FakeConn()
-    repo_tasks.insert(
-        conn, task_gid="42", message_id="m1", category="review", importance="P1"
-    )
+    repo_tasks.insert(conn, task_gid="42", message_id="m1", category="review", importance="P1")
     query, params = conn.executed[0]
     assert "INSERT INTO tasks" in query
     assert "ON CONFLICT (message_id) DO NOTHING" in query
@@ -1256,9 +1249,7 @@ def insert(conn: Any, *, task_gid: str, message_id: str, category: str, importan
 
 
 def get_gid_by_message(conn: Any, message_id: str) -> str | None:
-    row = conn.execute(
-        "SELECT task_gid FROM tasks WHERE message_id = %s", (message_id,)
-    ).fetchone()
+    row = conn.execute("SELECT task_gid FROM tasks WHERE message_id = %s", (message_id,)).fetchone()
     return row["task_gid"] if row else None
 
 
@@ -1270,9 +1261,7 @@ def mark_completed(conn: Any, task_gid: str) -> None:
 
 
 def mark_escalated(conn: Any, task_gid: str) -> None:
-    conn.execute(
-        "UPDATE tasks SET escalated_at = now() WHERE task_gid = %s", (task_gid,)
-    )
+    conn.execute("UPDATE tasks SET escalated_at = now() WHERE task_gid = %s", (task_gid,))
 
 
 def was_escalated(conn: Any, task_gid: str) -> bool:
@@ -1357,9 +1346,7 @@ def _capture(monkeypatch, status=200, payload=None):
 
     def fake_get(url, **kwargs):
         calls.append({"url": url, **kwargs})
-        return httpx.Response(
-            status, json=payload or {}, request=httpx.Request("GET", url)
-        )
+        return httpx.Response(status, json=payload or {}, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(inbox_api.httpx, "get", fake_get)
     return calls
@@ -1661,9 +1648,7 @@ def test_generate_parses_key_points_and_extracts_links(monkeypatch):
 
 
 def test_generate_strips_markdown_fences(monkeypatch):
-    monkeypatch.setattr(
-        claude, "summarize", lambda prompt: '```json\n{"key_points": ["A"]}\n```'
-    )
+    monkeypatch.setattr(claude, "summarize", lambda prompt: '```json\n{"key_points": ["A"]}\n```')
     assert email_summary.generate(make_email_event()).key_points == ["A"]
 
 
@@ -1878,9 +1863,7 @@ from tests.test_repo import FakeConn
 def _stub_db(monkeypatch):
     monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
     inserts = []
-    monkeypatch.setattr(
-        repo_tasks, "insert", lambda conn, **kw: inserts.append(kw)
-    )
+    monkeypatch.setattr(repo_tasks, "insert", lambda conn, **kw: inserts.append(kw))
     return inserts
 
 
@@ -1907,8 +1890,10 @@ def _capture_create(monkeypatch, result="42"):
 
     def fake_create(event, *, tag_gids=None, key_points=None, relevant_links=None, due_date=None):
         created.update(
-            tag_gids=tag_gids, key_points=key_points,
-            relevant_links=relevant_links, due_date=due_date,
+            tag_gids=tag_gids,
+            key_points=key_points,
+            relevant_links=relevant_links,
+            due_date=due_date,
         )
         if result is None:
             return None
@@ -2051,9 +2036,7 @@ def handle(event: EmailClassifiedEvent) -> None:
         )
         return
 
-    otel.tasks_created.add(
-        1, {"category": event["category"], "importance": event["importance"]}
-    )
+    otel.tasks_created.add(1, {"category": event["category"], "importance": event["importance"]})
 
     try:
         with get_conn() as conn:
@@ -2252,7 +2235,9 @@ def handle(event: LabelAppliedEvent) -> None:
             "to_section": event["label"],
         },
     )
-    logger.info("Task %s moved to %s section (label from %s)", task_gid, event["label"], event["source"])
+    logger.info(
+        "Task %s moved to %s section (label from %s)", task_gid, event["label"], event["source"]
+    )
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -2317,9 +2302,7 @@ def test_already_in_done_is_a_noop(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
     monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": True})
-    monkeypatch.setattr(
-        asana, "current_section", lambda task: {"gid": "sec-done", "name": "Done"}
-    )
+    monkeypatch.setattr(asana, "current_section", lambda task: {"gid": "sec-done", "name": "Done"})
     moves = []
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
 
@@ -2418,9 +2401,7 @@ def _tasks(monkeypatch, tasks):
 
 def _stub_db(monkeypatch, escalated_gids=()):
     monkeypatch.setattr(escalation, "get_conn", lambda: FakeConn())
-    monkeypatch.setattr(
-        repo_tasks, "was_escalated", lambda conn, gid: gid in escalated_gids
-    )
+    monkeypatch.setattr(repo_tasks, "was_escalated", lambda conn, gid: gid in escalated_gids)
     marked = []
     monkeypatch.setattr(repo_tasks, "mark_escalated", lambda conn, gid: marked.append(gid))
     return marked
@@ -2652,9 +2633,7 @@ def test_webhook_handshake_echoes_secret():
 
 def test_webhook_rejects_bad_signature(monkeypatch):
     monkeypatch.setenv("ASANA_WEBHOOK_SECRET", "key")
-    _, status = main.webhook(
-        Req(headers={"X-Hook-Signature": "bogus"}, body=b'{"events": []}')
-    )
+    _, status = main.webhook(Req(headers={"X-Hook-Signature": "bogus"}, body=b'{"events": []}'))
     assert status == 401
 
 
@@ -2741,10 +2720,7 @@ def receive(body: bytes, signature: str) -> tuple:
     payload = json.loads(body or b"{}")
     handled = 0
     for event in payload.get("events", []):
-        if (
-            event.get("action") == "changed"
-            and event.get("change", {}).get("field") == "completed"
-        ):
+        if event.get("action") == "changed" and event.get("change", {}).get("field") == "completed":
             task_complete.handle(event["resource"]["gid"])
             handled += 1
     logger.info(
@@ -4598,8 +4574,8 @@ First, plumb to/cc — the Graph fetch already `$select`s `toRecipients`/`ccReci
 And in `services/ingestion.py` `normalize()`, add to the returned `Message`:
 
 ```python
-        to=[r.get("address", "") for r in email.to_recipients if r.get("address")],
-        cc=[r.get("address", "") for r in email.cc_recipients if r.get("address")],
+to = ([r.get("address", "") for r in email.to_recipients if r.get("address")],)
+cc = ([r.get("address", "") for r in email.cc_recipients if r.get("address")],)
 ```
 
 (`repo/messages.py` inserts named columns, so the extra dict keys are inert — no schema change.)
@@ -4656,9 +4632,7 @@ def publish(event: dict) -> None:
     carrier: dict = {}
     inject(carrier)
     publisher.publish(topic, json.dumps(event).encode(), **carrier)
-    logger.info(
-        "Published %s event for message_id=%s", event.get("event"), event.get("message_id")
-    )
+    logger.info("Published %s event for message_id=%s", event.get("event"), event.get("message_id"))
 
 
 def build_event(msg: Message, classification: Classification, extras: dict | None = None) -> dict:
@@ -4964,9 +4938,7 @@ def handle(classification: Classification, msg: Message) -> dict:
 
     try:
         draft_text = draft_svc.generate(msg)
-        extras["draft_link"] = get_graph_client().create_reply_draft(
-            msg["external_id"], draft_text
-        )
+        extras["draft_link"] = get_graph_client().create_reply_draft(msg["external_id"], draft_text)
     except Exception:
         logger.exception("Draft generation failed for message_id=%s", msg["id"])
     return extras

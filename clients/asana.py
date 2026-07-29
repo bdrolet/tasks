@@ -19,12 +19,13 @@ ASANA_PROJECT_ID = os.environ.get("ASANA_PROJECT_ID", "")
 _BASE = "https://app.asana.com/api/1.0"
 
 SEARCH_OPT_FIELDS = (
-    "name,notes,due_on,completed,permalink_url,"
+    "name,notes,due_on,completed,permalink_url,num_subtasks,parent.name,"
     "memberships.project.gid,memberships.project.name,memberships.section.name"
 )
 DETAIL_OPT_FIELDS = (
     "name,notes,html_notes,completed,due_on,due_at,created_at,modified_at,"
     "permalink_url,tags.gid,tags.name,assignee.gid,assignee.name,"
+    "parent.gid,parent.name,num_subtasks,"
     "memberships.project.gid,memberships.project.name,"
     "memberships.section.gid,memberships.section.name"
 )
@@ -332,6 +333,15 @@ def get_task_detail(task_gid: str) -> dict | None:
         return None
     resp.raise_for_status()
     return resp.json()["data"]
+
+
+def get_subtasks(task_gid: str) -> list[dict]:
+    """Compact subtasks of a task — one level only, sub-subtasks not fetched."""
+    return _paginate(
+        f"/tasks/{task_gid}/subtasks",
+        {"opt_fields": SEARCH_OPT_FIELDS},
+        operation="get_subtasks",
+    )
 
 
 def get_stories(task_gid: str) -> list[dict]:

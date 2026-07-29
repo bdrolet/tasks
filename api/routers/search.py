@@ -35,6 +35,7 @@ class SearchResult(BaseModel):
     message_id: str | None = None
     category: str | None = None
     importance: str | None = None
+    parent: str | None = None  # parent task name; set only for subtask hits
 
 
 class SearchResponse(BaseModel):
@@ -69,6 +70,7 @@ def membership(task: dict) -> tuple[str | None, str | None]:
 @router.post("/search", response_model=SearchResponse)
 def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchResponse:
     only_open = body.completed is False
+    parent_names: dict[str, str] = {}
     with translate_asana_errors():
         projects = asana.list_projects()
         if body.project:
@@ -93,6 +95,19 @@ def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchRespon
             raw = [t for batch in per_project for t in batch] + asana.list_my_tasks(
                 only_open=only_open
             )
+
+        # Subtask fan-out (one level): subtasks live under their parent, not in
+        # project listings, so fetch them for any swept task that has some.
+        # Completed subtasks come back too; filter_tasks applies the completed
+        # filter downstream.
+        with_subs = [t for t in raw if t.get("num_subtasks")]
+        if with_subs:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                batches = list(pool.map(lambda t: asana.get_subtasks(t["gid"]), with_subs))
+            for parent_task, batch in zip(with_subs, batches):
+                for sub in batch:
+                    parent_names.setdefault(sub["gid"], parent_task.get("name") or "")
+                raw.extend(batch)
 
     filtered = task_search.filter_tasks(
         raw,
@@ -120,6 +135,7 @@ def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchRespon
                 message_id=email.get("message_id"),
                 category=email.get("category"),
                 importance=email.get("importance"),
+                parent=parent_names.get(t["gid"]) or (t.get("parent") or {}).get("name"),
             )
         )
     return SearchResponse(results=results)

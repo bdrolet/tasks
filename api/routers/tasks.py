@@ -23,6 +23,19 @@ class Comment(BaseModel):
     is_editable: bool | None = None
 
 
+class TaskParent(BaseModel):
+    gid: str
+    name: str | None = None
+
+
+class SubtaskSummary(BaseModel):
+    task_gid: str
+    name: str
+    completed: bool = False
+    due_on: str | None = None
+    permalink_url: str | None = None
+
+
 class TaskDetail(BaseModel):
     task_gid: str
     name: str
@@ -42,6 +55,8 @@ class TaskDetail(BaseModel):
     message_id: str | None = None
     category: str | None = None
     importance: str | None = None
+    parent: TaskParent | None = None
+    subtasks: list[SubtaskSummary] = []
 
 
 class CreateTaskRequest(BaseModel):
@@ -159,6 +174,7 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
         if task is None:
             raise HTTPException(status_code=404, detail=f"unknown task: {gid}")
         stories = asana.get_stories(gid)
+        raw_subtasks = asana.get_subtasks(gid) if task.get("num_subtasks") else []
 
     project_name, section_name = membership(task)
     email = email_context([gid]).get(gid, {})
@@ -192,6 +208,21 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
         message_id=email.get("message_id"),
         category=email.get("category"),
         importance=email.get("importance"),
+        parent=(
+            TaskParent(gid=task["parent"]["gid"], name=task["parent"].get("name"))
+            if task.get("parent")
+            else None
+        ),
+        subtasks=[
+            SubtaskSummary(
+                task_gid=s["gid"],
+                name=s.get("name") or "",
+                completed=bool(s.get("completed")),
+                due_on=s.get("due_on"),
+                permalink_url=s.get("permalink_url"),
+            )
+            for s in raw_subtasks
+        ],
     )
 
 

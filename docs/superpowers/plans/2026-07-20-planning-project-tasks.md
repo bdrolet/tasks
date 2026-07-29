@@ -53,8 +53,13 @@ def test_list_tags_returns_workspace_tags(monkeypatch):
     monkeypatch.setattr(asana, "_workspace_gid", "ws-1")
     calls = _capture(
         monkeypatch,
-        _resp(200, {"data": [{"gid": "t1", "name": "home"},
-                             {"gid": "t2", "name": "urgent"}], "next_page": None}),
+        _resp(
+            200,
+            {
+                "data": [{"gid": "t1", "name": "home"}, {"gid": "t2", "name": "urgent"}],
+                "next_page": None,
+            },
+        ),
     )
     assert asana.list_tags() == [
         {"gid": "t1", "name": "home"},
@@ -131,8 +136,10 @@ def test_create_project_creates_project_then_sections(monkeypatch):
     calls = _capture_seq(
         monkeypatch,
         [
-            _resp(201, {"data": {"gid": "proj-new",
-                                 "permalink_url": "https://app.asana.com/x/proj-new"}}),
+            _resp(
+                201,
+                {"data": {"gid": "proj-new", "permalink_url": "https://app.asana.com/x/proj-new"}},
+            ),
             _resp(201, {"data": {"gid": "sec-a", "name": "Planning"}}),
             _resp(201, {"data": {"gid": "sec-b", "name": "Build"}}),
         ],
@@ -245,16 +252,19 @@ def test_create_subtask_with_parent(monkeypatch):
 
     monkeypatch.setattr(asana, "create_task_from_fields", fake_create)
     monkeypatch.setattr(
-        asana, "add_task_to_section",
+        asana,
+        "add_task_to_section",
         lambda *a, **k: pytest.fail("subtask must not be sectioned"),
     )
     monkeypatch.setattr(
-        asana, "list_projects",
+        asana,
+        "list_projects",
         lambda: pytest.fail("subtask must not resolve a project"),
     )
 
     resp = client.post(
-        "/tasks", headers=AUTH,
+        "/tasks",
+        headers=AUTH,
         json={"name": "Rent dumpster", "parent": "t-parent", "key_points": ["book online"]},
     )
 
@@ -363,10 +373,8 @@ def token(monkeypatch):
 
 
 def test_get_projects_includes_sections(monkeypatch):
-    monkeypatch.setattr(asana, "list_projects",
-                        lambda: [{"gid": "p1", "name": "Home"}])
-    monkeypatch.setattr(asana, "get_sections",
-                        lambda gid: [{"gid": "s1", "name": "Planning"}])
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Home"}])
+    monkeypatch.setattr(asana, "get_sections", lambda gid: [{"gid": "s1", "name": "Planning"}])
 
     resp = client.get("/projects", headers=AUTH)
     assert resp.status_code == 200
@@ -376,8 +384,7 @@ def test_get_projects_includes_sections(monkeypatch):
 
 
 def test_get_tags(monkeypatch):
-    monkeypatch.setattr(asana, "list_tags",
-                        lambda: [{"gid": "t1", "name": "home"}])
+    monkeypatch.setattr(asana, "list_tags", lambda: [{"gid": "t1", "name": "home"}])
     resp = client.get("/tags", headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["tags"] == [{"gid": "t1", "name": "home"}]
@@ -385,15 +392,15 @@ def test_get_tags(monkeypatch):
 
 def test_create_project(monkeypatch):
     monkeypatch.setattr(
-        asana, "create_project",
+        asana,
+        "create_project",
         lambda name, sections: {
             "gid": "p-new",
             "permalink_url": "https://app.asana.com/x/p-new",
             "sections": {"Planning": "s1"},
         },
     )
-    resp = client.post("/projects", headers=AUTH,
-                       json={"name": "Reno", "sections": ["Planning"]})
+    resp = client.post("/projects", headers=AUTH, json={"name": "Reno", "sections": ["Planning"]})
     assert resp.status_code == 201
     body = resp.json()
     assert body["project_gid"] == "p-new"
@@ -468,8 +475,9 @@ def get_projects(_: None = Depends(verify_token)) -> ProjectsResponse:
             ProjectInfo(
                 gid=p["gid"],
                 name=p["name"],
-                sections=[SectionInfo(gid=s["gid"], name=s["name"])
-                          for s in asana.get_sections(p["gid"])],
+                sections=[
+                    SectionInfo(gid=s["gid"], name=s["name"]) for s in asana.get_sections(p["gid"])
+                ],
             )
             for p in projects
         ]
