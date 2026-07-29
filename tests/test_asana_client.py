@@ -381,6 +381,13 @@ def test_search_opt_fields_include_num_subtasks():
     assert "num_subtasks" in asana.SEARCH_OPT_FIELDS
 
 
+def test_search_opt_fields_include_parent_name():
+    # So a subtask hit is self-carrying: it labels its own parent even when
+    # the parent wasn't swept (e.g. a completed parent excluded from the
+    # project sweep) and the fan-out never produces a parent_names entry.
+    assert "parent.name" in asana.SEARCH_OPT_FIELDS
+
+
 def test_detail_opt_fields_include_parent_and_num_subtasks():
     assert "parent.gid" in asana.DETAIL_OPT_FIELDS
     assert "parent.name" in asana.DETAIL_OPT_FIELDS

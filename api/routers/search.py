@@ -107,7 +107,7 @@ def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchRespon
             for parent_task, batch in zip(with_subs, batches):
                 for sub in batch:
                     parent_names.setdefault(sub["gid"], parent_task.get("name") or "")
-                raw = raw + batch
+                raw.extend(batch)
 
     filtered = task_search.filter_tasks(
         raw,
@@ -135,7 +135,7 @@ def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchRespon
                 message_id=email.get("message_id"),
                 category=email.get("category"),
                 importance=email.get("importance"),
-                parent=parent_names.get(t["gid"]),
+                parent=parent_names.get(t["gid"]) or (t.get("parent") or {}).get("name"),
             )
         )
     return SearchResponse(results=results)

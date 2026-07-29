@@ -11,10 +11,21 @@ DEST="$HOME/.claude/skills"
 mkdir -p "$DEST"
 
 for skill in searching-tasks fetching-task editing-tasks creating-tasks planning-project-tasks; do
+  # ln -sfn onto a real (non-symlink) directory fails and set -e aborts the
+  # loop half-linked; guard so a pre-existing real copy fails loudly instead.
+  if [[ -e "$DEST/$skill" && ! -L "$DEST/$skill" ]]; then
+    echo "error: $DEST/$skill exists and is not a symlink — remove the old copy first" >&2
+    exit 1
+  fi
   ln -sfn "$REPO_ROOT/.claude/skills/$skill" "$DEST/$skill"
   echo "linked $DEST/$skill -> $(readlink "$DEST/$skill")"
 done
 
 mkdir -p "$HOME/.claude/agents"
-ln -sfn "$REPO_ROOT/.claude/agents/task-builder.md" "$HOME/.claude/agents/task-builder.md"
-echo "linked $HOME/.claude/agents/task-builder.md -> $(readlink "$HOME/.claude/agents/task-builder.md")"
+AGENT_DEST="$HOME/.claude/agents/task-builder.md"
+if [[ -e "$AGENT_DEST" && ! -L "$AGENT_DEST" ]]; then
+  echo "error: $AGENT_DEST exists and is not a symlink — remove the old copy first" >&2
+  exit 1
+fi
+ln -sfn "$REPO_ROOT/.claude/agents/task-builder.md" "$AGENT_DEST"
+echo "linked $AGENT_DEST -> $(readlink "$AGENT_DEST")"

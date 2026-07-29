@@ -35,8 +35,8 @@ def _task(gid, name, notes="", project="Inbox", section=None, **kw):
     }
 
 
-def _subtask(gid, name, **kw):
-    return {
+def _subtask(gid, name, parent=None, **kw):
+    task = {
         "gid": gid,
         "name": name,
         "notes": kw.get("notes", ""),
@@ -46,6 +46,9 @@ def _subtask(gid, name, **kw):
         "permalink_url": f"https://app.asana.com/x/{gid}",
         "memberships": [],
     }
+    if parent is not None:
+        task["parent"] = parent
+    return task
 
 
 def test_search_requires_token():
@@ -233,6 +236,31 @@ def test_search_subtask_parent_survives_dedupe(monkeypatch):
     monkeypatch.setattr(asana, "get_subtasks", lambda gid: [_subtask("s1", "Book flights")])
 
     results = client.post("/search", json={"query": "flights"}, headers=AUTH).json()["results"]
+    assert len(results) == 1
+    assert results[0]["parent"] == "Plan trip"
+
+
+def test_search_subtask_parent_falls_back_to_own_parent_field(monkeypatch):
+    # A subtask surfaces via list_my_tasks whose parent is completed and thus
+    # excluded from the project sweep — the fan-out never runs and
+    # parent_names has no entry for it. The result must still carry a parent
+    # name, sourced from the subtask's own "parent" field.
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(asana, "list_project_tasks", lambda gid, **kw: [])
+    monkeypatch.setattr(
+        asana,
+        "list_my_tasks",
+        lambda **kw: [_subtask("s1", "Book flights", parent={"gid": "t0", "name": "Plan trip"})],
+    )
+
+    def boom(gid):
+        raise AssertionError("get_subtasks must not be called — parent wasn't swept")
+
+    monkeypatch.setattr(asana, "get_subtasks", boom)
+
+    resp = client.post("/search", json={"query": "flights"}, headers=AUTH)
+    assert resp.status_code == 200
+    results = resp.json()["results"]
     assert len(results) == 1
     assert results[0]["parent"] == "Plan trip"
 

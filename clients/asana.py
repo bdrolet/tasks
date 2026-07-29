@@ -19,7 +19,7 @@ ASANA_PROJECT_ID = os.environ.get("ASANA_PROJECT_ID", "")
 _BASE = "https://app.asana.com/api/1.0"
 
 SEARCH_OPT_FIELDS = (
-    "name,notes,due_on,completed,permalink_url,num_subtasks,"
+    "name,notes,due_on,completed,permalink_url,num_subtasks,parent.name,"
     "memberships.project.gid,memberships.project.name,memberships.section.name"
 )
 DETAIL_OPT_FIELDS = (
