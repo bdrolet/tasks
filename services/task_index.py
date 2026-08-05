@@ -75,3 +75,13 @@ def refresh(task_gid: str) -> None:
     except Exception:
         logger.exception("task_index refresh failed for gid=%s", task_gid)
         otel.errors.add(1, {"handler": "task_index"})
+
+
+def remove(task_gid: str) -> None:
+    """Drop a task from the index. Best-effort: failures log and return."""
+    try:
+        with get_conn() as conn:
+            repo_index.delete(conn, task_gid)
+    except Exception:
+        logger.exception("task_index delete failed for gid=%s", task_gid)
+        otel.errors.add(1, {"handler": "task_index"})

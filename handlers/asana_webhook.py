@@ -14,6 +14,8 @@ from services import task_index
 
 logger = logging.getLogger(__name__)
 
+_MAX_REFRESH_PER_DELIVERY = 20
+
 
 def handshake(hook_secret: str) -> tuple:
     """Echo X-Hook-Secret. Logged so the runbook can store it in Secret
@@ -40,6 +42,7 @@ def receive(body: bytes, signature: str) -> tuple:
     payload = json.loads(body or b"{}")
     handled = 0
     refresh_gids: dict[str, None] = {}  # insertion-ordered de-dupe
+    delete_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     for event in payload.get("events", []):
         resource = event.get("resource") or {}
         if resource.get("resource_type") != "task":
@@ -49,14 +52,34 @@ def receive(body: bytes, signature: str) -> tuple:
         if action == "changed" and field == "completed":
             task_complete.handle(resource["gid"])
             handled += 1
+        elif action in ("deleted", "removed"):
+            delete_gids[resource["gid"]] = None
         elif action == "added" or (action == "changed" and field in ("name", "notes", "due_on")):
             refresh_gids[resource["gid"]] = None
-    for gid in refresh_gids:
+
+    # delete wins: a gid deleted in this delivery is never also refreshed
+    for gid in delete_gids:
+        refresh_gids.pop(gid, None)
+
+    refresh_list = list(refresh_gids)
+    if len(refresh_list) > _MAX_REFRESH_PER_DELIVERY:
+        logger.warning(
+            "Webhook: %d refresh gids exceeds cap %d — remainder heals via backfill",
+            len(refresh_list),
+            _MAX_REFRESH_PER_DELIVERY,
+        )
+        refresh_list = refresh_list[:_MAX_REFRESH_PER_DELIVERY]
+    for gid in refresh_list:
         task_index.refresh(gid)
+    for gid in delete_gids:
+        task_index.remove(gid)
+
     logger.info(
-        "Webhook: %d event(s) received, %d completion(s), %d index refresh(es) — signature_valid: true",
+        "Webhook: %d event(s) received, %d completion(s), %d index refresh(es), "
+        "%d index delete(s) — signature_valid: true",
         len(payload.get("events", [])),
         handled,
-        len(refresh_gids),
+        len(refresh_list),
+        len(delete_gids),
     )
     return "", 200

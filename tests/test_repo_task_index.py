@@ -78,6 +78,14 @@ def test_set_completed():
     assert params == (True, "t1")
 
 
+def test_delete():
+    conn = FakeConn()
+    repo_index.delete(conn, "t1")
+    query, params = conn.executed[0]
+    assert "DELETE FROM task_index WHERE task_gid = %s" in query
+    assert params == ("t1",)
+
+
 def test_semantic_candidates_filters_and_order():
     conn = FakeConn(rows=[{"task_gid": "t1", "score": 0.9}])
     rows = repo_index.semantic_candidates(

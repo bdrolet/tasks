@@ -150,8 +150,8 @@ Semantic path:
 4. Existing email-context decoration applies unchanged.
 
 Response: existing `SearchResult` shape plus `score: float` (cosine
-similarity, 0–1), and a top-level `semantic: bool` echoing which path served
-the request.
+similarity, −1..1 — in practice ~0–1), and a top-level `semantic: bool`
+echoing which path served the request.
 
 **Fallback rule:** if the embed call fails at query time, fall back to the
 existing substring path and set `semantic: false` in the response so the

@@ -70,6 +70,10 @@ def set_completed(conn: Any, task_gid: str, completed: bool) -> None:
     )
 
 
+def delete(conn: Any, task_gid: str) -> None:
+    conn.execute("DELETE FROM task_index WHERE task_gid = %s", (task_gid,))
+
+
 def semantic_candidates(
     conn: Any,
     *,
@@ -80,9 +84,11 @@ def semantic_candidates(
     project: str | None,
     limit: int,
 ) -> list[dict]:
-    """Nearest neighbors by cosine distance, best score first. Filters match
-    the substring path's semantics (date bounds inclusive; date filters drop
-    undated tasks)."""
+    """Nearest neighbors by cosine distance, best score first. Date-bound
+    semantics match the substring path (inclusive; undated dropped). Note:
+    subtasks are indexed with project=NULL (no memberships), so a project
+    filter excludes them — unlike the substring path, which sweeps a
+    project's subtasks."""
     where = ["embedding IS NOT NULL"]
     params: list = [_vec(query_embedding)]
     if completed is not None:

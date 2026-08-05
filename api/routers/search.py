@@ -40,7 +40,7 @@ class SearchResult(BaseModel):
     category: str | None = None
     importance: str | None = None
     parent: str | None = None  # parent task name; set only for subtask hits
-    score: float | None = None  # cosine similarity 0..1; semantic hits only
+    score: float | None = None  # cosine similarity (−1..1, in practice ~0–1); semantic hits only
 
 
 class SearchResponse(BaseModel):

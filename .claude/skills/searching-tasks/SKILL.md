@@ -60,10 +60,13 @@ Unknown `project` returns 400 with `known_projects` — retry with one of those.
 
 Set `"semantic": true` when the query is natural language rather than a
 keyword the task literally contains. Results come back best-match-first
-with a `score` (cosine similarity, 0–1); `snippet` is usually null (no
+with a `score` — cosine similarity (−1..1, in practice ~0–1); `snippet` is usually null (no
 literal substring). The response's top-level `semantic` flag is `false`
 when the service degraded to substring ranking (embedding backend down) —
 mention that if results look off. Requires a non-empty `query`.
+
+Project-scoped semantic search (`project` + `semantic: true`) does not
+return subtasks — drop the project filter to include them.
 
 ## Presenting results
 

@@ -109,3 +109,32 @@ def test_refresh_swallows_everything(monkeypatch):
 
     monkeypatch.setattr(task_index.asana, "get_task_detail", boom)
     task_index.refresh("t9")  # no exception
+
+
+def test_new_row_embed_failure_keeps_new_hash_null_vector():
+    def boom(text):
+        raise RuntimeError("vertex down")
+
+    conn = FakeConn(state=None)  # no existing row
+    embedded = task_index.index_task_dict(conn, _task(), embed_fn=boom)
+    assert embedded is False
+    insert_q, insert_p = next((q, p) for q, p in conn.executed if "INSERT INTO" in q)
+    chash = task_index.content_hash("Pay the bill", "comcast")
+    assert chash in insert_p  # NEW hash stored (retry via has_embedding=False)
+    assert insert_p[-1] is None  # no vector written
+
+
+def test_remove_happy_path(monkeypatch):
+    conn = FakeConn(state=None)
+    monkeypatch.setattr(task_index, "get_conn", lambda: conn)
+    task_index.remove("t9")
+    delete_q, delete_p = next((q, p) for q, p in conn.executed if "DELETE FROM" in q)
+    assert delete_p == ("t9",)
+
+
+def test_remove_swallows_everything(monkeypatch):
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(task_index, "get_conn", boom)
+    task_index.remove("t9")  # no exception
