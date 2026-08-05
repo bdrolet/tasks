@@ -12,6 +12,9 @@ psycopg>=3.1
 pg8000>=1.31
 cloud-sql-python-connector>=1.7.0
 
+# Vertex AI embeddings — IAM token via ADC/metadata server (no API key)
+google-auth>=2.30
+
 # Observability
 opentelemetry-sdk>=1.24
 opentelemetry-exporter-otlp-proto-http>=1.24

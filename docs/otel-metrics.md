@@ -14,13 +14,15 @@ inbox `docs/otel-metrics-in-cloud-functions.md`.
 | `asana.errors` | Counter | `handler` | main.py (both entry points) |
 | `asana.claude.tokens` | Counter | `token_type` | clients/claude.py (enrichment spend) |
 | `asana.api.duration` | Histogram (ms) | `operation` | clients/asana.py `_request` |
+| `vertex.api.duration` | Histogram (ms) | `model` | clients/vertex.py `embed` |
 
 ## Prometheus names
 
 OTLP → Mimir renders dots as underscores and appends units/suffixes:
 `asana_tasks_created_total`, `asana_tasks_moved_total`,
 `asana_tasks_completed_total`, `asana_escalations_total`,
-`asana_errors_total`, `asana_api_duration_milliseconds_bucket`.
+`asana_errors_total`, `asana_api_duration_milliseconds_bucket`,
+`vertex_api_duration_milliseconds_bucket`.
 
 ## Example PromQL
 
