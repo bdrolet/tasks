@@ -1,7 +1,7 @@
 # Task Vector Search — Design
 
 **Date:** 2026-08-05
-**Status:** Approved design, pre-implementation
+**Status:** Approved design — implemented (see docs/superpowers/plans/2026-08-05-task-vector-search.md)
 
 ## 1. Problem
 
