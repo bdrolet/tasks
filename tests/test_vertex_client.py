@@ -66,3 +66,30 @@ def test_embed_raises_on_http_error(monkeypatch):
 
 def test_normalize_zero_vector_unchanged():
     assert vertex._normalize([0.0, 0.0]) == [0.0, 0.0]
+
+
+def test_embed_counts_malformed_response_parse_failures(monkeypatch):
+    """2xx response with malformed body increments error counter."""
+
+    class MalformedResponse:
+        status_code = 200
+
+        def json(self):
+            return {"predictions": []}  # Missing embeddings — causes IndexError
+
+        def raise_for_status(self):
+            pass
+
+    errors_recorded = []
+
+    class FakeErrors:
+        def add(self, count, attrs):
+            errors_recorded.append((count, attrs))
+
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: MalformedResponse())
+    monkeypatch.setattr(vertex.otel, "errors", FakeErrors())
+
+    with pytest.raises(IndexError):
+        vertex.embed("hello", task_type="RETRIEVAL_QUERY")
+
+    assert (1, {"handler": "vertex_embed"}) in errors_recorded

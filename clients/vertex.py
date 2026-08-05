@@ -67,6 +67,7 @@ def embed(text: str, *, task_type: str) -> list[float]:
             timeout=30,
         )
         resp.raise_for_status()
+        values = resp.json()["predictions"][0]["embeddings"]["values"]
     except Exception:
         otel.errors.add(1, {"handler": "vertex_embed"})
         raise
@@ -74,7 +75,6 @@ def embed(text: str, *, task_type: str) -> list[float]:
         otel.vertex_duration.record(
             (time.monotonic() - t0) * 1000, {"model": VERTEX_EMBED_MODEL}
         )
-    values = resp.json()["predictions"][0]["embeddings"]["values"]
     # Matryoshka truncation to 768 dims leaves vectors non-unit-length —
     # renormalize so pgvector cosine distance behaves.
     return _normalize(values)
