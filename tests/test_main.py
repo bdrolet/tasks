@@ -63,7 +63,7 @@ def test_webhook_dispatches_completion_events(monkeypatch):
                 {
                     "action": "changed",
                     "change": {"field": "completed"},
-                    "resource": {"gid": "42"},
+                    "resource": {"gid": "42", "resource_type": "task"},
                 },
                 {"action": "added", "resource": {"gid": "99"}},
             ]
