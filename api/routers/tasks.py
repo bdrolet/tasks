@@ -9,7 +9,7 @@ from api.errors import translate_asana_errors
 from api.routers.search import email_context, membership
 from models.task_content import TaskContent
 from services import tags as tags_service
-from services import task_search
+from services import task_index, task_search
 from services.task_content import render_html_notes
 
 router = APIRouter()
@@ -257,6 +257,8 @@ def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> Cre
             if section_gid:
                 asana.add_task_to_section(created.gid, section_gid)
 
+    task_index.refresh(created.gid)
+
     return CreatedTaskResponse(task_gid=created.gid, permalink_url=created.permalink_url)
 
 
@@ -304,5 +306,7 @@ def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token
                 tag_gid_opt = current.get(name.casefold())
                 if tag_gid_opt:  # unknown removes are ignored (idempotent)
                     asana.remove_tag(gid, tag_gid_opt)
+
+    task_index.refresh(gid)
 
     return {"status": "updated", "task_gid": gid}
