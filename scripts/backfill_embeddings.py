@@ -74,10 +74,16 @@ def main() -> None:
                 else:
                     skipped += 1
                 continue
+            state = repo_index.get_state(conn, t["gid"])
+            chash = task_index.content_hash(title, notes)
+            needs_embed = (
+                state is None or state["content_hash"] != chash or not state["has_embedding"]
+            )
             if task_index.index_task_dict(conn, t):
                 embedded += 1
+            elif needs_embed:
+                failed += 1  # wanted a vector but the embed call failed (already logged)
             else:
-                # skipped (hash match) or embed failure — index_task_dict logged it
                 skipped += 1
             if i % 50 == 0:
                 conn.commit()
