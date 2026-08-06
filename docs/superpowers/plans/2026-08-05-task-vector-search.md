@@ -101,9 +101,7 @@ def test_embed_truncates_input(monkeypatch):
 
 
 def test_embed_raises_on_http_error(monkeypatch):
-    monkeypatch.setattr(
-        httpx, "post", lambda url, **kw: FakeResponse([1.0], status=500)
-    )
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: FakeResponse([1.0], status=500))
     with pytest.raises(httpx.HTTPStatusError):
         vertex.embed("hello", task_type="RETRIEVAL_QUERY")
 
@@ -217,9 +215,7 @@ def embed(text: str, *, task_type: str) -> list[float]:
         otel.errors.add(1, {"handler": "vertex_embed"})
         raise
     finally:
-        otel.vertex_duration.record(
-            (time.monotonic() - t0) * 1000, {"model": VERTEX_EMBED_MODEL}
-        )
+        otel.vertex_duration.record((time.monotonic() - t0) * 1000, {"model": VERTEX_EMBED_MODEL})
     values = resp.json()["predictions"][0]["embeddings"]["values"]
     # Matryoshka truncation to 768 dims leaves vectors non-unit-length —
     # renormalize so pgvector cosine distance behaves.
@@ -624,7 +620,9 @@ def _task(gid="t1", name="Pay the bill", notes="comcast", **kw):
 def test_new_task_embeds_and_upserts():
     conn = FakeConn(state=None)
     calls = []
-    embedded = task_index.index_task_dict(conn, _task(), embed_fn=lambda t: calls.append(t) or [0.1])
+    embedded = task_index.index_task_dict(
+        conn, _task(), embed_fn=lambda t: calls.append(t) or [0.1]
+    )
     assert embedded is True
     assert calls == ["Pay the bill\ncomcast"]
     insert = next(q for q, p in conn.executed if "INSERT INTO task_index" in q)
@@ -668,18 +666,14 @@ def test_refresh_happy_path(monkeypatch):
     conn = FakeConn(state=None)
     monkeypatch.setattr(task_index.asana, "get_task_detail", lambda gid: _task(gid=gid))
     monkeypatch.setattr(task_index, "get_conn", lambda: conn)
-    monkeypatch.setattr(
-        task_index.vertex, "embed", lambda text, task_type: [0.5]
-    )
+    monkeypatch.setattr(task_index.vertex, "embed", lambda text, task_type: [0.5])
     task_index.refresh("t9")
     assert any("INSERT INTO task_index" in q for q, p in conn.executed)
 
 
 def test_refresh_task_gone(monkeypatch):
     monkeypatch.setattr(task_index.asana, "get_task_detail", lambda gid: None)
-    monkeypatch.setattr(
-        task_index, "get_conn", lambda: pytest.fail("no DB call for a 404")
-    )
+    monkeypatch.setattr(task_index, "get_conn", lambda: pytest.fail("no DB call for a 404"))
     task_index.refresh("t9")  # no exception
 
 
@@ -740,9 +734,7 @@ def index_task_dict(conn, task: dict, *, embed_fn=None) -> bool:
     notes = task.get("notes") or ""
     chash = content_hash(title, notes)
     state = repo_index.get_state(conn, task["gid"])
-    needs_embed = (
-        state is None or state["content_hash"] != chash or not state["has_embedding"]
-    )
+    needs_embed = state is None or state["content_hash"] != chash or not state["has_embedding"]
     embedding = None
     if needs_embed:
         try:
@@ -1048,9 +1040,7 @@ def _capture(monkeypatch):
 
 def test_added_task_event_refreshes(monkeypatch):
     refreshed, completed = _capture(monkeypatch)
-    body, sig = _signed(
-        [{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}]
-    )
+    body, sig = _signed([{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}])
     assert asana_webhook.receive(body, sig) == ("", 200)
     assert refreshed == ["t1"]
     assert completed == []
@@ -1250,7 +1240,10 @@ def test_semantic_search_ranked_with_scores(monkeypatch):
     _semantic_setup(
         monkeypatch,
         rows=[{"task_gid": "t1", "score": 0.91}, {"task_gid": "t2", "score": 0.72}],
-        details={"t1": _detail("t1", "Settle the Comcast bill"), "t2": _detail("t2", "File expenses")},
+        details={
+            "t1": _detail("t1", "Settle the Comcast bill"),
+            "t2": _detail("t2", "File expenses"),
+        },
     )
     resp = client.post(
         "/search", json={"query": "invoices I need to pay", "semantic": True}, headers=AUTH
@@ -1364,7 +1357,9 @@ class SearchResponse(BaseModel):
 Extract the result construction (currently the loop at the end of `search()`) into a helper so both paths share it:
 
 ```python
-def _to_result(t: dict, *, query: str, email: dict, parent_name: str | None, score: float | None = None) -> SearchResult:
+def _to_result(
+    t: dict, *, query: str, email: dict, parent_name: str | None, score: float | None = None
+) -> SearchResult:
     project_name, section_name = membership(t)
     return SearchResult(
         task_gid=t["gid"],

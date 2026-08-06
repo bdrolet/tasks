@@ -72,9 +72,7 @@ def embed(text: str, *, task_type: str) -> list[float]:
         otel.errors.add(1, {"handler": "vertex_embed"})
         raise
     finally:
-        otel.vertex_duration.record(
-            (time.monotonic() - t0) * 1000, {"model": VERTEX_EMBED_MODEL}
-        )
+        otel.vertex_duration.record((time.monotonic() - t0) * 1000, {"model": VERTEX_EMBED_MODEL})
     # Matryoshka truncation to 768 dims leaves vectors non-unit-length —
     # renormalize so pgvector cosine distance behaves.
     return _normalize(values)

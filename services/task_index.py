@@ -37,9 +37,7 @@ def index_task_dict(conn, task: dict, *, embed_fn=None) -> bool:
     notes = task.get("notes") or ""
     chash = content_hash(title, notes)
     state = repo_index.get_state(conn, task["gid"])
-    needs_embed = (
-        state is None or state["content_hash"] != chash or not state["has_embedding"]
-    )
+    needs_embed = state is None or state["content_hash"] != chash or not state["has_embedding"]
     embedding = None
     if needs_embed:
         try:

@@ -44,7 +44,9 @@ def _task(gid="t1", name="Pay the bill", notes="comcast", **kw):
 def test_new_task_embeds_and_upserts():
     conn = FakeConn(state=None)
     calls = []
-    embedded = task_index.index_task_dict(conn, _task(), embed_fn=lambda t: calls.append(t) or [0.1])
+    embedded = task_index.index_task_dict(
+        conn, _task(), embed_fn=lambda t: calls.append(t) or [0.1]
+    )
     assert embedded is True
     assert calls == ["Pay the bill\ncomcast"]
     insert = next(q for q, p in conn.executed if "INSERT INTO task_index" in q)
@@ -88,18 +90,14 @@ def test_refresh_happy_path(monkeypatch):
     conn = FakeConn(state=None)
     monkeypatch.setattr(task_index.asana, "get_task_detail", lambda gid: _task(gid=gid))
     monkeypatch.setattr(task_index, "get_conn", lambda: conn)
-    monkeypatch.setattr(
-        task_index.vertex, "embed", lambda text, task_type: [0.5]
-    )
+    monkeypatch.setattr(task_index.vertex, "embed", lambda text, task_type: [0.5])
     task_index.refresh("t9")
     assert any("INSERT INTO task_index" in q for q, p in conn.executed)
 
 
 def test_refresh_task_gone(monkeypatch):
     monkeypatch.setattr(task_index.asana, "get_task_detail", lambda gid: None)
-    monkeypatch.setattr(
-        task_index, "get_conn", lambda: pytest.fail("no DB call for a 404")
-    )
+    monkeypatch.setattr(task_index, "get_conn", lambda: pytest.fail("no DB call for a 404"))
     task_index.refresh("t9")  # no exception
 
 

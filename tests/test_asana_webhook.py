@@ -30,9 +30,7 @@ def _capture(monkeypatch):
 
 def test_added_task_event_refreshes(monkeypatch):
     refreshed, completed, _ = _capture(monkeypatch)
-    body, sig = _signed(
-        [{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}]
-    )
+    body, sig = _signed([{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}])
     assert asana_webhook.receive(body, sig) == ("", 200)
     assert refreshed == ["t1"]
     assert completed == []
@@ -113,9 +111,7 @@ def test_bad_signature_rejected(monkeypatch):
 
 def test_deleted_task_event_removes(monkeypatch):
     refreshed, completed, removed = _capture(monkeypatch)
-    body, sig = _signed(
-        [{"action": "deleted", "resource": {"gid": "t6", "resource_type": "task"}}]
-    )
+    body, sig = _signed([{"action": "deleted", "resource": {"gid": "t6", "resource_type": "task"}}])
     assert asana_webhook.receive(body, sig) == ("", 200)
     assert removed == ["t6"]
     assert refreshed == []
@@ -124,9 +120,7 @@ def test_deleted_task_event_removes(monkeypatch):
 
 def test_removed_task_event_removes(monkeypatch):
     refreshed, _, removed = _capture(monkeypatch)
-    body, sig = _signed(
-        [{"action": "removed", "resource": {"gid": "t7", "resource_type": "task"}}]
-    )
+    body, sig = _signed([{"action": "removed", "resource": {"gid": "t7", "resource_type": "task"}}])
     asana_webhook.receive(body, sig)
     assert removed == ["t7"]
     assert refreshed == []

@@ -57,9 +57,7 @@ def test_embed_truncates_input(monkeypatch):
 
 
 def test_embed_raises_on_http_error(monkeypatch):
-    monkeypatch.setattr(
-        httpx, "post", lambda url, **kw: FakeResponse([1.0], status=500)
-    )
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: FakeResponse([1.0], status=500))
     with pytest.raises(httpx.HTTPStatusError):
         vertex.embed("hello", task_type="RETRIEVAL_QUERY")
 
