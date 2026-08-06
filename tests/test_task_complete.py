@@ -29,6 +29,35 @@ def test_incomplete_task_is_ignored(monkeypatch):
     assert moves == []
 
 
+def test_complete_updates_index(monkeypatch):
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": True})
+    monkeypatch.setattr(asana, "current_section", lambda task: None)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+    calls = []
+    monkeypatch.setattr(
+        task_complete.repo_index,
+        "set_completed",
+        lambda conn, gid, done: calls.append((gid, done)),
+    )
+    task_complete.handle("42")
+    assert calls == [("42", True)]
+
+
+def test_uncomplete_clears_index_flag(monkeypatch):
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": False})
+    calls = []
+    monkeypatch.setattr(
+        task_complete.repo_index,
+        "set_completed",
+        lambda conn, gid, done: calls.append((gid, done)),
+    )
+    task_complete.handle("42")
+    assert calls == [("42", False)]
+
+
 def test_already_in_done_is_a_noop(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
     monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())

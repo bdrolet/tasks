@@ -29,6 +29,7 @@ errors: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 claude_tokens: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 api_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
 api_requests: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+vertex_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -38,7 +39,7 @@ def setup_telemetry(service_name: str) -> None:
     """
     global _meter_provider, _tracer_provider, _metric_reader
     global tasks_created, tasks_moved, tasks_completed, escalations, errors
-    global claude_tokens, api_duration, api_requests
+    global claude_tokens, api_duration, api_requests, vertex_duration
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -83,6 +84,9 @@ def setup_telemetry(service_name: str) -> None:
     )
     api_requests = meter.create_counter(
         "asana.api.requests", description="tasks-api HTTP requests by route and status"
+    )
+    vertex_duration = meter.create_histogram(
+        "vertex.api.duration", unit="ms", description="Vertex AI embed call duration by model"
     )
 
     # --- Logs ---

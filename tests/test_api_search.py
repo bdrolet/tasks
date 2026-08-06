@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import clients.asana as asana
+import clients.vertex as vertex_client
 from api.main import app
 
 client = TestClient(app)
@@ -279,3 +280,117 @@ def test_search_project_narrowed_also_sweeps_subtasks(monkeypatch):
     ).json()["results"]
     assert [r["task_gid"] for r in results] == ["s1"]
     assert results[0]["parent"] == "Yard work"
+
+
+class _IndexConn:
+    """Fake DB conn yielding fixed semantic candidates."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, query, params=None):
+        rows = self._rows
+
+        class Cur:
+            def fetchall(self):
+                return rows
+
+        return Cur()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return None
+
+
+def _detail(gid, name, **kw):
+    return {
+        "gid": gid,
+        "name": name,
+        "notes": kw.get("notes", ""),
+        "completed": kw.get("completed", False),
+        "due_on": kw.get("due_on"),
+        "permalink_url": f"https://app.asana.com/x/{gid}",
+        "memberships": [{"project": {"gid": "p1", "name": "Inbox"}, "section": {"name": None}}],
+    }
+
+
+def _semantic_setup(monkeypatch, rows, details):
+    from api.routers import search as search_router
+
+    monkeypatch.setattr(vertex_client, "embed", lambda text, task_type: [0.1, 0.2])
+    monkeypatch.setattr(search_router, "get_conn", lambda: _IndexConn(rows))
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: details.get(gid))
+
+
+def test_semantic_search_ranked_with_scores(monkeypatch):
+    _semantic_setup(
+        monkeypatch,
+        rows=[{"task_gid": "t1", "score": 0.91}, {"task_gid": "t2", "score": 0.72}],
+        details={
+            "t1": _detail("t1", "Settle the Comcast bill"),
+            "t2": _detail("t2", "File expenses"),
+        },
+    )
+    resp = client.post(
+        "/search", json={"query": "invoices I need to pay", "semantic": True}, headers=AUTH
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["semantic"] is True
+    assert [r["task_gid"] for r in body["results"]] == ["t1", "t2"]  # score order kept
+    assert body["results"][0]["score"] == pytest.approx(0.91)
+
+
+def test_semantic_drops_deleted_tasks(monkeypatch):
+    _semantic_setup(
+        monkeypatch,
+        rows=[{"task_gid": "t1", "score": 0.9}, {"task_gid": "gone", "score": 0.8}],
+        details={"t1": _detail("t1", "Settle the Comcast bill")},  # 'gone' → None
+    )
+    resp = client.post("/search", json={"query": "bills", "semantic": True}, headers=AUTH)
+    assert [r["task_gid"] for r in resp.json()["results"]] == ["t1"]
+
+
+def test_semantic_falls_back_when_embed_fails(monkeypatch):
+    def boom(text, task_type):
+        raise RuntimeError("vertex down")
+
+    monkeypatch.setattr(vertex_client, "embed", boom)
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, **kw: [_task("t1", "Renew passport")]
+    )
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
+    resp = client.post("/search", json={"query": "passport", "semantic": True}, headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["semantic"] is False  # degraded, flagged
+    assert [r["task_gid"] for r in body["results"]] == ["t1"]
+
+
+def test_semantic_requires_query():
+    resp = client.post("/search", json={"query": "  ", "semantic": True}, headers=AUTH)
+    assert resp.status_code == 400
+
+
+def test_semantic_unknown_project_400(monkeypatch):
+    monkeypatch.setattr(vertex_client, "embed", lambda text, task_type: [0.1])
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    resp = client.post(
+        "/search", json={"query": "x", "semantic": True, "project": "Nope"}, headers=AUTH
+    )
+    assert resp.status_code == 400
+    assert "known_projects" in resp.json()["detail"]
+
+
+def test_substring_path_unchanged_response_shape(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, **kw: [_task("t1", "Renew passport")]
+    )
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
+    body = client.post("/search", json={"query": "passport"}, headers=AUTH).json()
+    assert body["semantic"] is False
+    assert body["results"][0]["score"] is None

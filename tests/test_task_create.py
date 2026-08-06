@@ -149,3 +149,26 @@ def test_handle_db_failure_does_not_block_section_move(monkeypatch):
 
     task_create.handle(make_email_event())  # must not raise
     assert moves == [("42", "sec-review")]
+
+
+def test_created_task_is_indexed(monkeypatch):
+    monkeypatch.setattr(tags, "resolve_gids", lambda names: [])
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch)
+    _capture_create(monkeypatch)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+    refreshed = []
+    monkeypatch.setattr(task_create.task_index, "refresh", refreshed.append)
+
+    task_create.handle(make_email_event())
+    assert refreshed == ["42"]
+
+
+def test_no_task_means_no_index_refresh(monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(task_create.task_index, "refresh", refreshed.append)
+    event = make_email_event()
+    event["category"] = "ignore"  # policy gate rejects
+
+    task_create.handle(event)
+    assert refreshed == []

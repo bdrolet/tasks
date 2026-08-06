@@ -3,6 +3,7 @@ import logging
 import clients.asana as asana
 import clients.otel as otel
 from clients.db import get_conn
+from repo import task_index as repo_index
 from repo import tasks as repo_tasks
 from services import sections
 
@@ -13,7 +14,12 @@ def handle(task_gid: str) -> None:
     # Asana fires "changed/completed" on both complete AND un-complete — verify.
     task = asana.get_task(task_gid)
     if not task.get("completed"):
-        logger.info("Task %s not completed (uncomplete event?) — ignoring", task_gid)
+        try:
+            with get_conn() as conn:
+                repo_index.set_completed(conn, task_gid, False)
+        except Exception:
+            logger.exception("task_index uncomplete update failed for gid=%s", task_gid)
+        logger.info("Task %s not completed (uncomplete event) — index flag cleared", task_gid)
         return
 
     otel.tasks_completed.add(1)
@@ -21,6 +27,7 @@ def handle(task_gid: str) -> None:
     try:
         with get_conn() as conn:
             repo_tasks.mark_completed(conn, task_gid)
+            repo_index.set_completed(conn, task_gid, True)
     except Exception:
         logger.exception("completed_at update failed for gid=%s", task_gid)
 

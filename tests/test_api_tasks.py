@@ -366,3 +366,33 @@ def test_get_task_skips_subtask_fetch_when_none(monkeypatch):
     body = client.get("/tasks/t1", headers=AUTH).json()
     assert body["parent"] is None
     assert body["subtasks"] == []
+
+
+def test_create_task_refreshes_index(monkeypatch):
+    from api.routers import tasks as tasks_router
+
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: CreatedTask(gid="t9", permalink_url="https://a/t9"),
+    )
+    refreshed = []
+    monkeypatch.setattr(tasks_router.task_index, "refresh", refreshed.append)
+
+    resp = client.post("/tasks", json={"name": "Bare task"}, headers=AUTH)
+    assert resp.status_code == 201
+    assert refreshed == ["t9"]
+
+
+def test_patch_task_refreshes_index(monkeypatch):
+    from api.routers import tasks as tasks_router
+
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: dict(DETAIL))
+    monkeypatch.setattr(asana, "update_task", lambda gid, fields: None)
+    refreshed = []
+    monkeypatch.setattr(tasks_router.task_index, "refresh", refreshed.append)
+
+    resp = client.patch("/tasks/t1", json={"completed": True}, headers=AUTH)
+    assert resp.status_code == 200
+    assert refreshed == ["t1"]

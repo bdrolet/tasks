@@ -5,7 +5,7 @@ import clients.otel as otel
 from clients.db import get_conn
 from models.events import EmailClassifiedEvent
 from repo import tasks as repo_tasks
-from services import deadline, email_summary, policy, sections, tags, task_content
+from services import deadline, email_summary, policy, sections, tags, task_content, task_index
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,10 @@ def handle(event: EmailClassifiedEvent) -> None:
     section_gid = sections.for_category(event["category"])
     if section_gid:
         asana.add_task_to_section(task.gid, section_gid)
+
+    # Index for semantic search — best-effort by construction (refresh
+    # swallows all failures).
+    task_index.refresh(task.gid)
 
     logger.info(
         "Task created gid=%s category=%s section=%s message_id=%s",

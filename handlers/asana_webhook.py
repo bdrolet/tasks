@@ -10,8 +10,11 @@ import logging
 import os
 
 from handlers import task_complete
+from services import task_index
 
 logger = logging.getLogger(__name__)
+
+_MAX_REFRESH_PER_DELIVERY = 20
 
 
 def handshake(hook_secret: str) -> tuple:
@@ -38,13 +41,45 @@ def receive(body: bytes, signature: str) -> tuple:
 
     payload = json.loads(body or b"{}")
     handled = 0
+    refresh_gids: dict[str, None] = {}  # insertion-ordered de-dupe
+    delete_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     for event in payload.get("events", []):
-        if event.get("action") == "changed" and event.get("change", {}).get("field") == "completed":
-            task_complete.handle(event["resource"]["gid"])
+        resource = event.get("resource") or {}
+        if resource.get("resource_type") != "task":
+            continue
+        action = event.get("action")
+        field = (event.get("change") or {}).get("field")
+        if action == "changed" and field == "completed":
+            task_complete.handle(resource["gid"])
             handled += 1
+        elif action in ("deleted", "removed"):
+            delete_gids[resource["gid"]] = None
+        elif action == "added" or (action == "changed" and field in ("name", "notes", "due_on")):
+            refresh_gids[resource["gid"]] = None
+
+    # delete wins: a gid deleted in this delivery is never also refreshed
+    for gid in delete_gids:
+        refresh_gids.pop(gid, None)
+
+    refresh_list = list(refresh_gids)
+    if len(refresh_list) > _MAX_REFRESH_PER_DELIVERY:
+        logger.warning(
+            "Webhook: %d refresh gids exceeds cap %d — remainder heals via backfill",
+            len(refresh_list),
+            _MAX_REFRESH_PER_DELIVERY,
+        )
+        refresh_list = refresh_list[:_MAX_REFRESH_PER_DELIVERY]
+    for gid in refresh_list:
+        task_index.refresh(gid)
+    for gid in delete_gids:
+        task_index.remove(gid)
+
     logger.info(
-        "Webhook: %d event(s) received, %d completion(s) handled — signature_valid: true",
+        "Webhook: %d event(s) received, %d completion(s), %d index refresh(es), "
+        "%d index delete(s) — signature_valid: true",
         len(payload.get("events", [])),
         handled,
+        len(refresh_list),
+        len(delete_gids),
     )
     return "", 200
