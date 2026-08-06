@@ -32,8 +32,20 @@ def main() -> None:
             "data": {
                 "resource": project,
                 "target": target,
+                # Keep in sync with handlers/asana_webhook.py::receive — it
+                # dispatches on exactly these actions/fields (completions +
+                # semantic-index freshness). Registered filters are the
+                # delivery gate: an event type missing here never reaches the
+                # CF, no matter what the handler supports.
                 "filters": [
-                    {"resource_type": "task", "action": "changed", "fields": ["completed"]}
+                    {
+                        "resource_type": "task",
+                        "action": "changed",
+                        "fields": ["completed", "name", "notes", "due_on"],
+                    },
+                    {"resource_type": "task", "action": "added"},
+                    {"resource_type": "task", "action": "deleted"},
+                    {"resource_type": "task", "action": "removed"},
                 ],
             }
         },

@@ -49,6 +49,28 @@ curl -s -H "Authorization: Bearer $ASANA_API_KEY" \
 # delete: curl -X DELETE -H "Authorization: Bearer $ASANA_API_KEY" https://app.asana.com/api/1.0/webhooks/<gid>
 ```
 
+## Changing filters without re-registering
+
+Registered filters are the delivery gate — an event type not listed there
+never reaches the CF regardless of what `handlers/asana_webhook.py` supports.
+The full set lives in `scripts/register_webhook.py`; keep the two in sync.
+
+Filters can be updated **in place** with `PUT /webhooks/<gid>` (no handshake,
+secret unchanged) — no delete/re-register needed:
+
+```bash
+curl -X PUT -H "Authorization: Bearer $ASANA_API_KEY" -H "Content-Type: application/json" \
+  "https://app.asana.com/api/1.0/webhooks/<gid>" \
+  -d '{"data": {"filters": [
+    {"resource_type": "task", "action": "changed", "fields": ["completed", "name", "notes", "due_on"]},
+    {"resource_type": "task", "action": "added"},
+    {"resource_type": "task", "action": "deleted"},
+    {"resource_type": "task", "action": "removed"}]}}'
+```
+
+(Done 2026-08-06 to add the semantic-index freshness events; the live
+registration matches `register_webhook.py`.)
+
 ## Where the secret lives (and healing when it's lost)
 
 The `X-Hook-Secret` exists in exactly three places, in order of authority:
