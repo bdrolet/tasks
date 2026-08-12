@@ -128,8 +128,10 @@ def test_documented_collision_rate_at_25_rows():
         ({"project": None, "section": None}, "—"),
         # A subtask hit: parent wins over project/section, which the API nulls.
         ({"parent": "Pacifica repairs", "project": None}, "subtask of Pacifica repairs"),
-        ({"parent": "Pacifica repairs", "project": "Family", "section": "Inbox"},
-         "subtask of Pacifica repairs"),
+        (
+            {"parent": "Pacifica repairs", "project": "Family", "section": "Inbox"},
+            "subtask of Pacifica repairs",
+        ),
     ],
 )
 def test_location(result, expected):
@@ -149,26 +151,41 @@ def _run_stdin(monkeypatch, capsys, payload):
 def test_annotate_emits_one_tsv_row_per_result_in_api_order(monkeypatch, capsys):
     payload = {
         "results": [
-            {"task_gid": "1217130164408154", "name": "Order Parts",
-             "due_on": "2026-08-06", "parent": "Pacifica repairs"},
-            {"task_gid": "1217342697693471", "name": "[P1] Schedule visit",
-             "due_on": "2026-08-12", "project": "Family", "section": "Inbox"},
+            {
+                "task_gid": "1217130164408154",
+                "name": "Order Parts",
+                "due_on": "2026-08-06",
+                "parent": "Pacifica repairs",
+            },
+            {
+                "task_gid": "1217342697693471",
+                "name": "[P1] Schedule visit",
+                "due_on": "2026-08-12",
+                "project": "Family",
+                "section": "Inbox",
+            },
         ]
     }
     code, captured = _run_stdin(monkeypatch, capsys, payload)
     assert code == 0
     rows = [line.split("\t") for line in captured.out.strip().split("\n")]
     assert len(rows) == 2
-    assert rows[0][1:] == ["1217130164408154", "2026-08-06", "Order Parts",
-                           "subtask of Pacifica repairs"]
-    assert rows[1][1:] == ["1217342697693471", "2026-08-12", "[P1] Schedule visit",
-                           "Family/Inbox"]
+    assert rows[0][1:] == [
+        "1217130164408154",
+        "2026-08-06",
+        "Order Parts",
+        "subtask of Pacifica repairs",
+    ]
+    assert rows[1][1:] == ["1217342697693471", "2026-08-12", "[P1] Schedule visit", "Family/Inbox"]
     assert rows[0][0] == task_ref.ref("1217130164408154")
 
 
 def test_annotate_renders_a_missing_due_date_as_a_dash(monkeypatch, capsys):
-    payload = {"results": [{"task_gid": "1217130164408154", "name": "Someday",
-                            "due_on": None, "project": "Family"}]}
+    payload = {
+        "results": [
+            {"task_gid": "1217130164408154", "name": "Someday", "due_on": None, "project": "Family"}
+        ]
+    }
     _, captured = _run_stdin(monkeypatch, capsys, payload)
     assert captured.out.split("\t")[2] == "—"
 
@@ -197,10 +214,18 @@ def test_annotate_refs_the_subtasks_of_a_fetched_task(monkeypatch, capsys):
     payload = {
         "name": "Pacifica repairs",
         "subtasks": [
-            {"task_gid": "1217130164408154", "name": "Order Parts",
-             "completed": False, "due_on": "2026-08-06"},
-            {"task_gid": "1217286466869299", "name": "Book the shop",
-             "completed": True, "due_on": None},
+            {
+                "task_gid": "1217130164408154",
+                "name": "Order Parts",
+                "completed": False,
+                "due_on": "2026-08-06",
+            },
+            {
+                "task_gid": "1217286466869299",
+                "name": "Book the shop",
+                "completed": True,
+                "due_on": None,
+            },
         ],
     }
     code, captured = _run_stdin(monkeypatch, capsys, payload)
@@ -245,6 +270,7 @@ def test_argv_mode_matches_annotate_mode(monkeypatch, capsys):
     gids = list(COLLIDING)
     monkeypatch.setattr("sys.argv", ["task_ref.py", *gids])
     task_ref.main()
-    argv_refs = {r.split("\t")[1]: r.split("\t")[0]
-                 for r in capsys.readouterr().out.strip().split("\n")}
+    argv_refs = {
+        r.split("\t")[1]: r.split("\t")[0] for r in capsys.readouterr().out.strip().split("\n")
+    }
     assert argv_refs == task_ref.assign(gids)
