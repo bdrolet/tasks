@@ -1,6 +1,6 @@
 ---
 name: fetching-task
-version: 1.0.0
+version: 1.1.0
 description: >
   Use when the user wants to read a specific Asana task's full content —
   description, due date, tags, comments — by task GID. Use for "show me that
@@ -46,12 +46,28 @@ sub-subtasks are not listed), and for email-derived tasks
 
 `404` = unknown task GID. `502` = Asana unreachable — retry once.
 
+## Subtask refs
+
+When `subtasks` is non-empty, give each one a ref the same way a listing does
+— pipe the fetch response straight through `task-ref`, which reads the
+`subtasks` array when there's no `results` array:
+
+```bash
+curl -s https://tasks-api.drolet.cloud/tasks/<task_gid> \
+  -H "Authorization: Bearer $TOKEN" | task-ref
+# ref  gid  due_on  name  location   (location is "—" — subtasks belong to the parent)
+```
+
+Refs are hashed from the GID, so a subtask carries the same ref here as it
+does in a [[searching-tasks]] listing. Close the checklist with the same
+`refs:` map, so "complete the second one" has a handle to land on.
+
 ## Presenting
 
 - Show `notes` (plain text) rather than `html_notes`.
-- If `subtasks` is non-empty, list them as a checklist (mark completed
-  ones); fetch one by its `task_gid` for full detail. If `parent` is set,
-  say the task is a subtask of it.
+- If `subtasks` is non-empty, list them as a checklist, ref first, marking
+  completed ones; fetch one by its `task_gid` for full detail. If `parent` is
+  set, say the task is a subtask of it.
 - Email-derived tasks: `notes` contains the email summary + action links; the
   `message_id` works with the fetching-inbox-email skill for the full email.
 - List comments with author + date. `is_editable: true` means

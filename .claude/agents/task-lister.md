@@ -86,15 +86,19 @@ Every row gets a three-character base36 ref — a handle short enough to say out
 Never compute one yourself; pipe the search response through the script:
 
 ```bash
-curl -s -XPOST "$BASE/search" ... | ~/src/tasks/scripts/task_ref.py
+curl -s -XPOST "$BASE/search" ... | task-ref
 # ref  gid  due_on  name  location   (TSV, API order preserved)
 ```
+
+`task-ref` is `scripts/task_ref.py`, put on PATH by `scripts/link-skills.sh`.
+`command not found` means that script hasn't been run on this machine — say so
+rather than hand-rolling a numbering scheme.
 
 Merging several searches? Concatenate the `results` arrays into one
 `{"results": [...]}` object and pipe that, so refs are assigned across the whole set.
 
 The ref is a hash of the GID: the same task keeps the same ref across listings, with no
-state stored anywhere. Two tasks in one listing collide roughly 0.7% of the time at 25
+state stored anywhere. Two tasks in one listing collide roughly 0.6% of the time at 25
 rows; the script rehashes the loser, so a bumped task can show a different ref in a
 listing its twin isn't part of. Refs are for talking about the list. Every write path
 still takes the GID — never pass a ref to an API call.

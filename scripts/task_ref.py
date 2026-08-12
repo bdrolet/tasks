@@ -5,25 +5,33 @@ A ref is a deterministic hash of the GID, so the same task carries the same
 ref across listings without anything being stored. Used by the `task-lister`
 agent to give each row a handle short enough to say out loud.
 
+`scripts/link-skills.sh` symlinks this onto PATH as `task-ref`, which is how
+the skills and the task-lister agent invoke it.
+
 Two modes:
 
-    curl ... /search | scripts/task_ref.py          # annotate a search response
-    scripts/task_ref.py 1217130164408154 ...        # ref for specific GIDs
+    curl ... /search       | task-ref     # annotate a search response
+    curl ... /tasks/<gid>  | task-ref     # annotate that task's subtasks
+    task-ref 1217130164408154 ...         # ref for specific GIDs
 
-Annotate mode reads a `/search` response on stdin and writes TSV to stdout,
-one row per result, in the order the API returned them:
+Annotate mode reads a `/search` response (a `results` array) or a single-task
+fetch (its `subtasks` array) on stdin and writes TSV to stdout, one row per
+task, in the order the API returned them:
 
     ref  gid  due_on  name  location
 
-`location` is `project/section`, or `subtask of <parent>` for subtask hits.
+`location` is `project/section`, or `subtask of <parent>` for subtask hits,
+or `—` when the API omits both — as it does for the subtasks of a fetched
+task, which belong to their parent rather than to a section.
 
 Collisions: 36**3 = 46,656 refs, so two tasks in one listing collide about
-0.7% of the time at 25 results. When it happens the loser is rehashed with a
-salt until it lands somewhere free. Resolution is deterministic for a given
-set of GIDs (they are salted in sorted order), but it depends on which tasks
-share the listing — a bumped task can show a different ref in a listing its
-twin isn't part of. Refs are handles for a conversation, not identifiers:
-every write path still takes the GID.
+0.6% of the time at 25 results (see tests/test_task_ref.py, which pins the
+rate). When it happens the loser is rehashed with a salt until it lands
+somewhere free. Resolution is deterministic for a given set of GIDs (they are
+salted in sorted order), but it depends on which tasks share the listing — a
+bumped task can show a different ref in a listing its twin isn't part of.
+Refs are handles for a conversation, not identifiers: every write path still
+takes the GID.
 """
 
 import hashlib
@@ -82,9 +90,17 @@ def main() -> int:
         print(f"task_ref: stdin is not JSON ({exc})", file=sys.stderr)
         return 1
 
+    # A /search response carries `results`; a single-task fetch carries
+    # `subtasks`. Both are lists of tasks with a `task_gid`, so either works.
     results = payload.get("results")
     if results is None:
-        print("task_ref: no 'results' key — is this a /search response?", file=sys.stderr)
+        results = payload.get("subtasks")
+    if results is None:
+        print(
+            "task_ref: no 'results' or 'subtasks' key — is this a /search "
+            "or /tasks/<gid> response?",
+            file=sys.stderr,
+        )
         return 1
 
     refs = assign([r["task_gid"] for r in results])

@@ -1,6 +1,6 @@
 ---
 name: editing-tasks
-version: 1.0.0
+version: 1.1.0
 description: >
   Use when the user wants to update, complete, or comment on an existing Asana
   task — "mark that done", "push the due date", "move it to Done", "comment on

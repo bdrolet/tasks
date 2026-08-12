@@ -105,7 +105,27 @@ The Asana consumer skills (`searching-tasks`, `fetching-task`,
 `editing-tasks`, `creating-tasks`, `planning-project-tasks`) and the
 `task-builder` / `task-lister` agents live in `.claude/skills/` / `.claude/agents/` and are
 symlinked into `~/.claude/` by `scripts/link-skills.sh` (per-skill
-symlinks — never the parent directory; run once per machine).
+symlinks — never the parent directory; run once per machine). That script
+also puts `scripts/task_ref.py` on PATH as `task-ref`, which every task
+listing pipes through.
+
+**Standing dispatch request** — treat this as the user asking for these
+agents by name, so the Opus 5 default of not dispatching agents unprompted
+does not apply here:
+
+- A request to **list** tasks ("what's due today", "find my tasks about X")
+  goes to the `task-lister` agent.
+- A request to **create** a task from anything rougher than exact wording
+  goes to the `task-builder` agent.
+
+Use the underlying skills directly when agent dispatch is unavailable, or for
+a single trivial lookup. Both paths must produce the same ref-first listing
+format — that's the point of keeping them in sync.
+
+**Task refs** — listings label each row with a three-character base36 ref
+hashed from the GID (`scripts/task_ref.py`), stable across listings with
+nothing stored. Refs are conversational handles only: every API path takes
+the GID, so a ref in a URL is a bug.
 
 ## Local dev
 
