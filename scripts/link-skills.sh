@@ -22,10 +22,12 @@ for skill in searching-tasks fetching-task editing-tasks creating-tasks planning
 done
 
 mkdir -p "$HOME/.claude/agents"
-AGENT_DEST="$HOME/.claude/agents/task-builder.md"
-if [[ -e "$AGENT_DEST" && ! -L "$AGENT_DEST" ]]; then
-  echo "error: $AGENT_DEST exists and is not a symlink — remove the old copy first" >&2
-  exit 1
-fi
-ln -sfn "$REPO_ROOT/.claude/agents/task-builder.md" "$AGENT_DEST"
-echo "linked $AGENT_DEST -> $(readlink "$AGENT_DEST")"
+for agent in task-builder task-lister; do
+  AGENT_DEST="$HOME/.claude/agents/$agent.md"
+  if [[ -e "$AGENT_DEST" && ! -L "$AGENT_DEST" ]]; then
+    echo "error: $AGENT_DEST exists and is not a symlink — remove the old copy first" >&2
+    exit 1
+  fi
+  ln -sfn "$REPO_ROOT/.claude/agents/$agent.md" "$AGENT_DEST"
+  echo "linked $AGENT_DEST -> $(readlink "$AGENT_DEST")"
+done
