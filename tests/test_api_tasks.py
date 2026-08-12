@@ -396,3 +396,81 @@ def test_patch_task_refreshes_index(monkeypatch):
     resp = client.patch("/tasks/t1", json={"completed": True}, headers=AUTH)
     assert resp.status_code == 200
     assert refreshed == ["t1"]
+
+
+# --- project moves -------------------------------------------------------
+
+
+def test_patch_moves_task_to_another_project(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        asana,
+        "get_task_detail",
+        lambda gid: {
+            "gid": gid,
+            "name": "Complete portal documents",
+            "memberships": [{"project": {"gid": "p_inbox", "name": "Inbox"}}],
+        },
+    )
+    monkeypatch.setattr(
+        asana,
+        "list_projects",
+        lambda: [{"gid": "p_inbox", "name": "Inbox"}, {"gid": "p_board", "name": "Ben's Board"}],
+    )
+    monkeypatch.setattr(
+        asana,
+        "add_task_to_project",
+        lambda gid, project, section=None: calls.update(added=(gid, project, section)),
+    )
+    monkeypatch.setattr(
+        asana,
+        "remove_task_from_project",
+        lambda gid, project: calls.update(removed=(gid, project)),
+    )
+
+    resp = client.patch("/tasks/t1", json={"project": "Ben's Board"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert calls["added"] == ("t1", "p_board", None)
+    assert calls["removed"] == ("t1", "p_inbox")
+
+
+def test_patch_project_move_places_the_task_in_a_section_of_the_new_project(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        asana,
+        "get_task_detail",
+        lambda gid: {"gid": gid, "name": "x", "memberships": []},
+    )
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p_board", "name": "Ben's Board"}])
+    monkeypatch.setattr(asana, "get_sections", lambda gid: [{"gid": "s_inbox", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "add_task_to_project",
+        lambda gid, project, section=None: calls.update(added=(gid, project, section)),
+    )
+
+    resp = client.patch(
+        "/tasks/t1", json={"project": "Ben's Board", "section": "Inbox"}, headers=AUTH
+    )
+    assert resp.status_code == 200
+    assert calls["added"] == ("t1", "p_board", "s_inbox")
+
+
+def test_patch_refuses_to_move_a_subtask_between_projects(monkeypatch):
+    monkeypatch.setattr(
+        asana,
+        "get_task_detail",
+        lambda gid: {"gid": gid, "name": "x", "parent": {"gid": "p", "name": "Parent"}},
+    )
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p_board", "name": "Ben's Board"}])
+
+    resp = client.patch("/tasks/t1", json={"project": "Ben's Board"}, headers=AUTH)
+    assert resp.status_code == 400
+    assert "parent" in resp.json()["detail"]
+
+
+def test_patch_rejects_an_unknown_field_instead_of_silently_dropping_it(monkeypatch):
+    """A 200 that ignored the only field the caller sent is the bug this guards."""
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: {"gid": gid, "name": "x"})
+    resp = client.patch("/tasks/t1", json={"proejct": "Ben's Board"}, headers=AUTH)
+    assert resp.status_code == 422

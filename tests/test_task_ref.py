@@ -175,8 +175,15 @@ def test_annotate_emits_one_tsv_row_per_result_in_api_order(monkeypatch, capsys)
         "2026-08-06",
         "Order Parts",
         "subtask of Pacifica repairs",
+        "—",
     ]
-    assert rows[1][1:] == ["1217342697693471", "2026-08-12", "[P1] Schedule visit", "Family/Inbox"]
+    assert rows[1][1:] == [
+        "1217342697693471",
+        "2026-08-12",
+        "[P1] Schedule visit",
+        "Family/Inbox",
+        "—",
+    ]
     assert rows[0][0] == task_ref.ref("1217130164408154")
 
 
@@ -274,3 +281,26 @@ def test_argv_mode_matches_annotate_mode(monkeypatch, capsys):
         r.split("\t")[1]: r.split("\t")[0] for r in capsys.readouterr().out.strip().split("\n")
     }
     assert argv_refs == task_ref.assign(gids)
+
+
+def test_annotate_appends_the_summary_column(monkeypatch, capsys):
+    payload = {
+        "results": [
+            {
+                "task_gid": "1217130164408154",
+                "name": "Order Parts",
+                "summary": "Front-fascia parts still to\tpurchase\nfor the bumper job.",
+            }
+        ]
+    }
+    _, captured = _run_stdin(monkeypatch, capsys, payload)
+    row = captured.out.strip().split("\t")
+    assert len(row) == 6  # a tab inside the summary must not split the row
+    assert row[5] == "Front-fascia parts still to purchase for the bumper job."
+
+
+def test_annotate_summary_falls_back_to_a_dash(monkeypatch, capsys):
+    """Subtask fetches carry no summary field — the column still has to be there."""
+    payload = {"subtasks": [{"task_gid": "1217130164408154", "name": "Order Parts"}]}
+    _, captured = _run_stdin(monkeypatch, capsys, payload)
+    assert captured.out.strip().split("\t")[5] == "—"

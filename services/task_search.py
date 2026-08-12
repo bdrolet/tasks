@@ -6,6 +6,8 @@ them: case-insensitive substring match on name + notes, completion/due-date
 filters, de-dupe (my-tasks listing overlaps project listings), stable sort.
 """
 
+import re
+
 
 def resolve_project(projects: list[dict], ref: str) -> dict | None:
     """Match a project by exact GID, else case-insensitive name."""
@@ -22,6 +24,54 @@ def resolve_project(projects: list[dict], ref: str) -> dict | None:
 def _matches(task: dict, query: str) -> bool:
     q = query.casefold()
     return q in (task.get("name") or "").casefold() or q in (task.get("notes") or "").casefold()
+
+
+# The description standard (services/task_content.py) renders every task the
+# same way: optional lead prose, then these headers. Matching them is how the
+# gist is separated from the boilerplate below it. "Actions" carries no colon,
+# so it needs the run of list indent to avoid eating prose that opens with the
+# word.
+_SECTION_RE = re.compile(r"^(?:Key points:|Links:|Source:)(?:\s|$)|^Actions(?:\s{2,}|$)")
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit].rsplit(" ", 1)[0] or text[:limit]
+    return head.rstrip(" ,;:.") + "…"
+
+
+def summary(notes: str | None, limit: int = 160) -> str | None:
+    """A one-line gist of a task's description, for listings.
+
+    Prefers the lead context prose the description standard puts above the
+    section headers, falling back to the first key point when a task leads
+    with the bullets instead (email-derived tasks usually do). Deterministic,
+    never an LLM — the same notes always yield the same line.
+    """
+    if not notes:
+        return None
+    lines = notes.split("\n")
+
+    lead = []
+    for line in lines:
+        if _SECTION_RE.match(line.strip()):
+            break
+        if line.strip():
+            lead.append(line.strip())
+    if lead:
+        return _clip(" ".join(lead), limit)
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("Key points:"):
+            continue
+        first = stripped[len("Key points:") :].strip()
+        if not first:
+            first = next((n.strip() for n in lines[i + 1 :] if n.strip()), "")
+        return _clip(first, limit) or None
+    return None
 
 
 def snippet(notes: str | None, query: str, radius: int = 60) -> str | None:

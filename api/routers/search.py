@@ -36,6 +36,7 @@ class SearchResult(BaseModel):
     completed: bool = False
     permalink_url: str | None = None
     snippet: str | None = None
+    summary: str | None = None  # one-line gist of the description, for listings
     message_id: str | None = None
     category: str | None = None
     importance: str | None = None
@@ -86,6 +87,7 @@ def _to_result(
         completed=bool(t.get("completed")),
         permalink_url=t.get("permalink_url"),
         snippet=task_search.snippet(t.get("notes"), query),
+        summary=task_search.summary(t.get("notes")),
         message_id=email.get("message_id"),
         category=email.get("category"),
         importance=email.get("importance"),

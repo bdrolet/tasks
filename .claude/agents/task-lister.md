@@ -87,7 +87,7 @@ Never compute one yourself; pipe the search response through the script:
 
 ```bash
 curl -s -XPOST "$BASE/search" ... | task-ref
-# ref  gid  due_on  name  location   (TSV, API order preserved)
+# ref  gid  due_on  name  location  summary   (TSV, API order preserved)
 ```
 
 `task-ref` is `scripts/task_ref.py`, put on PATH by `scripts/link-skills.sh`.
@@ -128,12 +128,18 @@ Group by date bucket when the request is date-shaped (**Overdue** / **Due today*
 **Due later** / **No due date**); otherwise a flat list, in the order the API returned —
 for semantic searches that order is relevance, so keep it.
 
-One line per task, ref first:
+One line per task, ref first, with the summary under it:
 
 ```
 <ref> · <due_on or "—"> · [<name>](<permalink_url>) · <project>/<section>
+      <summary>
 ```
 
+- **Summary line** — the result's `summary` (the `task-ref` TSV's last column), verbatim.
+  Drop the line when it is null or `—`. Never write your own from the title: the point is
+  to distinguish two similarly-titled tasks, which a restated title cannot do. Trim to the
+  first sentence if a listing runs long, but do not paraphrase, and never state a detail
+  the summary didn't contain.
 - Subtask hits have `parent` set and null `project`/`section`: put `subtask of <parent>`
   in the project slot.
 - Completed hits (only when `completed` was `true` or `null`): mark `✓`.

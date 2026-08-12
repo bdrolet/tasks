@@ -48,6 +48,8 @@ curl -s -X POST https://tasks-api.drolet.cloud/search \
 Results are sorted due-date ascending, undated last. Each result:
 `task_gid`, `name`, `project`, `section`, `due_on`, `completed`,
 `permalink_url`, `snippet` (description fragment matching the query),
+`summary` (one-line gist of the description — lead context prose, else the
+first key point; null when the task has no description),
 `parent` (parent task name — set only for subtask hits), and for
 email-derived tasks `message_id`/`category`/`importance`.
 
@@ -76,7 +78,7 @@ Never compute one yourself; pipe the response through `task-ref`:
 
 ```bash
 curl -s -X POST https://tasks-api.drolet.cloud/search ... | task-ref
-# ref  gid  due_on  name  location   (TSV, API order preserved)
+# ref  gid  due_on  name  location  summary   (TSV, API order preserved)
 ```
 
 `task-ref` is `scripts/task_ref.py`, put on PATH by `scripts/link-skills.sh`.
@@ -96,15 +98,20 @@ API call.**
 
 ## Presenting results
 
-One line per task, ref first:
+One line per task, ref first, with the summary under it:
 
 ```
 <ref> · <due_on or "—"> · [<name>](<permalink_url>) · <project>/<section>
+      <summary>
 ```
 
 - Group by date bucket when the request is date-shaped (**Overdue** / **Due
   today** / **Due later** / **No due date**); otherwise a flat list in the
   order the API returned.
+- **Summary line** — the result's `summary`, verbatim; never write your own
+  from the title, and drop the line when `summary` is null. It exists so the
+  user can tell two similarly-titled tasks apart without opening either. Trim
+  it to the first sentence if a listing runs long, but do not paraphrase.
 - Subtask hits have `parent` set and null `project`/`section`: put
   `subtask of <parent>` in the project slot.
 - Completed hits (only when `completed` was `true` or `null`): mark `✓`.
