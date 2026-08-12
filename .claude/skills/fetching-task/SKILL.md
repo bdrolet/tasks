@@ -17,6 +17,11 @@ metadata:
 You need a task GID. If you don't have one, use **searching-tasks** first —
 each result has a `task_gid`.
 
+If the user names a task by its three-character ref (`0eh`, `gd3`) rather
+than a GID, resolve it through the `refs:` map that closed the listing. Never
+put a ref in the URL — the API only takes GIDs. If no listing is in context,
+re-run [[searching-tasks]] to regenerate the map rather than guessing.
+
 ## Auth token
 
 ```bash

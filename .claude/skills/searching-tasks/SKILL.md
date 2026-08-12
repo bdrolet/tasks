@@ -68,12 +68,68 @@ mention that if results look off. Requires a non-empty `query`.
 Project-scoped semantic search (`project` + `semantic: true`) does not
 return subtasks — drop the project filter to include them.
 
+## Reference numbers
+
+Every listed task gets a three-character base36 ref — a handle short enough
+to say out loud, so the user can point at a row without reading a GID.
+Never compute one yourself; pipe the response through the script:
+
+```bash
+curl -s -X POST https://tasks-api.drolet.cloud/search ... \
+  | ~/src/tasks/scripts/task_ref.py
+# ref  gid  due_on  name  location   (TSV, API order preserved)
+```
+
+Merging several searches? Concatenate the `results` arrays into one
+`{"results": [...]}` object and pipe that, so refs are assigned across the
+whole set.
+
+The ref is a hash of the GID, so the same task keeps the same ref across
+listings with nothing stored. Two tasks in one listing collide about 0.7% of
+the time at 25 rows; the script rehashes the loser, so a bumped task can show
+a different ref in a listing its twin isn't part of. **Refs are for talking
+about the list — every write path still takes the GID. Never pass a ref to an
+API call.**
+
 ## Presenting results
 
-- List as: `due_on` | `name` | `project`/`section` | `permalink_url`
-- Subtask hits: present as `name — subtask of <parent>`.
-- Semantic hits: order is relevance, not due date — present in given order;
+One line per task, ref first:
+
+```
+<ref> · <due_on or "—"> · [<name>](<permalink_url>) · <project>/<section>
+```
+
+- Group by date bucket when the request is date-shaped (**Overdue** / **Due
+  today** / **Due later** / **No due date**); otherwise a flat list in the
+  order the API returned.
+- Subtask hits have `parent` set and null `project`/`section`: put
+  `subtask of <parent>` in the project slot.
+- Completed hits (only when `completed` was `true` or `null`): mark `✓`.
+- Semantic hits: order is relevance, not due date — keep the given order;
   surface `score` only if the user asks why something matched.
-- Offer to open one with [[fetching-task]] or act on it with [[editing-tasks]].
+- No GIDs in the list itself — they go in the map below.
+
+Then one line: the count and the filters behind it —
+`4 open tasks due on or before 2026-08-12 (all projects).`
+
+Close with the ref → GID map, which is the handoff:
+
+```
+refs: 0eh=1217130164408154  lpb=1217286466869299  248=1217342697693471
+```
+
+- Offer to open one with [[fetching-task]] or act on it with [[editing-tasks]];
+  both resolve a ref through that map before calling the API.
 - Email-derived tasks (`message_id` set): the inbox skills can fetch the
   underlying email.
+
+## When to use the task-lister agent instead
+
+The `task-lister` agent (`subagent_type: "task-lister"`, defined in
+`~/src/tasks/.claude/agents/task-lister.md`) wraps this same endpoint and
+returns the same format. Prefer it when the request needs several searches
+merged, a project or tag resolved first, or a natural-language request
+translated into filters — it does that work without spending main-thread
+context. Use this skill directly for a single straightforward search, or
+whenever agent dispatch is unavailable. Either path must produce the ref-first
+format above; that is the point of keeping them in sync.

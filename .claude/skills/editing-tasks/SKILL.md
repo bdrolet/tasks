@@ -20,6 +20,15 @@ TOKEN=$(grep 'tasks_api_token' ~/src/tasks/terraform/terraform.tfvars | grep -o 
 BASE=https://tasks-api.drolet.cloud
 ```
 
+## Task refs
+
+Listings from [[searching-tasks]] label each row with a three-character ref
+(`0eh`, `gd3`) and close with a `refs:` ref → GID map. When the user acts on a
+task by ref ("mark `gd3` done"), resolve it through that map first. **Every
+endpoint here takes a GID — a ref in a URL is a bug, not a 404 to retry.** If
+no listing is in context, re-run the search to regenerate the map rather than
+guessing at a GID.
+
 ## Create a task
 
 **For a new task from a rough request, use [[creating-tasks]] instead** — it
