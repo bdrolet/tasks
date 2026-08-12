@@ -80,7 +80,26 @@ curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"   # projects + their 
 curl -s "$BASE/tags"     -H "Authorization: Bearer $TOKEN"   # tag vocabulary
 ```
 
-## 3. Report honestly
+## 3. Assign reference numbers
+
+Every row gets a three-character base36 ref — a handle short enough to say out loud.
+Never compute one yourself; pipe the search response through the script:
+
+```bash
+curl -s -XPOST "$BASE/search" ... | ~/src/tasks/scripts/task_ref.py
+# ref  gid  due_on  name  location   (TSV, API order preserved)
+```
+
+Merging several searches? Concatenate the `results` arrays into one
+`{"results": [...]}` object and pipe that, so refs are assigned across the whole set.
+
+The ref is a hash of the GID: the same task keeps the same ref across listings, with no
+state stored anywhere. Two tasks in one listing collide roughly 0.7% of the time at 25
+rows; the script rehashes the loser, so a bumped task can show a different ref in a
+listing its twin isn't part of. Refs are for talking about the list. Every write path
+still takes the GID — never pass a ref to an API call.
+
+## 4. Report honestly
 
 - **Zero hits** — say so and state the exact filters you used. Do not silently loosen the
   query and present the wider result as the answer. One retry with a plainly better
@@ -105,19 +124,24 @@ Group by date bucket when the request is date-shaped (**Overdue** / **Due today*
 **Due later** / **No due date**); otherwise a flat list, in the order the API returned —
 for semantic searches that order is relevance, so keep it.
 
-One line per task:
+One line per task, ref first:
 
 ```
-<due_on or "—"> · [<name>](<permalink_url>) · <project>/<section> · <task_gid>
+<ref> · <due_on or "—"> · [<name>](<permalink_url>) · <project>/<section>
 ```
 
 - Subtask hits have `parent` set and null `project`/`section`: put `subtask of <parent>`
   in the project slot.
 - Completed hits (only when `completed` was `true` or `null`): mark `✓`.
 - Surface `score` only if the dispatch asked why something matched.
+- No GIDs in the list itself — they go in the map below.
 
-Close with one line: the count, the filters behind it, and any assumption you made —
+Then one line: the count, the filters behind it, and any assumption you made —
 `7 open tasks due on or before 2026-08-12 (all projects); "this week" read as through Sunday 08-16.`
 
-The GIDs in your output are the handoff: the caller uses them with the `fetching-task`
-skill for full detail, or `editing-tasks` to act on one.
+Close with the ref → GID map, which is the handoff. The caller resolves a ref through it
+before calling `fetching-task` for detail or `editing-tasks` to act on one:
+
+```
+refs: 0eh=1217130164408154  lpb=1217286466869299  bgg=1217380237879351
+```
