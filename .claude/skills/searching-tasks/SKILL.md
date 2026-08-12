@@ -1,6 +1,6 @@
 ---
 name: searching-tasks
-version: 1.0.0
+version: 1.1.0
 description: >
   Use when searching for Asana tasks — finding tasks by keyword, project,
   due date, or completion state. Use when asked to "find my task about X",
@@ -72,20 +72,23 @@ return subtasks — drop the project filter to include them.
 
 Every listed task gets a three-character base36 ref — a handle short enough
 to say out loud, so the user can point at a row without reading a GID.
-Never compute one yourself; pipe the response through the script:
+Never compute one yourself; pipe the response through `task-ref`:
 
 ```bash
-curl -s -X POST https://tasks-api.drolet.cloud/search ... \
-  | ~/src/tasks/scripts/task_ref.py
+curl -s -X POST https://tasks-api.drolet.cloud/search ... | task-ref
 # ref  gid  due_on  name  location   (TSV, API order preserved)
 ```
+
+`task-ref` is `scripts/task_ref.py`, put on PATH by `scripts/link-skills.sh`.
+`command not found` means that script hasn't been run on this machine — run
+it rather than falling back to a hand-rolled numbering.
 
 Merging several searches? Concatenate the `results` arrays into one
 `{"results": [...]}` object and pipe that, so refs are assigned across the
 whole set.
 
 The ref is a hash of the GID, so the same task keeps the same ref across
-listings with nothing stored. Two tasks in one listing collide about 0.7% of
+listings with nothing stored. Two tasks in one listing collide about 0.6% of
 the time at 25 rows; the script rehashes the loser, so a bumped task can show
 a different ref in a listing its twin isn't part of. **Refs are for talking
 about the list — every write path still takes the GID. Never pass a ref to an
