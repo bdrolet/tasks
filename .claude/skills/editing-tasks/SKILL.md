@@ -77,6 +77,7 @@ curl -s -XPATCH "$BASE/tasks/<gid>" -H "Authorization: Bearer $TOKEN" -H "Conten
   -d '{"due_on": "2026-08-15"}'                  # reschedule
   -d '{"due_on": null}'                          # clear due date (explicit null)
   -d '{"section": "Done"}'                       # move section (name or GID)
+  -d '{"project": "Ben'"'"'s Board", "section": "Inbox"}'  # move project (section optional)
   -d '{"add_tags": ["urgent"], "remove_tags": ["waiting"]}'
   -d '{"key_points": ["new point"]}'
   -d '{"assignee": "me"}'                        # null unassigns

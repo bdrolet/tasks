@@ -1,7 +1,7 @@
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import clients.asana as asana
 from api.auth import verify_token
@@ -81,7 +81,13 @@ class CreatedTaskResponse(BaseModel):
 
 
 class UpdateTaskRequest(BaseModel):
+    # Reject unknown fields rather than accepting them silently: a PATCH that
+    # returns "updated" while quietly dropping the one field the caller cared
+    # about is worse than a 422.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
+    project: str | None = None  # name or GID; moves the task to that project
     priority: str | None = None  # requires name in the same request
     context: str | None = None
     key_points: list[str] = []
@@ -286,8 +292,26 @@ def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token
         if fields:
             asana.update_task(gid, fields)
 
-        if body.section:
-            memberships = task.get("memberships") or []
+        memberships = task.get("memberships") or []
+        if body.project:
+            if task.get("parent"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="subtasks belong to their parent, not a project — cannot move",
+                )
+            target_gid = _resolve_project_gid(body.project)
+            # Add first, then drop the old memberships: a task briefly in two
+            # projects is recoverable, a task in none is orphaned.
+            asana.add_task_to_project(
+                gid,
+                target_gid,
+                resolve_section(target_gid, body.section) if body.section else None,
+            )
+            for membership in memberships:
+                current_gid = (membership.get("project") or {}).get("gid")
+                if current_gid and current_gid != target_gid:
+                    asana.remove_task_from_project(gid, current_gid)
+        elif body.section:
             project_gid = (memberships[0].get("project") or {}).get("gid") if memberships else None
             if not project_gid:
                 raise HTTPException(

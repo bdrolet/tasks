@@ -18,11 +18,14 @@ Annotate mode reads a `/search` response (a `results` array) or a single-task
 fetch (its `subtasks` array) on stdin and writes TSV to stdout, one row per
 task, in the order the API returned them:
 
-    ref  gid  due_on  name  location
+    ref  gid  due_on  name  location  summary
 
 `location` is `project/section`, or `subtask of <parent>` for subtask hits,
 or `—` when the API omits both — as it does for the subtasks of a fetched
 task, which belong to their parent rather than to a section.
+
+`summary` is the API's one-line gist of the description, or `—` when the task
+has none (or when the payload predates the field, as a subtask fetch does).
 
 Collisions: 36**3 = 46,656 refs, so two tasks in one listing collide about
 0.6% of the time at 25 results (see tests/test_task_ref.py, which pins the
@@ -107,7 +110,10 @@ def main() -> int:
     for r in results:
         gid = r["task_gid"]
         due = r.get("due_on") or "—"
-        print(f"{refs[gid]}\t{gid}\t{due}\t{r['name']}\t{location(r)}")
+        # Collapse whitespace: a stray tab or newline in the summary would
+        # otherwise split the row into phantom columns.
+        summary = " ".join((r.get("summary") or "—").split())
+        print(f"{refs[gid]}\t{gid}\t{due}\t{r['name']}\t{location(r)}\t{summary}")
     return 0
 
 

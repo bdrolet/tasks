@@ -394,3 +394,32 @@ def test_substring_path_unchanged_response_shape(monkeypatch):
     body = client.post("/search", json={"query": "passport"}, headers=AUTH).json()
     assert body["semantic"] is False
     assert body["results"][0]["score"] is None
+
+
+def test_search_returns_a_summary_of_the_description(monkeypatch):
+    notes = (
+        "Key points:    Seller agreed to cancel order 07-15027-96243\n"
+        "    Refund has not posted yet\n"
+        "Source: Email    From: eBay (ebay@ebay.com)"
+    )
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "list_project_tasks",
+        lambda gid, **kw: [_task("t1", "[P1] Process order cancellation", notes=notes)],
+    )
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
+
+    resp = client.post("/search", json={"query": ""}, headers=AUTH)
+    assert resp.status_code == 200
+    (result,) = resp.json()["results"]
+    assert result["summary"] == "Seller agreed to cancel order 07-15027-96243"
+
+
+def test_search_summary_is_null_when_the_task_has_no_description(monkeypatch):
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p1", "name": "Inbox"}])
+    monkeypatch.setattr(asana, "list_project_tasks", lambda gid, **kw: [_task("t1", "Bare task")])
+    monkeypatch.setattr(asana, "list_my_tasks", lambda **kw: [])
+
+    resp = client.post("/search", json={"query": ""}, headers=AUTH)
+    assert resp.json()["results"][0]["summary"] is None

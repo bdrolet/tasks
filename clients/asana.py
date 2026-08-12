@@ -149,6 +149,29 @@ def add_task_to_section(task_gid: str, section_gid: str) -> None:
     resp.raise_for_status()
 
 
+def add_task_to_project(task_gid: str, project_gid: str, section_gid: str | None = None) -> None:
+    data: dict = {"project": project_gid}
+    if section_gid:
+        data["section"] = section_gid
+    resp = _request(
+        "POST",
+        f"/tasks/{task_gid}/addProject",
+        operation="add_task_to_project",
+        json={"data": data},
+    )
+    resp.raise_for_status()
+
+
+def remove_task_from_project(task_gid: str, project_gid: str) -> None:
+    resp = _request(
+        "POST",
+        f"/tasks/{task_gid}/removeProject",
+        operation="remove_task_from_project",
+        json={"data": {"project": project_gid}},
+    )
+    resp.raise_for_status()
+
+
 def get_sections(project_gid: str | None = None) -> list[dict]:
     resp = _request(
         "GET",

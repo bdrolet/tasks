@@ -75,3 +75,49 @@ def test_snippet_extracts_around_match():
     assert s.startswith("…") and s.endswith("…")
     assert task_search.snippet(notes, "absent") is None
     assert task_search.snippet(None, "q") is None
+
+
+def test_summary_prefers_lead_context_over_key_points():
+    notes = (
+        "Front-fascia parts still to purchase for the bumper job.\n"
+        "Key points:    Bumper cover already ordered\n    One subtask per part\n"
+        "Source: Created manually"
+    )
+    assert task_search.summary(notes) == (
+        "Front-fascia parts still to purchase for the bumper job."
+    )
+
+
+def test_summary_falls_back_to_first_key_point():
+    notes = (
+        "Key points:    Seller agreed to cancel the order\n"
+        "    Refund not yet posted\n"
+        "Links:    https://example.com/x\n"
+        "Source: Email    From: eBay (ebay@ebay.com)"
+    )
+    assert task_search.summary(notes) == "Seller agreed to cancel the order"
+
+
+def test_summary_reads_key_point_off_the_following_line():
+    notes = "Key points:\n    Renew before the policy lapses\nSource: Created manually"
+    assert task_search.summary(notes) == "Renew before the policy lapses"
+
+
+def test_summary_clips_at_a_word_boundary():
+    notes = " ".join(["alpha"] * 60)
+    got = task_search.summary(notes, limit=40)
+    assert got.endswith("…") and len(got) <= 41
+    assert "alph…" not in got  # never splits a word
+
+
+def test_summary_keeps_prose_that_merely_opens_with_a_header_word():
+    # "Actions" carries no colon in the rendered description, so a bare prefix
+    # match would truncate this to nothing.
+    notes = "Actions agreed with Mo are on hold until the fascia lands.\nSource: Created manually"
+    assert task_search.summary(notes).startswith("Actions agreed with Mo")
+
+
+def test_summary_none_when_there_is_nothing_but_boilerplate():
+    assert task_search.summary("Source: Created manually") is None
+    assert task_search.summary("") is None
+    assert task_search.summary(None) is None
