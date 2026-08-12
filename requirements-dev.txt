@@ -6,7 +6,11 @@ pre-commit>=3.7
 httpx>=0.27
 anthropic>=0.25
 functions-framework>=3.0
-psycopg>=3.1
+# [binary] pulls the psycopg-binary wheel, which bundles libpq. Without it a
+# fresh venv has no libpq on macOS and the DB-touching test modules fail at
+# collection, not at assert. Runtime requirements.txt stays plain — the CF/Run
+# images resolve libpq themselves.
+psycopg[binary]>=3.1
 pg8000>=1.31
 cloud-sql-python-connector>=1.7.0
 opentelemetry-sdk>=1.24
