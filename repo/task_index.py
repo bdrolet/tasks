@@ -114,3 +114,35 @@ def semantic_candidates(
         """,
         tuple(params),
     ).fetchall()
+
+
+_ROW_COLS = "task_gid, title, LEFT(notes, 300) AS notes, project, completed, due_on, permalink_url"
+
+
+def substring_candidates(
+    conn: Any, *, query: str, completed: bool | None, limit: int
+) -> list[dict]:
+    """Case-insensitive substring match over title + notes, newest first.
+    Used by the triage agent's search_tasks tool (in-process, no API hop)."""
+    where = ["(title ILIKE %s OR notes ILIKE %s)"]
+    params: list = [f"%{query}%", f"%{query}%"]
+    if completed is not None:
+        where.append("completed = %s")
+        params.append(completed)
+    params.append(limit)
+    return conn.execute(
+        f"SELECT {_ROW_COLS} FROM task_index WHERE {' AND '.join(where)}"
+        " ORDER BY updated_at DESC LIMIT %s",
+        tuple(params),
+    ).fetchall()
+
+
+def get_rows(conn: Any, task_gids: list[str]) -> list[dict]:
+    """Display rows for a set of GIDs (e.g. the semantic_candidates hits)."""
+    if not task_gids:
+        return []
+    placeholders = ",".join(["%s"] * len(task_gids))
+    return conn.execute(
+        f"SELECT {_ROW_COLS} FROM task_index WHERE task_gid IN ({placeholders})",
+        tuple(task_gids),
+    ).fetchall()

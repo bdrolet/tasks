@@ -122,3 +122,50 @@ def test_semantic_candidates_no_filters():
     assert "completed = %s" not in query
     assert "project = %s" not in query
     assert params == ("[1.0]", 25)
+
+
+class _RowsConn:
+    def __init__(self, rows):
+        self.rows = rows
+        self.queries = []
+
+    def execute(self, query, params=None):
+        self.queries.append((" ".join(query.split()), params))
+
+        class _C:
+            def __init__(s, rows):
+                s._rows = rows
+
+            def fetchall(s):
+                return s._rows
+
+        return _C(self.rows)
+
+
+def test_substring_candidates_ilike_title_and_notes():
+    conn = _RowsConn([{"task_gid": "t1"}])
+    rows = repo_index.substring_candidates(conn, query="disney", completed=None, limit=5)
+    assert rows == [{"task_gid": "t1"}]
+    query, params = conn.queries[0]
+    assert "title ILIKE %s OR notes ILIKE %s" in query
+    assert "completed" not in query.split("WHERE", 1)[1].split("ORDER")[0]
+    assert "LEFT(notes, 300)" in query
+    assert params == ("%disney%", "%disney%", 5)
+
+
+def test_substring_candidates_completed_filter():
+    conn = _RowsConn([])
+    repo_index.substring_candidates(conn, query="x", completed=True, limit=3)
+    query, params = conn.queries[0]
+    assert "completed = %s" in query
+    assert params == ("%x%", "%x%", True, 3)
+
+
+def test_get_rows_by_gids_and_empty_short_circuit():
+    conn = _RowsConn([{"task_gid": "a"}])
+    assert repo_index.get_rows(conn, ["a", "b"]) == [{"task_gid": "a"}]
+    assert "IN (%s,%s)" in conn.queries[0][0]
+    assert conn.queries[0][1] == ("a", "b")
+    empty = _RowsConn([])
+    assert repo_index.get_rows(empty, []) == []
+    assert empty.queries == []
