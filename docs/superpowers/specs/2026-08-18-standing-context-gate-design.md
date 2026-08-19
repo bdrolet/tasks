@@ -1,14 +1,17 @@
 # Standing-Context Gate — Design
 
 **Date:** 2026-08-18
-**Revised:** 2026-08-19 — after review
+**Revised:** 2026-08-19 — after review; gate 2 became a triage agent with
+email and task search tools, bringing `docs/more_context_needed.md` and
+`docs/no_action_needed_example.md` into scope
 **Status:** Pending review
 
 ## Goal
 
-Stop creating tasks that are correct on the email's own terms but moot given a
-fact about Ben that lives nowhere in the mail stream — most immediately, mail
-addressed to a role he has resigned.
+Stop creating tasks that are correct on the email's own terms but moot given
+something the pipeline could have known — a fact about Ben that lives nowhere
+in the mail stream, prior mail from the same sender, or a task that already
+exists in Asana.
 
 Today `handlers/task_create.py` decides from one event in isolation:
 
@@ -17,14 +20,21 @@ if not policy.warrants_task(event):   # category in {urgent, review, respond}
     return
 ```
 
-That is the whole gate. This spec adds a **second gate**, after enrichment,
-that asks one question: *given what is declared true about Ben right now, does
-this email still require anything of him?*
+That is the whole gate. This spec adds a **second gate**: a small triage agent
+that is handed the email plus declared facts about Ben, can search and fetch
+emails and tasks the way the `/searching-inbox-emails` and `/searching-tasks`
+skills do by hand, and answers one question: *given everything I can find out,
+does this email still require anything of him?*
 
-It also introduces the declared-facts file that gate reads, and gives
+It also introduces the declared-facts file the agent reads, and gives
 `services/deadline.py` a second section of the same file to read.
 
 ## The evidence
+
+Three families of false positive are already logged in this repo. The gate
+must handle all three; the first is the one that motivated it.
+
+### Standing context — the role changed, the mail did not
 
 Ben resigned as Assistant Coach of the West Portal Proud Panthers on
 2026-08-14. SF Microsoccer's admin mail continues, and he wants to keep
@@ -47,6 +57,31 @@ and importance are all the same. Only Ben changed.
 
 This is the defining property of the problem and the reason it cannot be solved
 by matching on the email.
+
+### More context needed — the answer was in mail or in Asana
+
+`docs/more_context_needed.md` logs two tasks that passed the policy gate and
+were moot on arrival:
+
+- **Xfinity bill** (`[P1] Review and pay Xfinity bill`, gid `1217530946487945`)
+  — the mailbox held "Thanks for your payment — your automatic payment was
+  processed" from 2026-08-10 and "Your automatic payment details" in the prior
+  month's bill. One search for `from:xfinity` would have surfaced both; the
+  triggering email itself carried the autopay block.
+- **Disney Plus refund** (`[P1] Review Disney Plus refund confirmation`, gid
+  `1217504339696293`) — two tasks for the same refund were already
+  **completed** in Asana (`1217290596630525`, `1217290596663963`). One task
+  search for `Disney` with `completed: null` would have found them; the email
+  was the good-news end of a closed saga.
+
+### No action needed — the thread itself was enough
+
+`docs/no_action_needed_example.md` logs five tasks the thread alone
+disqualified: two acknowledgment replies to Ben's own coaching-resignation
+email (`h3h`, `pn0` — Ben was the thread root, one reply had him on cc), and
+three informational notices (Zelle series ending, with "no action required"
+written into the generated key points; a Google Meet broadcast where the
+enrichment *invented* "Action required"; a monthly PayPal statement notice).
 
 ## Why matching cannot work
 
@@ -77,19 +112,24 @@ Panthers" (2026).
 
 The discriminator is Ben's **role**, which is not a string in the email.
 
-## Relationship to the existing false-positive docs
+The same argument applies to the other two families. A cosine threshold
+against the task index gets the Disney case wrong in both directions ($24.98
+vs $24.58; "Review refund confirmation" vs "Follow up on delayed refund"), and
+no regex reads "Ben was cc'd on a thread he started." The evidence has to be
+*looked up and judged*, not matched.
 
-`docs/more_context_needed.md` and `docs/no_action_needed_example.md` already
-log eight false positives in two families. This is a third:
+## Where the evidence lives
 
-| Family | Missing evidence | Where it lives |
-|---|---|---|
-| More context needed | Prior mail, or an existing Asana task | In systems the pipeline can query |
-| No action needed | Nothing — the thread itself is enough | In the email |
-| **Standing context** (this spec) | A fact about Ben's roles and relationships | **Only in Ben's head until declared** |
+| Family | Missing evidence | Where it lives | How the gate gets it |
+|---|---|---|---|
+| Standing context | A fact about Ben's roles and relationships | **Only in Ben's head until declared** | `context/standing-context.md`, injected into the prompt |
+| More context needed | Prior mail, or an existing Asana task | inbox-api, the task index, Asana | The agent's search/fetch tools |
+| No action needed | Nothing — the thread itself is enough | In the email | Rules in the agent's system prompt, plus a deterministic phrase veto |
 
-The third family is the only one that cannot be derived. It must be written
-down. That is the whole mechanism.
+The first family is the only one that cannot be derived. It must be written
+down. The other two are derivable — but only by asking the right question per
+email, which is why gate 2 is an agent with tools rather than a fixed
+retrieval step.
 
 ## The context file
 
@@ -138,9 +178,9 @@ use.
 
 **Sections are addressed by heading.** `standing_context.section("Roles")`
 returns that section's body, or `""` if absent. Each consumer reads only what
-it needs: the task gate reads `Roles`, deadline extraction reads `Calendar`.
-This keeps per-call token cost proportional to relevance rather than to the
-file's total size.
+it needs: the triage agent reads `Roles`, deadline extraction reads
+`Calendar`. This keeps per-call token cost proportional to relevance rather
+than to the file's total size.
 
 Retiring a fact is deleting its block. There is no expiry field to maintain and
 no matcher to operate on.
@@ -163,59 +203,128 @@ the author, not an oversight: some facts genuinely have no season ("Ben is no
 longer a customer of X"), and inventing an end date for them is worse than
 stating none.
 
-**This imposes a hard requirement on gate 2's prompt:** it must include today's
-date. `services/deadline.py` already opens with `Today is {today}`;
-`services/email_summary.py` does not pass a date at all. Gate 2 rides on the
-summary call, so scoped facts are uninterpretable without adding it. This is a
-one-line change and a precondition for the whole approach, not an enhancement.
+**This imposes a hard requirement on the agent prompt:** it must include
+today's date. Scoped facts are uninterpretable without it.
 
 ## Design
 
-### Gate 2 — task suppression
+### Gate 2 — the triage agent
 
 ```
-policy.warrants_task(event)               gate 1 — category, free, unchanged
-email_summary.generate(event)             Haiku call — already happens
-policy.survives_context(summary, event)   gate 2 — NEW
+policy.warrants_task(event)           gate 1 — category, free, unchanged
+triage.decide(event)                  gate 2 — NEW: agent with read-only tools
+email_summary.generate(event)         Haiku call — only if actionable
+deadline.extract_deadline(event)      Sonnet call — only if actionable, P0/P1
 asana.create_task(...)
 ```
 
-Gate 2 sits **after** enrichment for three reasons:
+Gate 2 runs **before** enrichment, so suppressed mail costs nothing beyond the
+triage run itself, and the decision is made on the email plus whatever the
+agent chose to look up — not on a summary of it.
 
-1. It costs nothing for mail that never passes gate 1.
-2. The enrichment output is itself evidence. `no_action_needed_example.md`
-   already specifies that a generated "no action required" key point should
-   veto creation; that check belongs at this same point.
-3. It can ride on the Haiku call that already runs, avoiding a second
-   round-trip — the same trade-off, decided the same way, as the title
-   enrichment in `2026-07-20-task-title-enrichment-design.md`.
+**Runtime.** The agent is the Anthropic SDK tool runner
+(`client.beta.messages.tool_runner`) running in-process in the `tasks-events`
+Cloud Function, on **`claude-sonnet-5`** with adaptive thinking at
+`effort: "medium"`. Not Managed Agents: the CF already holds every credential
+the tools need (inbox-api token, Asana token, Cloud SQL, Vertex IAM), the tools
+are thin wrappers over clients that already exist, and nothing needs a sandbox.
+A hosted session plus a vault would add infrastructure to do what four
+decorated Python functions do locally.
 
-`services/email_summary.py` currently asks Haiku for
-`{"key_points": [...], "title": "..."}`. When the `Roles` section is non-empty,
-the prompt gains that section and two output fields:
+**Input.** One user message carrying: today's date; the `Roles` section of
+`context/standing-context.md` (omitted when empty); and the email — subject,
+sender, `to`, `cc`, received time, category/importance, and the body (quoted
+thread included, capped as today at 3k chars). The system prompt is fixed
+text (rules below) and is the first prompt-cache breakpoint; the tool
+definitions sit in front of it in the rendered prompt, so one
+`cache_control` on the system block caches both. At ~1.5k tokens it clears
+Sonnet 5's 1024-token minimum.
+
+**Tools — all read-only, all thin.** Each is a `@beta_tool` function in
+`services/triage.py` delegating to an existing client; each catches its own
+exceptions and returns an error result (`is_error: true`) rather than raising,
+so one backend outage degrades the agent's evidence rather than aborting the
+run.
+
+| Tool | Backs onto | Mirrors |
+|---|---|---|
+| `search_emails(query, mode="graph", limit=10)` | `clients/inbox_api.search` — **new**, `POST /search` on inbox-api; `graph` mode takes KQL (`from:micro@sfvikings.com`, `subject:...`), `db` mode searches processed mail with classification | `/searching-inbox-emails` |
+| `get_email(message_id)` | `clients/inbox_api.get_email` — exists | `/fetching-inbox-email` |
+| `search_tasks(query, semantic=False, completed=None, limit=10)` | in-process: `clients/vertex.embed` + `repo/task_index.semantic_candidates` for semantic, substring over `task_index.title/notes` otherwise; `completed=None` searches open and done; a `repo/tasks` lookup by `message_id` is always included so "this email already has a task" is one call | `/searching-tasks` |
+| `get_task(task_gid)` | `clients/asana.get_task_detail` + `get_stories` (description, due, completed, recent comments) | `/fetching-task` |
+
+Tool descriptions say *when* to call them, not just what they do — e.g.
+"call `search_emails` with `from:<sender>` when the mail describes a recurring
+obligation (a bill, renewal, subscription) to check whether it is already
+automated or paid". The tasks-api and inbox-api are not called through their
+own HTTP surfaces from inside the CF: task search runs against the same index
+and DB the API uses, which avoids a self-call and a second bearer token;
+email search *must* go over HTTP because this repo never talks to Graph
+directly (see `clients/inbox_api.py`).
+
+**Rules in the system prompt** — in substance, the judgments the three docs
+ask for:
+
+- Set `actionable: false` ONLY when evidence you have (a standing fact that
+  currently applies, prior mail, an existing task, or the thread itself)
+  clearly shows the email requires nothing of Ben. If unsure, `true`.
+- A standing fact that states a period applies only inside that period.
+- A reply to a thread Ben started, or a message where Ben is only cc'd and
+  the content is acknowledgment ("thanks for letting us know", "sounds
+  good"), is not a task.
+- "No action required", "for your records", "automatic payment", "will be
+  charged automatically" in the email or in prior mail from the sender is
+  disqualifying for a payment/review task.
+- The sender's schedule (a statement posted, a series ending, a feature
+  auto-enabling on a date) is not Ben's deadline. Broadcast vendor
+  announcements default to not actionable. Never treat "action required" as
+  present unless the source says it.
+- If an existing task covers the same matter — same vendor/amount/instrument
+  within small variance, same thread, same saga — set `related_task_gid` to
+  it, open or completed. Only set it when you have fetched or seen enough of
+  that task to be sure it is the same matter.
+- Name every lookup you relied on in `evidence`.
+
+**Output** — structured via `output_config.format` (JSON schema, strict):
 
 ```json
 {
-  "key_points": ["..."],
-  "title": "Verb object",
   "actionable": true,
-  "actionable_reason": "..."
+  "reason": "one sentence naming the fact/email/task that decided it",
+  "related_task_gid": null,
+  "evidence": [{"kind": "email|task|fact", "ref": "message_id|gid|fact heading", "note": "..."}]
 }
 ```
 
-Prompt language, in substance: *"Today is {today}. Below are standing facts
-about the recipient. Some state the period they apply to; a fact whose period
-has passed does not apply. Set `actionable` to false ONLY if a fact that
-currently applies clearly makes this email require nothing of him, and name
-that fact in `actionable_reason`. If no fact clearly applies, set `actionable`
-to true. Do not reason beyond the facts given."*
+**Bounds.** `max_iterations` 6 (a run is typically 2–4 model turns); per-tool
+HTTP timeout 10s; the whole `decide()` call runs under a hard wall-clock
+deadline of 60s. `tasks-events` has a 120s timeout today; raising it to 300s
+in terraform is recommended headroom, not a requirement. Expected volume is
+~10–20 gate-1 emails/day at roughly 20–30k tokens per run — on the order of
+$1/day on Sonnet 5.
 
-The `Today is {today}` line is **required**, not decorative — scoped facts are
-uninterpretable without it, and `email_summary.generate` passes no date today.
+### What happens with the decision
 
-When the `Roles` section is empty or the file is absent, the prompt is
-unchanged and the gate is skipped entirely — zero cost, zero behavior change.
-That is the state the repo ships in until the first fact is added.
+| Decision | Handler action |
+|---|---|
+| `actionable: true` | Enrich and create, exactly as today. |
+| `actionable: false`, `related_task_gid: null` | Create nothing. Record the suppression (below). |
+| `related_task_gid` set (either `actionable` value) | Create nothing. Post a comment on that task: `Related email: {subject} — {reason} — {web_link}` via `asana.create_story`. Record the suppression with the GID. **No reopen, no edits** — if the email shows the matter regressed the model should return `actionable: true` with no `related_task_gid`, and a new task is created; a comment is visible and cheap to undo, a wrong reopen is not. |
+
+The comment is the one write this gate can cause, and it happens in the
+handler after the decision — the agent itself has no write tools.
+
+### Deterministic backstop — the no-action phrase veto
+
+`no_action_needed_example.md` asks for a rule that is free to test: if the
+enrichment's own key points contain an explicit no-action phrase, do not
+create the task. That check stays, and runs on the Haiku summary *after* the
+agent (the agent sees the email, not the summary):
+`policy.no_action_phrase(key_points)` matches
+`no action (is )?(required|needed)`, `for your records`, `automatic payment`,
+`autopay` and suppresses with `source="phrase"`. It costs nothing and catches
+the case where the agent judged wrong but the summarizer wrote the
+disqualifier down anyway.
 
 ### Deadline context
 
@@ -238,14 +347,19 @@ inherits the other's failure modes.
 The gate may only ever **remove** a task it is confident about. Every other
 path creates the task:
 
-- Missing `actionable` field → create.
-- Unparseable JSON, or the whole Haiku call failing → create (this already
-  happens today; `generate()` swallows exceptions and returns an empty
-  `EmailSummary`).
-- `actionable: false` with no `actionable_reason` → create. A suppression that
-  cannot name its justification is not trustworthy enough to act on.
-- Missing or unreadable `context/standing-context.md` → create.
-- `event["category"] == "urgent"` → create, unconditionally.
+- Agent run raises, times out (60s), hits `max_iterations` without a final
+  answer, or returns `stop_reason: "refusal"` → create.
+- Output fails schema validation, or `actionable: false` with an empty
+  `reason` → create. A suppression that cannot name its justification is not
+  trustworthy enough to act on.
+- `related_task_gid` names a task that `get_task` cannot fetch → treat as no
+  match; apply the `actionable` value alone.
+- Any single tool failing → the agent sees `is_error`, continues with less
+  evidence; the rule "if unsure, `true`" covers it.
+- Missing or unreadable `context/standing-context.md` → the `Roles` block is
+  simply absent; the agent still runs with its search tools.
+- `event["category"] == "urgent"` → create, unconditionally — the agent is
+  not even invoked.
 
 The asymmetry is deliberate: a spurious task costs seconds to close; a
 swallowed message about a child's team placement is unbounded.
@@ -286,8 +400,9 @@ catches it. Their backstops are:
 1. **Fail-open.** A fact must clearly apply for the gate to act. Ambiguity
    creates the task.
 2. **The suppression record.** "What has this fact eaten, and over what
-   period" is a SQL query rather than an archaeological dig through logs — the
-   only way an invisible failure becomes visible.
+   period" is a SQL query over `suppressed_emails.evidence` rather than an
+   archaeological dig through logs — the only way an invisible failure
+   becomes visible.
 3. **Review at authoring time.** A fact lands via PR. The `Lee@sfvikings.com`
    distinction is exactly the thing a reviewer should be looking for, and this
    spec's sender table is the reason it is documented.
@@ -297,22 +412,30 @@ daily `tasks-escalation` cron.* Scoping supersedes it for mode 1, and it does
 nothing for modes 2 and 3 — it would add a scheduled job, a parser, and a
 recurring notification to solve a problem the prose already solves.
 
+The same staleness logic applies to the derived evidence, with one difference:
+prior mail and existing tasks are re-fetched on every run, so they cannot go
+stale the way a declared fact can. Their failure mode is mis-judgment, not
+decay, and the `evidence` column is what makes that auditable.
+
 ### Recording suppressions
 
-Log **and** database. No Asana artifact — a P3 reference row would re-create
-the clutter this gate exists to remove.
+Log **and** database. No Asana artifact beyond the comment-on-existing case —
+a P3 reference row would re-create the clutter this gate exists to remove.
 
 New table in `repo/schema.sql`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS suppressed_emails (
-    message_id  TEXT PRIMARY KEY,
-    category    TEXT NOT NULL,
-    importance  TEXT NOT NULL,
-    subject     TEXT,
-    title       TEXT,          -- the task title that would have been created
-    reason      TEXT NOT NULL, -- the model's actionable_reason
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    message_id       TEXT PRIMARY KEY,
+    category         TEXT NOT NULL,
+    importance       TEXT NOT NULL,
+    subject          TEXT,
+    sender           TEXT,
+    reason           TEXT NOT NULL,    -- the model's reason, or the matched phrase
+    source           TEXT NOT NULL,    -- 'agent' | 'phrase'
+    related_task_gid TEXT,             -- set when the email was attached to an existing task
+    evidence         JSONB,            -- the agent's evidence list, verbatim
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -325,13 +448,18 @@ reverse the suppression. The decision was already made on evidence; undoing it
 because Cloud SQL blipped would make task creation non-deterministic, which is
 worse than a missing audit row. This is the one place the fail-open principle
 deliberately does not apply, because the failure is in *recording* the
-decision, not in *making* it.
+decision, not in *making* it. The same applies to the comment on an existing
+task: if `create_story` fails, log and move on — the suppression stands.
 
 Also emitted: counter `asana.tasks_suppressed` (exports as
 `asana_tasks_suppressed`, matching the existing `asana_` series) with
-attributes `category` and `importance`. The reason is deliberately not a metric
-attribute — it is free text from a model and would blow up cardinality. It
-lives in the log line and the table.
+attributes `category`, `importance`, `source`, and `attached` (`true` when a
+`related_task_gid` was set). The reason and evidence are deliberately not
+metric attributes — free text from a model would blow up cardinality. They
+live in the log line and the table. Agent token usage flows through the
+existing `claude_tokens` counter; a histogram `asana.triage.duration` and a
+counter `asana.triage.tool_calls` (attribute `tool`) are added so cost and
+latency of the gate are visible without reading logs.
 
 ### Layering
 
@@ -341,55 +469,79 @@ Per the repo's layer rules:
 |---|---|---|
 | `context/standing-context.md` | **new** | The facts. Not code. |
 | `services/standing_context.py` | **new** | Loads and caches the file; `section(name)` accessor. Returns `""` on any read failure. |
-| `services/policy.py` | `survives_context(summary, event)` added | Both gates in one file — CLAUDE.md: "Changing what becomes a task is a change HERE." |
-| `services/email_summary.py` | prompt gains today's date + the `Roles` section; parses the two new fields | Transport only. The date is a precondition for scoped facts. |
+| `services/triage.py` | **new** | The agent: system prompt, the four `@beta_tool` functions (thin delegations), `decide(event) -> Decision`, the deadline/iteration bounds, fail-open parsing. Business logic lives here and nowhere else. |
+| `services/policy.py` | `no_action_phrase(key_points)` added; `warrants_task` unchanged | Both gates' deterministic pieces in one file — CLAUDE.md: "Changing what becomes a task is a change HERE." |
+| `clients/claude.py` | tool-runner entry point (`run_agent(...)`) alongside `summarize`/`extract`; records usage | I/O only. |
+| `clients/inbox_api.py` | `search(query, *, mode, limit, mailboxes=None)` added | I/O only — first pipeline consumer of this seam. |
 | `services/deadline.py` | prompt gains the `Calendar` section | Return contract unchanged. |
-| `models/events.py` | `EmailSummary` gains `actionable: bool = True`, `actionable_reason: str \| None = None` | Pure type; the `True` default *is* the fail-open default. |
-| `handlers/task_create.py` | gate 2 call after `generate()`; suppression record | Orchestration only. |
+| `models/events.py` | `Decision` dataclass: `actionable: bool = True`, `reason: str = ""`, `related_task_gid: str \| None = None`, `evidence: list = []` | Pure type; the `True` default *is* the fail-open default. |
+| `handlers/task_create.py` | gate 2 call before enrichment; suppression record; comment on related task; phrase veto after summary | Orchestration only. |
 | `repo/suppressions.py` | **new** | `insert()`. Takes an open connection. |
 | `repo/schema.sql` | `suppressed_emails` table | — |
-| `clients/otel.py` | `tasks_suppressed` counter | I/O only. |
+| `clients/otel.py` | `tasks_suppressed`, `triage_duration`, `triage_tool_calls` | I/O only. |
 | `.github/workflows/deploy.yml` | `context/**` in `paths:` | Without this, fact edits never deploy. |
+| `terraform/cloud_functions.tf` | optional: `tasks-events` timeout 120 → 300 | Headroom. |
 
-No new client, no new dependency, no terraform change.
+`services/email_summary.py` is **unchanged** — the earlier revision of this
+spec put the actionability fields on the Haiku call; the agent replaces that.
+No new dependency beyond the `anthropic` SDK already in `requirements.txt`
+(the tool runner needs a current release; pin `>=0.116`).
 
 ### Testing
 
 - `tests/test_standing_context.py` — section extraction by heading; missing
   file returns `""`; missing section returns `""`; caching.
-- `tests/test_policy.py` — `survives_context` truth table: actionable
-  true / false / missing / false-without-reason / urgent-category exemption.
-- `tests/test_email_summary.py` — the two new fields; malformed JSON asserts
-  `actionable` defaults to `True`; empty `Roles` section leaves the prompt
-  unchanged; today's date appears in the prompt whenever `Roles` is non-empty.
+- `tests/test_triage_tools.py` — each tool against mocked inbox-api / DB /
+  Asana: happy path, and that a backend exception becomes an `is_error`
+  result rather than a raise. `search_tasks` always includes the
+  `message_id` match.
+- `tests/test_triage.py` — `decide()` against a scripted fake client (a
+  sequence of tool_use → tool_result → end_turn messages): a run that
+  searches then suppresses; a run that finds a completed task and returns
+  `related_task_gid`; and the fail-open table — exception, timeout,
+  `max_iterations`, refusal, schema-invalid output, `false` with empty
+  reason, unfetchable `related_task_gid`, urgent category short-circuit.
+  The prompt must contain today's date and the `Roles` section when present.
+- `tests/test_policy.py` — `no_action_phrase` truth table.
 - `tests/test_deadline.py` — `Calendar` section reaches the prompt; empty
   section leaves the prompt unchanged.
-- `tests/test_task_create.py` — a suppressed summary creates no Asana task,
-  increments the counter, and writes the row; a DB failure on that write does
-  not resurrect the task; an actionable summary is unaffected.
+- `tests/test_task_create.py` — a suppressing decision creates no Asana task,
+  increments the counter, writes the row; a `related_task_gid` decision posts
+  one story on that task and nothing else; a DB or story failure does not
+  resurrect the task; an actionable decision proceeds to enrichment and
+  creation unchanged; the phrase veto fires on a Haiku summary containing
+  "no action required".
 
 The Claude calls are mocked throughout via `monkeypatch.setattr(claude, ...)`,
 as they are today.
 
-Model judgment quality is verified manually against five real emails: the three
-Micro Admin messages (must suppress) and the two `Lee@sfvikings.com` player
-invitations (must survive). Scope expiry is verified by running the same three
-Micro Admin emails against a frozen date after 2026-12-18 — they must **stop**
-being suppressed, since the season the fact names has ended.
+Model judgment quality is verified manually against the real cases: the three
+Micro Admin messages (must suppress, evidence = the coach fact), the two
+`Lee@sfvikings.com` player invitations (must survive), Xfinity (must suppress,
+evidence = prior payment mail), Disney (must attach to a completed task), the
+two coaching-thread replies (must suppress, evidence = thread root), Zelle and
+PayPal (must suppress, evidence = the email itself), Google Meet (must not
+produce a P1 "Action required"). Scope expiry is verified by running the Micro
+Admin emails against a frozen date after 2026-12-18 — they must **stop** being
+suppressed.
 
 ## Out of scope
 
-- **Duplicate suppression.** The 7/31 email produced two near-identical tasks.
-  This gate would not have caught that; it is a distinct problem.
-- **The mail-history and existing-task checks** from `more_context_needed.md`.
-  Both require new search calls and belong in their own spec.
-- **The no-action-phrase veto** from `no_action_needed_example.md`. It shares
-  gate 2's position and should reuse this plumbing, but it is a separate rule
-  with its own evidence base. Deliberately sequenced after this.
+- **Duplicate suppression within a thread that has no task yet.** The 7/31
+  email produced two near-identical tasks from one event (a Pub/Sub redelivery
+  or a double publish). The existing `external:{message_id}` check in
+  `create_task` is the right place for that and it is a distinct problem.
+- **Reopening a completed task** when a related email shows the matter
+  regressed. Today that yields a new task; reopen can be added once the
+  comment path has a track record.
 - **An API endpoint over `suppressed_emails`.** The table is queryable via
   `psql` for now. Add a route when there is a second reader.
 - **Runtime editing of facts.** They change on the order of months. A PR is the
   right ceremony and gives the change a review and a history.
+- **Letting the agent produce the summary and title too.** It could, in the
+  same run, and that would save the Haiku call on actionable mail. Deferred:
+  the summary path is tested and stable, and keeping decision and enrichment
+  separate keeps each one's failure modes legible.
 
 ## Open questions
 
@@ -401,3 +553,7 @@ being suppressed, since the season the fact names has ended.
 2. **Should `Calendar` be consulted for P2/P3 mail?** Deadline extraction runs
    only for P0/P1 today. Widening it is a separate cost/benefit question this
    spec does not reopen.
+3. **Should the agent run for `reference`-classified mail too?** Today gate 1
+   drops it before the agent sees it. If the agent proves reliable, the
+   inverse check — "this reference-classified mail actually needs a task" —
+   is the same machinery pointed the other way. Not in this spec.
