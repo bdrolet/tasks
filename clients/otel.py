@@ -30,6 +30,9 @@ claude_tokens: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop"
 api_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
 api_requests: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 vertex_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
+tasks_suppressed: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+triage_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
+triage_tool_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -40,6 +43,7 @@ def setup_telemetry(service_name: str) -> None:
     global _meter_provider, _tracer_provider, _metric_reader
     global tasks_created, tasks_moved, tasks_completed, escalations, errors
     global claude_tokens, api_duration, api_requests, vertex_duration
+    global tasks_suppressed, triage_duration, triage_tool_calls
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -87,6 +91,16 @@ def setup_telemetry(service_name: str) -> None:
     )
     vertex_duration = meter.create_histogram(
         "vertex.api.duration", unit="ms", description="Vertex AI embed call duration by model"
+    )
+    tasks_suppressed = meter.create_counter(
+        "asana.tasks_suppressed",
+        description="Emails that passed the policy gate but were suppressed by gate 2",
+    )
+    triage_duration = meter.create_histogram(
+        "asana.triage.duration", unit="ms", description="Triage agent wall-clock per email"
+    )
+    triage_tool_calls = meter.create_counter(
+        "asana.triage.tool_calls", description="Triage agent tool invocations by tool"
     )
 
     # --- Logs ---

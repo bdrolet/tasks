@@ -51,3 +51,15 @@ class EmailSummary:
 class CreatedTask:
     gid: str
     permalink_url: str
+
+
+@dataclass
+class Decision:
+    """Gate-2 verdict from services/triage.py. Defaults ARE the fail-open
+    state: actionable, no reason, no related task."""
+
+    actionable: bool = True
+    reason: str = ""
+    related_task_gid: str | None = None
+    evidence: list = field(default_factory=list)
+    outcome: str = "actionable"  # actionable | suppressed | attached | fail_open
