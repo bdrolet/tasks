@@ -1,6 +1,7 @@
 # Standing-Context Gate — Design
 
 **Date:** 2026-08-18
+**Revised:** 2026-08-19 — after review
 **Status:** Pending review
 
 ## Goal
@@ -19,6 +20,9 @@ if not policy.warrants_task(event):   # category in {urgent, review, respond}
 That is the whole gate. This spec adds a **second gate**, after enrichment,
 that asks one question: *given what is declared true about Ben right now, does
 this email still require anything of him?*
+
+It also introduces the declared-facts file that gate reads, and gives
+`services/deadline.py` a second section of the same file to read.
 
 ## The evidence
 
@@ -87,13 +91,66 @@ log eight false positives in two families. This is a third:
 The third family is the only one that cannot be derived. It must be written
 down. That is the whole mechanism.
 
+## The context file
+
+**`context/standing-context.md`** — a new top-level directory, sectioned by
+consumer.
+
+```markdown
+# Standing context
+
+## Roles
+
+### Assistant Coach, West Portal Proud Panthers (SF Microsoccer / SF Vikings)
+**Ended 2026-08-14.** Ben resigned; Christy Dillon is handling the
+replacement. Elijah remains a player on the team.
+
+- Coach- and admin-directed mail — schedules to review, coach admin
+  requirements, Micro Admin broadcasts — is NOT actionable.
+- Mail about Elijah as a player — invitations, rosters, parent logistics —
+  IS actionable.
+
+## Calendar
+
+- SFUSD 2026-27 fall term: 2026-08-17 to 2026-12-18.
+- West Portal Elementary day: 7:50am-2:05pm Mon/Tue/Thu/Fri, 7:50am-12:50pm Wed.
+```
+
+**Why a directory and not `docs/`:** `terraform/cloud_functions.tf` excludes
+`docs` from the Cloud Function source archive, so a file there would never
+reach the running function. The archive's `excludes` is a denylist, so a new
+top-level `context/` ships by default. This also keeps small runtime data out
+of `docs/`, which holds plan documents in the hundreds of KB that have no
+business in the function.
+
+**Required companion change:** `.github/workflows/deploy.yml`'s `paths:` filter
+is an allowlist. `context/**` must be added to it, or fact edits merge to
+`main` and silently never deploy. This is a one-line, one-time change; it is
+called out here because forgetting it produces a silent no-op on the one file
+whose entire purpose is changing behavior.
+
+**Why prose, not config:** the consumer is a model. Prose can express the
+`Lee@sfvikings.com` distinction — same sender, opposite verdicts, decided by
+what the mail is *about* — that no schema can encode. It is also the format
+`docs/more_context_needed.md` and `docs/no_action_needed_example.md` already
+use.
+
+**Sections are addressed by heading.** `standing_context.section("Roles")`
+returns that section's body, or `""` if absent. Each consumer reads only what
+it needs: the task gate reads `Roles`, deadline extraction reads `Calendar`.
+This keeps per-call token cost proportional to relevance rather than to the
+file's total size.
+
+Retiring a fact is deleting its block. There is no expiry field to maintain and
+no matcher to operate on.
+
 ## Design
 
-### Where the gate runs
+### Gate 2 — task suppression
 
 ```
-policy.warrants_task(event)          gate 1 — category, free, unchanged
-email_summary.generate(event)        Haiku call — already happens
+policy.warrants_task(event)               gate 1 — category, free, unchanged
+email_summary.generate(event)             Haiku call — already happens
 policy.survives_context(summary, event)   gate 2 — NEW
 asana.create_task(...)
 ```
@@ -108,49 +165,9 @@ Gate 2 sits **after** enrichment for three reasons:
    round-trip — the same trade-off, decided the same way, as the title
    enrichment in `2026-07-20-task-title-enrichment-design.md`.
 
-### Where the facts live
-
-**`services/standing_context.py`, as a module-level string constant.**
-
-This is forced by deployment, not preference. `terraform/cloud_functions.tf`
-excludes `docs` from the source archive, so a facts file under `docs/` would
-never reach the running function. The archive ships `services/`, and
-`.github/workflows/deploy.yml` already triggers on `services/**`, so a fact
-edit deploys itself with no new plumbing.
-
-*Rejected: a new top-level `context/` directory.* It would ship (the archive's
-`excludes` is a denylist), and it would keep the prose in a `.md` file. But
-`deploy.yml`'s `paths:` filter is an allowlist — forgetting to add `context/**`
-means fact edits merge to `main` and silently never deploy. A silent
-no-op on the file whose entire purpose is to change behavior is the worst
-available failure mode.
-
-The content is prose, not config, because the consumer is a model and because
-prose can express the `Lee@sfvikings.com` distinction that no schema can:
-
-```python
-STANDING_FACTS = """
-## Roles
-
-- **Assistant Coach, West Portal Proud Panthers (SF Microsoccer / SF Vikings)**
-  — ENDED 2026-08-14. Ben resigned; Christy Dillon is handling the
-  replacement. Elijah remains a player on the team.
-  - Coach- and admin-directed mail — schedules to review, coach admin
-    requirements, Micro Admin broadcasts — is NOT actionable.
-  - Mail about Elijah as a player — invitations, rosters, parent logistics —
-    IS actionable.
-"""
-```
-
-Re-enabling next season is deleting that block. That directly answers the
-requirement that suppression not be permanent: there is no expiry field to
-maintain and no matcher to perform surgery on.
-
-### The prompt extension
-
 `services/email_summary.py` currently asks Haiku for
-`{"key_points": [...], "title": "..."}`. When `STANDING_FACTS` is non-empty,
-the prompt gains the facts block and two output fields:
+`{"key_points": [...], "title": "..."}`. When the `Roles` section is non-empty,
+the prompt gains that section and two output fields:
 
 ```json
 {
@@ -167,9 +184,25 @@ require nothing of him, and name the fact in `actionable_reason`. If no fact
 clearly applies, set `actionable` to true. Do not reason beyond the facts
 given."*
 
-When `STANDING_FACTS` is empty the prompt is unchanged and the gate is skipped
-entirely — zero cost, zero behavior change. That is the state the repo ships in
-until the first fact is added.
+When the `Roles` section is empty or the file is absent, the prompt is
+unchanged and the gate is skipped entirely — zero cost, zero behavior change.
+That is the state the repo ships in until the first fact is added.
+
+### Deadline context
+
+`services/deadline.py` makes a Sonnet call for P0/P1 mail asking for an
+explicit deadline. It is given today's date and nothing else, so relative
+deadlines that depend on Ben's calendar ("before school starts", "by the end
+of the fall session") resolve to `null`.
+
+The `Calendar` section is injected into that existing prompt, ahead of the
+current `Today is {today}` line. No new call, no new model, no change to the
+return contract — still an ISO date or `null`.
+
+Scope discipline: `Calendar` holds **dates and recurring schedules only**. It is
+not a second place to describe roles, and the deadline prompt is not asked to
+judge actionability. The two sections stay single-purpose so neither consumer
+inherits the other's failure modes.
 
 ### Fail-open contract
 
@@ -182,26 +215,80 @@ path creates the task:
   `EmailSummary`).
 - `actionable: false` with no `actionable_reason` → create. A suppression that
   cannot name its justification is not trustworthy enough to act on.
-- `event["category"] == "urgent"` → create, unconditionally. Gate 2 does not
-  apply to urgent mail. A stale fact suppressing a P0 is the worst outcome
-  this design can produce, and urgent is cheap to exempt. Reversible later if
-  it proves over-cautious.
+- Missing or unreadable `context/standing-context.md` → create.
+- `event["category"] == "urgent"` → create, unconditionally.
 
 The asymmetry is deliberate: a spurious task costs seconds to close; a
 swallowed message about a child's team placement is unbounded.
 
-### Observability
+**On the urgent exemption, precisely.** It does *not* make facts fresher or the
+model more accurate. A stale or badly-worded fact is equally wrong for
+`review` and `respond` mail, and that mail can matter. What the exemption does
+is cap the blast radius of any gate error — model misjudgment, sloppy authoring,
+or genuine decay — by keeping the highest-cost category out of reach. It is a
+seatbelt, not a fix. It is nearly free because the mail this gate targets
+classifies as `review`, so exempting `urgent` costs no coverage on the known
+case. Reversible if it proves over-cautious.
 
-Suppression must be visible, not silent.
+### Staleness
 
-- New counter `asana.tasks_suppressed` (exports as `asana_tasks_suppressed`,
-  matching the existing `asana_` series), with attributes `category` and
-  `importance`.
-- Every suppression logs at INFO with `message_id`, the generated title, and
-  `actionable_reason` — so `fetch-tasks-logs` shows what was dropped and why.
+A fact goes stale in four ways. Three are dangerous, one is not:
 
-The reason is deliberately *not* a metric attribute: it is free text from a
-model and would blow up cardinality.
+| Mode | Example | Direction |
+|---|---|---|
+| Role resumes, fact remains | Ben coaches again in 2027; "SafeSport cert expired, you cannot be on the field Saturday" is suppressed | **Dangerous** |
+| Fact written too broadly | "SF Vikings mail is not actionable" eats Elijah's player invitation from `Lee@` | **Dangerous** (authoring error, not decay) |
+| Role changes shape | Steps down as coach, becomes team manager — admin mail is signal again | **Dangerous** |
+| Subject leaves entirely | Elijah leaves the team; player mail keeps creating tasks | Harmless — over-creates |
+
+The dangerous direction is always the same: the fact asserts "not actionable"
+and reality disagrees.
+
+Two mitigations, both cheap:
+
+1. **The suppression record below makes staleness queryable.** "What has this
+   fact eaten, and over what period" is a SQL query rather than an
+   archaeological dig through logs.
+2. **`Review by: YYYY-MM` on each fact block.** The Cloud Scheduler
+   `tasks-escalation` cron already runs daily at 06:00; it can surface fact
+   blocks past their review date alongside overdue tasks. *Proposed, not
+   assumed — see open questions.*
+
+### Recording suppressions
+
+Log **and** database. No Asana artifact — a P3 reference row would re-create
+the clutter this gate exists to remove.
+
+New table in `repo/schema.sql`:
+
+```sql
+CREATE TABLE IF NOT EXISTS suppressed_emails (
+    message_id  TEXT PRIMARY KEY,
+    category    TEXT NOT NULL,
+    importance  TEXT NOT NULL,
+    subject     TEXT,
+    title       TEXT,          -- the task title that would have been created
+    reason      TEXT NOT NULL, -- the model's actionable_reason
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+`schema.sql` is `CREATE TABLE IF NOT EXISTS` throughout and `scripts/migrate_db.py`
+executes the whole file, so the migration is a re-run of the existing script.
+
+Written through a new `repo/suppressions.py::insert`, following the existing
+best-effort DB convention: a write failure logs at WARNING and does **not**
+reverse the suppression. The decision was already made on evidence; undoing it
+because Cloud SQL blipped would make task creation non-deterministic, which is
+worse than a missing audit row. This is the one place the fail-open principle
+deliberately does not apply, because the failure is in *recording* the
+decision, not in *making* it.
+
+Also emitted: counter `asana.tasks_suppressed` (exports as
+`asana_tasks_suppressed`, matching the existing `asana_` series) with
+attributes `category` and `importance`. The reason is deliberately not a metric
+attribute — it is free text from a model and would blow up cardinality. It
+lives in the log line and the table.
 
 ### Layering
 
@@ -209,29 +296,39 @@ Per the repo's layer rules:
 
 | File | Change | Concern |
 |---|---|---|
-| `services/standing_context.py` | **new** | Holds `STANDING_FACTS`. No logic. |
+| `context/standing-context.md` | **new** | The facts. Not code. |
+| `services/standing_context.py` | **new** | Loads and caches the file; `section(name)` accessor. Returns `""` on any read failure. |
 | `services/policy.py` | `survives_context(summary, event)` added | Both gates in one file — CLAUDE.md: "Changing what becomes a task is a change HERE." |
-| `services/email_summary.py` | prompt + parse | Transport for the extra fields only. |
-| `models/events.py` | `EmailSummary` gains `actionable: bool = True`, `actionable_reason: str \| None = None` | Pure type; default `True` is the fail-open default. |
-| `handlers/task_create.py` | gate 2 call after `generate()` | Orchestration only. |
+| `services/email_summary.py` | prompt + parse | Transport for the two new fields only. |
+| `services/deadline.py` | prompt gains the `Calendar` section | Return contract unchanged. |
+| `models/events.py` | `EmailSummary` gains `actionable: bool = True`, `actionable_reason: str \| None = None` | Pure type; the `True` default *is* the fail-open default. |
+| `handlers/task_create.py` | gate 2 call after `generate()`; suppression record | Orchestration only. |
+| `repo/suppressions.py` | **new** | `insert()`. Takes an open connection. |
+| `repo/schema.sql` | `suppressed_emails` table | — |
 | `clients/otel.py` | `tasks_suppressed` counter | I/O only. |
+| `.github/workflows/deploy.yml` | `context/**` in `paths:` | Without this, fact edits never deploy. |
 
-No new client, no new dependency, no schema migration, no terraform change.
+No new client, no new dependency, no terraform change.
 
 ### Testing
 
-- `tests/test_policy.py` — `survives_context` truth table: actionable true /
-  false / missing / false-without-reason / urgent-category exemption.
-- `tests/test_standing_context.py` — the empty-facts path skips the gate;
-  a non-empty fixture reaches the prompt.
-- `tests/test_email_summary.py` — extend for the two new fields, including a
-  malformed-JSON case asserting `actionable` defaults to `True`.
-- `tests/test_task_create.py` — a suppressed summary creates no Asana task and
-  increments the counter; an actionable one is unaffected.
+- `tests/test_standing_context.py` — section extraction by heading; missing
+  file returns `""`; missing section returns `""`; caching.
+- `tests/test_policy.py` — `survives_context` truth table: actionable
+  true / false / missing / false-without-reason / urgent-category exemption.
+- `tests/test_email_summary.py` — the two new fields; malformed JSON asserts
+  `actionable` defaults to `True`; empty `Roles` section leaves the prompt
+  unchanged.
+- `tests/test_deadline.py` — `Calendar` section reaches the prompt; empty
+  section leaves the prompt unchanged.
+- `tests/test_task_create.py` — a suppressed summary creates no Asana task,
+  increments the counter, and writes the row; a DB failure on that write does
+  not resurrect the task; an actionable summary is unaffected.
 
-The Haiku call is mocked throughout, as it is today. Model judgment quality is
-verified manually against the three known Microsoccer emails plus the two
-`Lee@sfvikings.com` player invitations, which must survive.
+The Claude calls are mocked throughout via `monkeypatch.setattr(claude, ...)`,
+as they are today. Model judgment quality is verified manually against the
+three known Microsoccer emails plus the two `Lee@sfvikings.com` player
+invitations, which must survive.
 
 ## Out of scope
 
@@ -240,21 +337,24 @@ verified manually against the three known Microsoccer emails plus the two
 - **The mail-history and existing-task checks** from `more_context_needed.md`.
   Both require new search calls and belong in their own spec.
 - **The no-action-phrase veto** from `no_action_needed_example.md`. It shares
-  gate 2's position in the pipeline and should reuse this plumbing, but it is a
-  separate rule with its own evidence base. Deliberately sequenced after this.
-- **Runtime editing.** Facts change on the order of months. A PR is the right
-  ceremony, and it gives the change a review and a history.
+  gate 2's position and should reuse this plumbing, but it is a separate rule
+  with its own evidence base. Deliberately sequenced after this.
+- **An API endpoint over `suppressed_emails`.** The table is queryable via
+  `psql` for now. Add a route when there is a second reader.
+- **Runtime editing of facts.** They change on the order of months. A PR is the
+  right ceremony and gives the change a review and a history.
 
 ## Open questions
 
-1. **Does `STANDING_FACTS` belong in the deadline call too?** `deadline.py`
-   makes a Sonnet call for P0/P1 mail. A resigned role arguably affects
-   deadline extraction as well. Deferred — no evidence yet that it misfires.
-2. **How large can the facts grow before per-call token cost matters?** At one
-   fact this is negligible. Revisit past roughly 1k tokens, at which point
-   pre-filtering facts by relevance becomes worth designing.
-3. **Should suppressed emails leave any trace in Asana?** Currently they leave
-   only a log line and a metric. A P3 reference row is the alternative
-   (considered and set aside during brainstorming as re-creating the clutter
-   this removes), but if the log proves too invisible in practice, this is the
-   natural second iteration.
+1. **Is the `Review by:` staleness sweep worth building now?** It reuses the
+   existing daily cron and is perhaps 30 lines, but it is the only piece here
+   that is speculative rather than driven by an observed failure. Default if
+   unanswered: leave it out, rely on the suppression table.
+2. **How large can the context file grow before per-call cost matters?**
+   Sectioning bounds this — each consumer pays only for its own section. At
+   present size it is negligible. Revisit if any single section passes roughly
+   1k tokens, at which point relevance-filtering within a section becomes worth
+   designing.
+3. **Should `Calendar` be consulted for P2/P3 mail?** Deadline extraction runs
+   only for P0/P1 today. Widening it is a separate cost/benefit question this
+   spec does not reopen.
