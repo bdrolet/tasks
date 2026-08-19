@@ -102,11 +102,12 @@ consumer.
 ## Roles
 
 ### Assistant Coach, West Portal Proud Panthers (SF Microsoccer / SF Vikings)
-**Ended 2026-08-14.** Ben resigned; Christy Dillon is handling the
-replacement. Elijah remains a player on the team.
+**Ended 2026-08-14, for the 2026 fall season — that season runs 2026-09-12 to
+2026-12-18.** Ben resigned; Christy Dillon is handling the replacement.
+Elijah remains a player on the team.
 
 - Coach- and admin-directed mail — schedules to review, coach admin
-  requirements, Micro Admin broadcasts — is NOT actionable.
+  requirements, Micro Admin broadcasts — is NOT actionable for this season.
 - Mail about Elijah as a player — invitations, rosters, parent logistics —
   IS actionable.
 
@@ -144,6 +145,30 @@ file's total size.
 Retiring a fact is deleting its block. There is no expiry field to maintain and
 no matcher to operate on.
 
+### Facts carry their own scope
+
+**A fact that applies only for a bounded period states that period in its own
+prose**, as the coach block above does ("for the 2026 fall season — that season
+runs 2026-09-12 to 2026-12-18"). The model is given today's date and decides
+whether the fact still applies.
+
+This is the primary defence against stale facts, and it is preferred over any
+external expiry mechanism because it requires no machinery, no scheduled job,
+and no human acting on a reminder. A fact whose window has closed simply stops
+being applied, and the failure direction is over-creating tasks — the
+survivable one.
+
+**A fact with no stated end is perpetual.** That must be a deliberate choice by
+the author, not an oversight: some facts genuinely have no season ("Ben is no
+longer a customer of X"), and inventing an end date for them is worse than
+stating none.
+
+**This imposes a hard requirement on gate 2's prompt:** it must include today's
+date. `services/deadline.py` already opens with `Today is {today}`;
+`services/email_summary.py` does not pass a date at all. Gate 2 rides on the
+summary call, so scoped facts are uninterpretable without adding it. This is a
+one-line change and a precondition for the whole approach, not an enhancement.
+
 ## Design
 
 ### Gate 2 — task suppression
@@ -178,11 +203,15 @@ the prompt gains that section and two output fields:
 }
 ```
 
-Prompt language, in substance: *"Below are standing facts about the recipient.
-Set `actionable` to false ONLY if one of these facts clearly makes this email
-require nothing of him, and name the fact in `actionable_reason`. If no fact
-clearly applies, set `actionable` to true. Do not reason beyond the facts
-given."*
+Prompt language, in substance: *"Today is {today}. Below are standing facts
+about the recipient. Some state the period they apply to; a fact whose period
+has passed does not apply. Set `actionable` to false ONLY if a fact that
+currently applies clearly makes this email require nothing of him, and name
+that fact in `actionable_reason`. If no fact clearly applies, set `actionable`
+to true. Do not reason beyond the facts given."*
+
+The `Today is {today}` line is **required**, not decorative — scoped facts are
+uninterpretable without it, and `email_summary.generate` passes no date today.
 
 When the `Roles` section is empty or the file is absent, the prompt is
 unchanged and the gate is skipped entirely — zero cost, zero behavior change.
@@ -244,15 +273,29 @@ A fact goes stale in four ways. Three are dangerous, one is not:
 The dangerous direction is always the same: the fact asserts "not actionable"
 and reality disagrees.
 
-Two mitigations, both cheap:
+**Mode 1 is handled by scoping** (see "Facts carry their own scope"). A fact
+that names the season it belongs to stops applying when that season ends, with
+no human in the loop. This is the only mode with a clean structural fix, and it
+is also the likeliest one, since roles are usually seasonal.
 
-1. **The suppression record below makes staleness queryable.** "What has this
-   fact eaten, and over what period" is a SQL query rather than an
-   archaeological dig through logs.
-2. **`Review by: YYYY-MM` on each fact block.** The Cloud Scheduler
-   `tasks-escalation` cron already runs daily at 06:00; it can surface fact
-   blocks past their review date alongside overdue tasks. *Proposed, not
-   assumed — see open questions.*
+**Modes 2 and 3 have no structural fix and this spec does not claim one.**
+Both are authoring errors rather than decay — mode 2 is wrong on the day it is
+written, and mode 3 goes wrong *inside* the validity window, so no end date
+catches it. Their backstops are:
+
+1. **Fail-open.** A fact must clearly apply for the gate to act. Ambiguity
+   creates the task.
+2. **The suppression record.** "What has this fact eaten, and over what
+   period" is a SQL query rather than an archaeological dig through logs — the
+   only way an invisible failure becomes visible.
+3. **Review at authoring time.** A fact lands via PR. The `Lee@sfvikings.com`
+   distinction is exactly the thing a reviewer should be looking for, and this
+   spec's sender table is the reason it is documented.
+
+*Considered and rejected: a `Review by: YYYY-MM` field swept by the existing
+daily `tasks-escalation` cron.* Scoping supersedes it for mode 1, and it does
+nothing for modes 2 and 3 — it would add a scheduled job, a parser, and a
+recurring notification to solve a problem the prose already solves.
 
 ### Recording suppressions
 
@@ -299,7 +342,7 @@ Per the repo's layer rules:
 | `context/standing-context.md` | **new** | The facts. Not code. |
 | `services/standing_context.py` | **new** | Loads and caches the file; `section(name)` accessor. Returns `""` on any read failure. |
 | `services/policy.py` | `survives_context(summary, event)` added | Both gates in one file — CLAUDE.md: "Changing what becomes a task is a change HERE." |
-| `services/email_summary.py` | prompt + parse | Transport for the two new fields only. |
+| `services/email_summary.py` | prompt gains today's date + the `Roles` section; parses the two new fields | Transport only. The date is a precondition for scoped facts. |
 | `services/deadline.py` | prompt gains the `Calendar` section | Return contract unchanged. |
 | `models/events.py` | `EmailSummary` gains `actionable: bool = True`, `actionable_reason: str \| None = None` | Pure type; the `True` default *is* the fail-open default. |
 | `handlers/task_create.py` | gate 2 call after `generate()`; suppression record | Orchestration only. |
@@ -318,7 +361,7 @@ No new client, no new dependency, no terraform change.
   true / false / missing / false-without-reason / urgent-category exemption.
 - `tests/test_email_summary.py` — the two new fields; malformed JSON asserts
   `actionable` defaults to `True`; empty `Roles` section leaves the prompt
-  unchanged.
+  unchanged; today's date appears in the prompt whenever `Roles` is non-empty.
 - `tests/test_deadline.py` — `Calendar` section reaches the prompt; empty
   section leaves the prompt unchanged.
 - `tests/test_task_create.py` — a suppressed summary creates no Asana task,
@@ -326,9 +369,13 @@ No new client, no new dependency, no terraform change.
   not resurrect the task; an actionable summary is unaffected.
 
 The Claude calls are mocked throughout via `monkeypatch.setattr(claude, ...)`,
-as they are today. Model judgment quality is verified manually against the
-three known Microsoccer emails plus the two `Lee@sfvikings.com` player
-invitations, which must survive.
+as they are today.
+
+Model judgment quality is verified manually against five real emails: the three
+Micro Admin messages (must suppress) and the two `Lee@sfvikings.com` player
+invitations (must survive). Scope expiry is verified by running the same three
+Micro Admin emails against a frozen date after 2026-12-18 — they must **stop**
+being suppressed, since the season the fact names has ended.
 
 ## Out of scope
 
@@ -346,15 +393,11 @@ invitations, which must survive.
 
 ## Open questions
 
-1. **Is the `Review by:` staleness sweep worth building now?** It reuses the
-   existing daily cron and is perhaps 30 lines, but it is the only piece here
-   that is speculative rather than driven by an observed failure. Default if
-   unanswered: leave it out, rely on the suppression table.
-2. **How large can the context file grow before per-call cost matters?**
+1. **How large can the context file grow before per-call cost matters?**
    Sectioning bounds this — each consumer pays only for its own section. At
    present size it is negligible. Revisit if any single section passes roughly
    1k tokens, at which point relevance-filtering within a section becomes worth
    designing.
-3. **Should `Calendar` be consulted for P2/P3 mail?** Deadline extraction runs
+2. **Should `Calendar` be consulted for P2/P3 mail?** Deadline extraction runs
    only for P0/P1 today. Widening it is a separate cost/benefit question this
    spec does not reopen.
