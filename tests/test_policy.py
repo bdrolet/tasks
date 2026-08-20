@@ -32,3 +32,25 @@ def test_warrants_task(category, expected):
 )
 def test_no_action_phrase(points, expected):
     assert policy.no_action_phrase(points) == expected
+
+
+@pytest.mark.parametrize(
+    ("points", "expected"),
+    [
+        # Routine, successful autopay/automatic-payment mentions still veto.
+        (["Your automatic payment was processed successfully"], "automatic payment"),
+        (["Enrolled in autopay"], "autopay"),
+        # A failure/attention-needed signal on the SAME key point must fail
+        # open — an unconditional veto here would swallow a real task.
+        (["Your automatic payment failed — update your card"], None),
+        (["Autopay could not be processed; action required"], None),
+        # Scanning continues past a disqualified conditional match to find
+        # a later, genuine unconditional no-action point.
+        (
+            ["Your automatic payment failed — update your card", "No action required for this month"],
+            "no action required",
+        ),
+    ],
+)
+def test_no_action_phrase_conditional_autopay_veto(points, expected):
+    assert policy.no_action_phrase(points) == expected
