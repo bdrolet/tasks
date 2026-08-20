@@ -246,6 +246,16 @@ OUTPUT_SCHEMA: dict = {
             "anyOf": [{"type": "string"}, {"type": "null"}],
             "description": "GID of an existing task covering the same matter, else null.",
         },
+        "resolves": {
+            "type": "boolean",
+            "description": (
+                "True only when related_task_gid is set, that task is still "
+                "OPEN, and this email is its resolution — the thing it was "
+                "waiting for has happened, so Ben should close it. False for a "
+                "task that is already completed, or when the email merely "
+                "concerns the same matter."
+            ),
+        },
         "evidence": {
             "type": "array",
             "items": {
@@ -260,7 +270,7 @@ OUTPUT_SCHEMA: dict = {
             },
         },
     },
-    "required": ["actionable", "reason", "related_task_gid", "evidence"],
+    "required": ["actionable", "reason", "related_task_gid", "resolves", "evidence"],
     "additionalProperties": False,
 }
 
@@ -273,6 +283,7 @@ Rules:
 - "no action required", "no action is needed", "for your records", "automatic payment", "autopay", "will be charged automatically" — in this email or in prior mail from the same sender — disqualifies a payment or review task.
 - The sender's schedule (a statement posted, a payment series ending, a feature auto-enabling on a date) is not Ben's deadline. Broadcast vendor announcements default to not actionable. Never treat "Action required" as present unless the source says it.
 - If an existing task covers the same matter — same vendor/amount/instrument within small variance, same thread, same saga — set related_task_gid to it, open or completed, but only after you have fetched it (get_task) or seen enough of it to be sure. If the email shows a closed matter has regressed, leave related_task_gid null and set actionable true.
+- Set resolves to true only when related_task_gid is set, that task is still OPEN, and this email is its resolution — the refund landed, the payment cleared, the reply arrived, the thing the task was waiting for has happened. Resolves is false when the related task is already completed (there is nothing left to close) and when the email merely concerns the same matter (another notice in the saga, a duplicate, a status update that changes nothing). Ben reads this as "close this task", so do not claim a resolution you have not seen evidence of.
 - When more than one task covers the same matter, set related_task_gid to exactly one of them: prefer an open task over a closed one, and among tasks in the same state prefer the one whose title and description match this email most specifically (same amount, instrument, or transaction id).
 - Name every lookup or fact you relied on in evidence (kind: email|task|fact|thread; ref: message_id, task gid, fact heading, or "thread"; note: what it showed).
 - Do not reason beyond the facts given and the evidence you retrieved.
@@ -337,7 +348,14 @@ def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exis
     if gid is not None:
         if not reason:
             return _fail_open("no_reason", message_id)
-        return Decision(actionable=False, reason=reason, related_task_gid=str(gid), evidence=evidence, outcome="attached")
+        return Decision(
+            actionable=False,
+            reason=reason,
+            related_task_gid=str(gid),
+            resolves=bool(data.get("resolves")),
+            evidence=evidence,
+            outcome="attached",
+        )
     if actionable:
         return Decision(actionable=True, reason=reason, evidence=evidence, outcome="actionable")
     if not reason:

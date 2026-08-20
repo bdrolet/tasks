@@ -27,15 +27,26 @@ def _suppress(
     source: str,
     related_task_gid: str | None,
     evidence: list,
+    resolves: bool = False,
 ) -> None:
     """Gate-2 outcome: no task. Optionally attach the email to a related task
     as a comment, then record. Every step is best-effort — the decision was
-    made on evidence and a recording failure never reverses it."""
+    made on evidence and a recording failure never reverses it.
+
+    The gate never closes a task. When the email settles the related task's
+    matter (resolves=True) the comment says so and asks Ben to close it — the
+    judgement is the model's, the decision stays his, and an open task with a
+    "close me" comment is obvious on review in a way a silent close is not."""
     if related_task_gid:
+        lead = (
+            "Looks resolved — close this task if you agree."
+            if resolves
+            else "Related email:"
+        )
         try:
             asana.create_story(
                 related_task_gid,
-                text=f"Related email: {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(" —"),
+                text=f"{lead} {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(" —"),
             )
         except Exception:
             logger.exception(
@@ -64,11 +75,12 @@ def _suppress(
             "importance": event["importance"],
             "source": source,
             "attached": "true" if related_task_gid else "false",
+            "resolves": "true" if resolves else "false",
         },
     )
     logger.info(
-        "Task suppressed source=%s related=%s message_id=%s reason=%s",
-        source, related_task_gid, event["message_id"], reason,
+        "Task suppressed source=%s related=%s resolves=%s message_id=%s reason=%s",
+        source, related_task_gid, resolves, event["message_id"], reason,
     )
 
 
@@ -87,6 +99,7 @@ def handle(event: EmailClassifiedEvent) -> None:
             source="agent",
             related_task_gid=decision.related_task_gid,
             evidence=decision.evidence,
+            resolves=decision.resolves,
         )
         return
 

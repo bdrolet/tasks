@@ -33,12 +33,13 @@ def _gid_verifies(monkeypatch, exists: bool):
     )
 
 
-def _ok(actionable=False, reason="coach fact applies", gid=None, evidence=None):
+def _ok(actionable=False, reason="coach fact applies", gid=None, evidence=None, resolves=False):
     return json.dumps(
         {
             "actionable": actionable,
             "reason": reason,
             "related_task_gid": gid,
+            "resolves": resolves,
             "evidence": evidence if evidence is not None else [{"kind": "fact", "ref": "Assistant Coach", "note": "resigned"}],
         }
     )
@@ -191,7 +192,8 @@ def test_duration_metric_recorded(monkeypatch):
 def test_output_schema_is_strict_object():
     s = triage.OUTPUT_SCHEMA
     assert s["type"] == "object" and s["additionalProperties"] is False
-    assert set(s["required"]) == {"actionable", "reason", "related_task_gid", "evidence"}
+    assert s["properties"]["resolves"]["type"] == "boolean"
+    assert set(s["required"]) == {"actionable", "reason", "related_task_gid", "resolves", "evidence"}
 
 
 def test_related_task_gid_uses_anyof_nullable_form():
@@ -212,5 +214,5 @@ def test_system_prompt_carries_the_rules():
     p = triage.SYSTEM_PROMPT
     for needle in ("ONLY", "period", "cc", "no action required", "automatic payment",
                    "related_task_gid", "evidence", "Action required", "not evidence",
-                   "exactly one", "prefer an open task"):
+                   "exactly one", "prefer an open task", "resolves to true only"):
         assert needle in p, needle

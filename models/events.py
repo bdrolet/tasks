@@ -61,5 +61,6 @@ class Decision:
     actionable: bool = True
     reason: str = ""
     related_task_gid: str | None = None
+    resolves: bool = False  # related task's matter is settled by this email
     evidence: list = field(default_factory=list)
     outcome: str = "actionable"  # actionable | suppressed | attached | fail_open

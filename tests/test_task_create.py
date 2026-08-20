@@ -238,7 +238,10 @@ def test_suppressed_decision_creates_nothing_and_records(monkeypatch):
             "evidence": [{"kind": "fact", "ref": "Coach", "note": "x"}],
         }
     ]
-    assert counts == [{"category": "review", "importance": "P1", "source": "agent", "attached": "false"}]
+    assert counts == [
+        {"category": "review", "importance": "P1", "source": "agent",
+         "attached": "false", "resolves": "false"}
+    ]
 
 
 def test_attached_decision_comments_on_related_task(monkeypatch):
@@ -254,6 +257,45 @@ def test_attached_decision_comments_on_related_task(monkeypatch):
     assert stories == [("t9", "Related email: Quarterly report — same refund — https://outlook.example/msg-123")]
     assert rows[0]["related_task_gid"] == "t9" and rows[0]["source"] == "agent"
     assert counts[0]["attached"] == "true"
+
+
+def test_resolving_decision_asks_ben_to_close(monkeypatch):
+    _stub_db(monkeypatch)
+    rows = _stub_suppressions(monkeypatch)
+    counts = _count_suppressed(monkeypatch)
+    _stub_enrichment(monkeypatch)
+    created = _capture_create(monkeypatch)
+    stories = _stub_story(monkeypatch)
+    _stub_triage(
+        monkeypatch,
+        Decision(actionable=False, reason="refund landed", related_task_gid="t9",
+                 resolves=True, outcome="attached"),
+    )
+    task_create.handle(make_email_event())
+    assert created == {}
+    assert stories == [
+        ("t9", "Looks resolved — close this task if you agree. Quarterly report"
+               " — refund landed — https://outlook.example/msg-123")
+    ]
+    assert counts[0]["resolves"] == "true"
+    assert rows[0]["related_task_gid"] == "t9"
+
+
+def test_non_resolving_attachment_keeps_the_plain_lead(monkeypatch):
+    _stub_db(monkeypatch)
+    _stub_suppressions(monkeypatch)
+    counts = _count_suppressed(monkeypatch)
+    _stub_enrichment(monkeypatch)
+    _capture_create(monkeypatch)
+    stories = _stub_story(monkeypatch)
+    _stub_triage(
+        monkeypatch,
+        Decision(actionable=False, reason="same saga", related_task_gid="t9", outcome="attached"),
+    )
+    task_create.handle(make_email_event())
+    assert stories[0][1].startswith("Related email:")
+    assert "close this task" not in stories[0][1]
+    assert counts[0]["resolves"] == "false"
 
 
 def test_story_failure_does_not_resurrect_task(monkeypatch):
