@@ -2,9 +2,12 @@
 
 **Date:** 2026-08-18
 **Revised:** 2026-08-19 — after review; gate 2 became a triage agent with
-email and task search tools, bringing `docs/more_context_needed.md` and
-`docs/no_action_needed_example.md` into scope
-**Status:** Pending review
+email and task search tools, bringing the logged more-context-needed and
+no-action-needed false positives into scope
+**Status:** Implemented and deployed. The two false-positive logs this argues
+from (`docs/more_context_needed.md`, `docs/no_action_needed_example.md`) were
+deleted once the gate shipped: they quoted third parties' mail verbatim in a
+public repo, and their evidence is summarised below.
 
 ## Goal
 
@@ -36,10 +39,10 @@ must handle all three; the first is the one that motivated it.
 
 ### Standing context — the role changed, the mail did not
 
-Ben resigned as Assistant Coach of the West Portal Proud Panthers on
-2026-08-14. SF Microsoccer's admin mail continues, and he wants to keep
-receiving it — he is still the parent of a player on that team. He does not
-want it becoming action items.
+Ben resigned as assistant coach of his child's youth sports team on
+2026-08-14. The club's admin mail continues, and he wants to keep receiving it
+— he is still the parent of a player on that team. He does not want it
+becoming action items.
 
 Three Micro Admin emails have already produced three P1 tasks:
 
@@ -60,8 +63,7 @@ by matching on the email.
 
 ### More context needed — the answer was in mail or in Asana
 
-`docs/more_context_needed.md` logs two tasks that passed the policy gate and
-were moot on arrival:
+Two logged tasks passed the policy gate and were moot on arrival:
 
 - **Xfinity bill** (`[P1] Review and pay Xfinity bill`, gid `1217530946487945`)
   — the mailbox held "Thanks for your payment — your automatic payment was
@@ -76,8 +78,7 @@ were moot on arrival:
 
 ### No action needed — the thread itself was enough
 
-`docs/no_action_needed_example.md` logs five tasks the thread alone
-disqualified: two acknowledgment replies to Ben's own coaching-resignation
+Five further logged tasks were ones the thread alone disqualified: two acknowledgment replies to Ben's own coaching-resignation
 email (`h3h`, `pn0` — Ben was the thread root, one reply had him on cc), and
 three informational notices (Zelle series ending, with "no action required"
 written into the generated key points; a Google Meet broadcast where the
@@ -90,25 +91,27 @@ and league mail reaches Ben from at least six addresses across four domains:
 
 | Sender | Carries | Actionable now? |
 |---|---|---|
-| `micro@sfvikings.com` | Micro Admin broadcasts | **No** — the target |
-| `Lee@sfvikings.com` | "Elijah Drolet has been invited to join West Portal Proud Panthers" | **Yes** — parent-side |
-| `noreply@sfvikings.org` | Account confirmations, player invites (note: `.org`) | Mixed |
-| `noreply@fs18.formsite.com` | Coach registration results | Was, no longer |
-| `khannegan@`, `aarongoose@`, `pauljthompson@`, `yalexander@` (gmail) | Practice cancelled, snack signups, game today | Mixed — personal addresses |
-| `noreply@groups.google.com` | Team Google Group invitations | — |
+| club admin, `@club.example` | Admin broadcasts | **No** — the target |
+| club registrar, same domain | "your child has been invited to join the team" | **Yes** — parent-side |
+| club no-reply, sibling domain | Account confirmations, player invites (note: a *different* TLD) | Mixed |
+| a forms vendor | Coach registration results | Was, no longer |
+| four parents' personal addresses | Practice cancelled, snack signups, game today | Mixed |
+| a Google Groups no-reply | Team group invitations | — |
+
+(Addresses are described rather than quoted: this repo is public, and half of
+them belong to other people. The shape is what matters to the argument.)
 
 Two failure modes, and the second is disqualifying:
 
-1. **Under-inclusive.** Muting `micro@sfvikings.com` leaves the next blast from
-   `Lee@` or a fresh `noreply@sfvikings.org` untouched. The address carrying
-   the noise has already changed once.
-2. **Over-inclusive.** `Lee@sfvikings.com` sends *both* admin traffic and
-   Elijah's player invitations. A domain mute on `sfvikings.com` swallows mail
-   about a child's team placement.
+1. **Under-inclusive.** Muting the admin address leaves the next blast from the
+   registrar, or from a fresh no-reply on the sibling domain, untouched. The
+   address carrying the noise has already changed once.
+2. **Over-inclusive.** The registrar sends *both* admin traffic and the player
+   invitations. A domain-wide mute swallows mail about a child's team
+   placement.
 
-Subject matching fares no better: the team is renamed annually — Prowling
-Panthers (SP25) → Speedy Panthers (2025-26) → Proud Panthers / "West Portal
-Panthers" (2026).
+Subject matching fares no better: the team is renamed every season, and has
+carried three different names across the last three.
 
 The discriminator is Ben's **role**, which is not a string in the email.
 
@@ -141,20 +144,22 @@ consumer.
 
 ## Roles
 
-### Assistant Coach, West Portal Proud Panthers (SF Microsoccer / SF Vikings)
-**Ended 2026-08-14, for the 2026 fall season — that season runs 2026-09-12 to
-2026-12-18.** Ben resigned; Christy Dillon is handling the replacement.
-Elijah remains a player on the team.
+### Assistant Coach, youth sports team
+Ben resigned this role on 2026-08-14, covering only the 2026 fall season
+(2026-09-12 to 2026-12-18); the club has assigned a replacement.
+**This fact stops applying after 2026-12-18 — judge coach- and admin-directed
+mail on its own terms from that date on.** Ben's child remains a player on the
+team throughout.
 
-- Coach- and admin-directed mail — schedules to review, coach admin
-  requirements, Micro Admin broadcasts — is NOT actionable for this season.
-- Mail about Elijah as a player — invitations, rosters, parent logistics —
-  IS actionable.
+- Through 2026-12-18, coach- and admin-directed mail — schedules to review,
+  coach admin requirements, club admin broadcasts — is NOT actionable.
+- Mail about his child as a player — invitations, rosters, parent logistics —
+  IS actionable at any time.
 
 ## Calendar
 
 - SFUSD 2026-27 fall term: 2026-08-17 to 2026-12-18.
-- West Portal Elementary day: 7:50am-2:05pm Mon/Tue/Thu/Fri, 7:50am-12:50pm Wed.
+- School day: 7:50am-2:05pm Mon/Tue/Thu/Fri, 7:50am-12:50pm Wed.
 ```
 
 **Why a directory and not `docs/`:** `terraform/cloud_functions.tf` excludes
@@ -171,9 +176,9 @@ called out here because forgetting it produces a silent no-op on the one file
 whose entire purpose is changing behavior.
 
 **Why prose, not config:** the consumer is a model. Prose can express the
-`Lee@sfvikings.com` distinction — same sender, opposite verdicts, decided by
+registrar distinction — same sender, opposite verdicts, decided by
 what the mail is *about* — that no schema can encode. It is also the format
-`docs/more_context_needed.md` and `docs/no_action_needed_example.md` already
+The two false-positive logs already
 use.
 
 **Sections are addressed by heading.** `standing_context.section("Roles")`
@@ -248,7 +253,7 @@ run.
 
 | Tool | Backs onto | Mirrors |
 |---|---|---|
-| `search_emails(query, mode="graph", limit=10)` | `clients/inbox_api.search` — **new**, `POST /search` on inbox-api; `graph` mode takes KQL (`from:micro@sfvikings.com`, `subject:...`), `db` mode searches processed mail with classification | `/searching-inbox-emails` |
+| `search_emails(query, mode="graph", limit=10)` | `clients/inbox_api.search` — **new**, `POST /search` on inbox-api; `graph` mode takes KQL (`from:someone@example.com`, `subject:...`), `db` mode searches processed mail with classification | `/searching-inbox-emails` |
 | `get_email(message_id)` | `clients/inbox_api.get_email` — exists | `/fetching-inbox-email` |
 | `search_tasks(query, semantic=False, completed=None, limit=10)` | in-process: `clients/vertex.embed` + `repo/task_index.semantic_candidates` for semantic, substring over `task_index.title/notes` otherwise; `completed=None` searches open and done; a `repo/tasks` lookup by `message_id` is always included so "this email already has a task" is one call | `/searching-tasks` |
 | `get_task(task_gid)` | `clients/asana.get_task_detail` + `get_stories` (description, due, completed, recent comments) | `/fetching-task` |
@@ -316,7 +321,7 @@ handler after the decision — the agent itself has no write tools.
 
 ### Deterministic backstop — the no-action phrase veto
 
-`no_action_needed_example.md` asks for a rule that is free to test: if the
+The no-action evidence asks for a rule that is free to test: if the
 enrichment's own key points contain an explicit no-action phrase, do not
 create the task. That check stays, and runs on the Haiku summary *after* the
 agent (the agent sees the email, not the summary):
@@ -380,9 +385,9 @@ A fact goes stale in four ways. Three are dangerous, one is not:
 | Mode | Example | Direction |
 |---|---|---|
 | Role resumes, fact remains | Ben coaches again in 2027; "SafeSport cert expired, you cannot be on the field Saturday" is suppressed | **Dangerous** |
-| Fact written too broadly | "SF Vikings mail is not actionable" eats Elijah's player invitation from `Lee@` | **Dangerous** (authoring error, not decay) |
+| Fact written too broadly | "all club mail is not actionable" eats a player invitation from the registrar | **Dangerous** (authoring error, not decay) |
 | Role changes shape | Steps down as coach, becomes team manager — admin mail is signal again | **Dangerous** |
-| Subject leaves entirely | Elijah leaves the team; player mail keeps creating tasks | Harmless — over-creates |
+| Subject leaves entirely | the child leaves the team; player mail keeps creating tasks | Harmless — over-creates |
 
 The dangerous direction is always the same: the fact asserts "not actionable"
 and reality disagrees.
@@ -403,7 +408,7 @@ catches it. Their backstops are:
    period" is a SQL query over `suppressed_emails.evidence` rather than an
    archaeological dig through logs — the only way an invisible failure
    becomes visible.
-3. **Review at authoring time.** A fact lands via PR. The `Lee@sfvikings.com`
+3. **Review at authoring time.** A fact lands via PR. The registrar
    distinction is exactly the thing a reviewer should be looking for, and this
    spec's sender table is the reason it is documented.
 
@@ -517,7 +522,7 @@ as they are today.
 
 Model judgment quality is verified manually against the real cases: the three
 Micro Admin messages (must suppress, evidence = the coach fact), the two
-`Lee@sfvikings.com` player invitations (must survive), Xfinity (must suppress,
+the registrar's player invitations (must survive), Xfinity (must suppress,
 evidence = prior payment mail), Disney (must attach to a completed task), the
 two coaching-thread replies (must suppress, evidence = thread root), Zelle and
 PayPal (must suppress, evidence = the email itself), Google Meet (must not

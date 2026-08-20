@@ -128,20 +128,21 @@ and decides whether it still applies. Retire a fact by deleting its block.
 
 ## Roles
 
-### Assistant Coach, West Portal Proud Panthers (SF Microsoccer / SF Vikings)
-**Ended 2026-08-14, for the 2026 fall season — that season runs 2026-09-12 to
-2026-12-18.** Ben resigned; Christy Dillon is handling the replacement.
-Elijah remains a player on the team.
+### Assistant Coach, youth sports team
+Ben resigned this role on 2026-08-14, covering only the 2026 fall season
+(2026-09-12 to 2026-12-18); the club has assigned a replacement.
+**This fact stops applying after 2026-12-18 — judge coach- and admin-directed
+mail on its own terms from that date on.** Ben's child remains a player on the
+team throughout.
 
-- Coach- and admin-directed mail — schedules to review, coach admin
-  requirements, Micro Admin broadcasts — is NOT actionable for this season.
-- Mail about Elijah as a player — invitations, rosters, parent logistics —
-  IS actionable.
+- Through 2026-12-18, coach- and admin-directed mail is NOT actionable.
+- Mail about his child as a player — invitations, rosters, parent logistics —
+  IS actionable at any time.
 
 ## Calendar
 
 - SFUSD 2026-27 fall term: 2026-08-17 to 2026-12-18.
-- West Portal Elementary day: 7:50am-2:05pm Mon/Tue/Thu/Fri, 7:50am-12:50pm Wed.
+- School day: 7:50am-2:05pm Mon/Tue/Thu/Fri, 7:50am-12:50pm Wed.
 ```
 
 - [ ] **Step 4: Write the loader**
@@ -860,7 +861,7 @@ def test_get_email_returns_body_and_recipients(monkeypatch):
             "from_email": "andrew@example.com",
             "from_name": "Andrew",
             "to": [{"name": "Ben", "address": "ben@drolet.cloud"}],
-            "cc": [{"name": "Christy", "address": "christy@example.com"}],
+            "cc": [{"name": "Sam", "address": "sam@example.com"}],
             "received_at": "2026-08-14T16:16:00Z",
             "body": "<p>Ok thanks, Ben.</p>",
             "body_type": "html",
@@ -1717,7 +1718,7 @@ Expected: FAIL
 `services/policy.py` — add `import re` and:
 
 ```python
-# Deterministic backstop for gate 2 (docs/no_action_needed_example.md): if the
+# Deterministic backstop for gate 2 (the no-action evidence): if the
 # enrichment's own key points contain an explicit no-action phrase, do not
 # create the task. Free to test; catches what the agent missed when the
 # summarizer wrote the disqualifier down anyway.
@@ -2071,7 +2072,7 @@ git commit -m "feat: gate 2 in task_create — triage, suppression record, relat
 - Modify: `requirements.txt` (anthropic pin)
 - Modify: `terraform/cloud_functions.tf` (tasks-events `timeout_seconds`, line ~99)
 - Modify: `CLAUDE.md` (Task policy section)
-- Modify: `docs/more_context_needed.md`, `docs/no_action_needed_example.md` (one-line pointer each)
+- Modify: the two false-positive evidence docs (one-line pointer each)
 
 **Interfaces:** none.
 
@@ -2106,7 +2107,7 @@ Haiku, deadline extraction for P0/P1 via Sonnet — the latter reads the
 
 - [ ] **Step 4: Pointers in the evidence docs**
 
-Append to the top of `docs/more_context_needed.md` (after the first paragraph) and `docs/no_action_needed_example.md` (after the first paragraph):
+Append to the top of each false-positive evidence doc (after the first paragraph):
 
 ```markdown
 > **Status (2026-08-19):** addressed by gate 2 — see
@@ -2122,7 +2123,7 @@ Expected: all pass, no lint errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add requirements.txt terraform/cloud_functions.tf CLAUDE.md docs/more_context_needed.md docs/no_action_needed_example.md
+git add requirements.txt terraform/cloud_functions.tf CLAUDE.md docs/
 git commit -m "chore: pin anthropic>=0.116, events CF timeout 300s, docs for gate 2"
 ```
 
@@ -2130,4 +2131,4 @@ git commit -m "chore: pin anthropic>=0.116, events CF timeout 300s, docs for gat
 
 ## After the plan: manual verification (not a subagent task)
 
-With `scripts/fetch-env.sh` run and `.env` sourced, run `triage.decide` against the real cases listed in the spec's Testing section (the three Micro Admin emails must suppress on the coach fact; the two `Lee@sfvikings.com` invites must survive; Xfinity must suppress on prior payment mail; Disney must attach to a completed task; the coaching-thread replies must suppress; Zelle/PayPal must suppress; Google Meet must not be "Action required"; the Micro Admin emails must stop being suppressed with `today="2027-01-05"`). Use `/verifying-pr-locally` for the mechanics and post results to the PR. Then run `scripts/migrate_db.py` after the terraform apply so `suppressed_emails` exists before the CF deploys.
+With `scripts/fetch-env.sh` run and `.env` sourced, run `triage.decide` against the real cases listed in the spec's Testing section (the three Micro Admin emails must suppress on the coach fact; the two registrar player-invitation emails must survive; Xfinity must suppress on prior payment mail; Disney must attach to a completed task; the coaching-thread replies must suppress; Zelle/PayPal must suppress; Google Meet must not be "Action required"; the Micro Admin emails must stop being suppressed with `today="2027-01-05"`). Use `/verifying-pr-locally` for the mechanics and post results to the PR. Then run `scripts/migrate_db.py` after the terraform apply so `suppressed_emails` exists before the CF deploys.
