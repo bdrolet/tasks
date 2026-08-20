@@ -23,6 +23,16 @@ def _roles(monkeypatch, body):
     )
 
 
+def _gid_verifies(monkeypatch, exists: bool):
+    """Stub the real Asana call behind triage._gid_exists so decide() (which
+    always calls _parse with the default verifier) doesn't hit the network."""
+    monkeypatch.setattr(
+        triage.asana,
+        "get_task_detail",
+        lambda gid: ({"name": "x"} if exists else None),
+    )
+
+
 def _ok(actionable=False, reason="coach fact applies", gid=None, evidence=None):
     return json.dumps(
         {
@@ -80,9 +90,48 @@ def test_user_message_omits_roles_block_when_empty(monkeypatch):
 
 def test_related_task_outcome(monkeypatch):
     _roles(monkeypatch, "")
+    _gid_verifies(monkeypatch, True)
     _agent(monkeypatch, _ok(False, "same refund", gid="1217290596630525"))
     d = triage.decide(make_email_event())
     assert d.outcome == "attached" and d.related_task_gid == "1217290596630525"
+
+
+def test_attached_with_empty_reason_fails_open(monkeypatch):
+    _roles(monkeypatch, "")
+    _gid_verifies(monkeypatch, True)
+    _agent(monkeypatch, _ok(False, "", gid="1217290596630525"))
+    d = triage.decide(make_email_event())
+    assert d.actionable is True and d.outcome == "fail_open"
+
+
+def test_unverifiable_gid_falls_back_to_suppressed(monkeypatch):
+    _roles(monkeypatch, "")
+    _gid_verifies(monkeypatch, False)
+    _agent(monkeypatch, _ok(False, "same refund", gid="1217290596630525"))
+    d = triage.decide(make_email_event())
+    assert d.outcome == "suppressed" and d.related_task_gid is None
+
+
+def test_unverifiable_gid_falls_back_to_actionable(monkeypatch):
+    _roles(monkeypatch, "")
+    _gid_verifies(monkeypatch, False)
+    _agent(monkeypatch, _ok(True, "new request", gid="1217290596630525"))
+    d = triage.decide(make_email_event())
+    assert d.outcome == "actionable" and d.related_task_gid is None
+
+
+def test_gid_exists_true_false_and_on_error(monkeypatch):
+    monkeypatch.setattr(triage.asana, "get_task_detail", lambda gid: {"name": "x"})
+    assert triage._gid_exists("123") is True
+
+    monkeypatch.setattr(triage.asana, "get_task_detail", lambda gid: None)
+    assert triage._gid_exists("123") is False
+
+    def _raise(gid):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(triage.asana, "get_task_detail", _raise)
+    assert triage._gid_exists("123") is False
 
 
 def test_actionable_outcome(monkeypatch):

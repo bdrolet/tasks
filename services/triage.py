@@ -300,7 +300,17 @@ def _fail_open(reason: str, message_id: str) -> Decision:
     return Decision(outcome="fail_open")
 
 
-def _parse(text: str | None, stop: str, message_id: str) -> Decision:
+def _gid_exists(task_gid: str) -> bool:
+    """The spec's fail-open case: a related_task_gid we cannot fetch is
+    treated as no match. Any Asana failure counts as 'cannot fetch'."""
+    try:
+        return asana.get_task_detail(task_gid) is not None
+    except Exception:  # noqa: BLE001 — unfetchable is unfetchable
+        logger.warning("related_task_gid %s not fetchable — ignoring", task_gid)
+        return False
+
+
+def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exists) -> Decision:
     if stop != "end_turn" or not text:
         return _fail_open(stop, message_id)
     try:
@@ -313,7 +323,11 @@ def _parse(text: str | None, stop: str, message_id: str) -> Decision:
     gid = data.get("related_task_gid") or None
     evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
     actionable = data["actionable"]
+    if gid is not None and not gid_exists(str(gid)):
+        gid = None
     if gid is not None:
+        if not reason:
+            return _fail_open("no_reason", message_id)
         return Decision(actionable=False, reason=reason, related_task_gid=str(gid), evidence=evidence, outcome="attached")
     if actionable:
         return Decision(actionable=True, reason=reason, evidence=evidence, outcome="actionable")
