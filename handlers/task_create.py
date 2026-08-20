@@ -38,19 +38,19 @@ def _suppress(
     judgement is the model's, the decision stays his, and an open task with a
     "close me" comment is obvious on review in a way a silent close is not."""
     if related_task_gid:
-        lead = (
-            "Looks resolved — close this task if you agree."
-            if resolves
-            else "Related email:"
-        )
+        lead = "Looks resolved — close this task if you agree." if resolves else "Related email:"
         try:
             asana.create_story(
                 related_task_gid,
-                text=f"{lead} {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(" —"),
+                text=f"{lead} {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(
+                    " —"
+                ),
             )
         except Exception:
             logger.exception(
-                "related-task comment failed gid=%s message_id=%s", related_task_gid, event["message_id"]
+                "related-task comment failed gid=%s message_id=%s",
+                related_task_gid,
+                event["message_id"],
             )
     try:
         with get_conn() as conn:
@@ -80,7 +80,11 @@ def _suppress(
     )
     logger.info(
         "Task suppressed source=%s related=%s resolves=%s message_id=%s reason=%s",
-        source, related_task_gid, resolves, event["message_id"], reason,
+        source,
+        related_task_gid,
+        resolves,
+        event["message_id"],
+        reason,
     )
 
 

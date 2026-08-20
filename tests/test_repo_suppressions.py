@@ -23,7 +23,15 @@ def test_insert_writes_all_columns_and_is_idempotent():
     assert "ON CONFLICT (message_id) DO NOTHING" in query
     assert "%s::jsonb" in query
     assert params[:8] == (
-        "m1", "review", "P1", "Your bill", "billing@xfinity.com",
-        "autopay already processed", "agent", None,
+        "m1",
+        "review",
+        "P1",
+        "Your bill",
+        "billing@xfinity.com",
+        "autopay already processed",
+        "agent",
+        None,
     )
-    assert json.loads(params[8]) == [{"kind": "email", "ref": "m0", "note": "Thanks for your payment"}]
+    assert json.loads(params[8]) == [
+        {"kind": "email", "ref": "m0", "note": "Thanks for your payment"}
+    ]

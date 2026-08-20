@@ -44,7 +44,9 @@ def test_calendar_section_reaches_prompt(monkeypatch):
     monkeypatch.setattr(
         standing_context,
         "section",
-        lambda name, **kw: "- SFUSD fall term: 2026-08-17 to 2026-12-18." if name == "Calendar" else "",
+        lambda name, **kw: (
+            "- SFUSD fall term: 2026-08-17 to 2026-12-18." if name == "Calendar" else ""
+        ),
     )
     deadline.extract_deadline(make_email_event())
     p = captured["p"]

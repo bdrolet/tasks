@@ -56,7 +56,10 @@ def test_no_action_phrase(points, expected):
         # Scanning continues past a disqualified conditional match to find
         # a later, genuine unconditional no-action point.
         (
-            ["Your automatic payment failed — update your card", "No action required for this month"],
+            [
+                "Your automatic payment failed — update your card",
+                "No action required for this month",
+            ],
             "No action required for this month",
         ),
     ],

@@ -15,6 +15,7 @@ def _j(tool, **kwargs):
 
 # --- search_emails -----------------------------------------------------------
 
+
 def test_search_emails_returns_trimmed_rows(monkeypatch):
     calls = []
 
@@ -67,6 +68,7 @@ def test_search_emails_malformed_result_is_returned_not_raised(monkeypatch):
 
 # --- get_email ---------------------------------------------------------------
 
+
 def test_get_email_returns_body_and_recipients(monkeypatch):
     monkeypatch.setattr(
         inbox_api,
@@ -113,38 +115,89 @@ def test_get_email_caps_body(monkeypatch):
 
 # --- search_tasks ------------------------------------------------------------
 
+
 def _stub_conn(monkeypatch, rows, message_gid=None):
     conn = FakeConn()
     monkeypatch.setattr(triage, "get_conn", lambda: conn)
     monkeypatch.setattr(repo_index, "substring_candidates", lambda c, **kw: rows)
-    monkeypatch.setattr(repo_index, "get_rows", lambda c, gids: [r for r in rows if r["task_gid"] in gids])
+    monkeypatch.setattr(
+        repo_index, "get_rows", lambda c, gids: [r for r in rows if r["task_gid"] in gids]
+    )
     monkeypatch.setattr(repo_tasks, "get_gid_by_message", lambda c, mid: message_gid)
     return conn
 
 
 def test_search_tasks_substring_path(monkeypatch):
-    _stub_conn(monkeypatch, [{"task_gid": "t1", "title": "Disney", "notes": "n", "completed": True,
-                              "due_on": None, "project": "P", "permalink_url": "u"}])
+    _stub_conn(
+        monkeypatch,
+        [
+            {
+                "task_gid": "t1",
+                "title": "Disney",
+                "notes": "n",
+                "completed": True,
+                "due_on": None,
+                "project": "P",
+                "permalink_url": "u",
+            }
+        ],
+    )
     out = _j(triage.search_tasks, query="disney", completed=None)
-    assert out == [{"task_gid": "t1", "title": "Disney", "notes": "n", "completed": True,
-                    "due_on": None, "project": "P", "permalink_url": "u"}]
+    assert out == [
+        {
+            "task_gid": "t1",
+            "title": "Disney",
+            "notes": "n",
+            "completed": True,
+            "due_on": None,
+            "project": "P",
+            "permalink_url": "u",
+        }
+    ]
 
 
 def test_search_tasks_semantic_path_attaches_scores(monkeypatch):
-    rows = [{"task_gid": "t1", "title": "Refund", "notes": "", "completed": False,
-             "due_on": None, "project": None, "permalink_url": None}]
+    rows = [
+        {
+            "task_gid": "t1",
+            "title": "Refund",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "project": None,
+            "permalink_url": None,
+        }
+    ]
     _stub_conn(monkeypatch, rows)
     monkeypatch.setattr(vertex, "embed", lambda text, *, task_type: [0.1] * 768)
-    monkeypatch.setattr(repo_index, "semantic_candidates", lambda c, **kw: [{"task_gid": "t1", "score": 0.91}])
+    monkeypatch.setattr(
+        repo_index, "semantic_candidates", lambda c, **kw: [{"task_gid": "t1", "score": 0.91}]
+    )
     out = _j(triage.search_tasks, query="disney refund", semantic=True)
     assert out[0]["task_gid"] == "t1" and out[0]["score"] == 0.91
 
 
 def test_search_tasks_prepends_this_emails_existing_task(monkeypatch):
-    rows = [{"task_gid": "t1", "title": "Other", "notes": "", "completed": False,
-             "due_on": None, "project": None, "permalink_url": None},
-            {"task_gid": "t0", "title": "Same thread", "notes": "", "completed": False,
-             "due_on": None, "project": None, "permalink_url": None}]
+    rows = [
+        {
+            "task_gid": "t1",
+            "title": "Other",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "project": None,
+            "permalink_url": None,
+        },
+        {
+            "task_gid": "t0",
+            "title": "Same thread",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "project": None,
+            "permalink_url": None,
+        },
+    ]
     _stub_conn(monkeypatch, rows, message_gid="t0")
     token = triage.CURRENT_MESSAGE_ID.set("msg-123")
     try:
@@ -165,27 +218,40 @@ def test_search_tasks_error_is_returned(monkeypatch):
 
 # --- get_task ----------------------------------------------------------------
 
+
 def test_get_task_returns_detail_and_comments(monkeypatch):
     monkeypatch.setattr(
         asana,
         "get_task_detail",
-        lambda gid: {"gid": gid, "name": "Follow up on refund", "notes": "N" * 1000,
-                     "completed": True, "due_on": "2026-07-01", "permalink_url": "https://a/1"},
+        lambda gid: {
+            "gid": gid,
+            "name": "Follow up on refund",
+            "notes": "N" * 1000,
+            "completed": True,
+            "due_on": "2026-07-01",
+            "permalink_url": "https://a/1",
+        },
     )
     monkeypatch.setattr(
         asana,
         "get_stories",
         lambda gid: [
             {"type": "system", "text": "added to project", "created_at": "2026-06-01T00:00:00Z"},
-            {"type": "comment", "text": "Refund landed", "created_at": "2026-07-02T00:00:00Z",
-             "created_by": {"name": "Ben"}},
+            {
+                "type": "comment",
+                "text": "Refund landed",
+                "created_at": "2026-07-02T00:00:00Z",
+                "created_by": {"name": "Ben"},
+            },
         ],
     )
     out = _j(triage.get_task, task_gid="1")
     assert out["name"] == "Follow up on refund"
     assert out["completed"] is True
     assert len(out["notes"]) == triage.TASK_NOTES_CAP
-    assert out["comments"] == [{"text": "Refund landed", "created_at": "2026-07-02T00:00:00Z", "by": "Ben"}]
+    assert out["comments"] == [
+        {"text": "Refund landed", "created_at": "2026-07-02T00:00:00Z", "by": "Ben"}
+    ]
 
 
 def test_get_task_missing(monkeypatch):
@@ -197,8 +263,14 @@ def test_get_task_malformed_stories_is_returned_not_raised(monkeypatch):
     monkeypatch.setattr(
         asana,
         "get_task_detail",
-        lambda gid: {"gid": gid, "name": "Follow up", "notes": "", "completed": False,
-                     "due_on": None, "permalink_url": None},
+        lambda gid: {
+            "gid": gid,
+            "name": "Follow up",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "permalink_url": None,
+        },
     )
     monkeypatch.setattr(asana, "get_stories", lambda gid: ["not-a-dict"])
     out = _j(triage.get_task, task_gid="1")
@@ -214,7 +286,12 @@ def test_tool_calls_are_counted(monkeypatch):
 
 
 def test_tools_list_and_names():
-    assert [t.name for t in triage.TOOLS] == ["search_emails", "get_email", "search_tasks", "get_task"]
+    assert [t.name for t in triage.TOOLS] == [
+        "search_emails",
+        "get_email",
+        "search_tasks",
+        "get_task",
+    ]
 
 
 def test_search_emails_description_advises_sender_alone_first():

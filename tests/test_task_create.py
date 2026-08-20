@@ -214,7 +214,9 @@ def _stub_story(monkeypatch, fail=False):
 
 def _count_suppressed(monkeypatch):
     counts = []
-    monkeypatch.setattr(task_create.otel.tasks_suppressed, "add", lambda n, attrs: counts.append(attrs))
+    monkeypatch.setattr(
+        task_create.otel.tasks_suppressed, "add", lambda n, attrs: counts.append(attrs)
+    )
     return counts
 
 
@@ -226,21 +228,36 @@ def test_suppressed_decision_creates_nothing_and_records(monkeypatch):
     created = _capture_create(monkeypatch)
     _stub_triage(
         monkeypatch,
-        Decision(actionable=False, reason="coach fact", evidence=[{"kind": "fact", "ref": "Coach", "note": "x"}], outcome="suppressed"),
+        Decision(
+            actionable=False,
+            reason="coach fact",
+            evidence=[{"kind": "fact", "ref": "Coach", "note": "x"}],
+            outcome="suppressed",
+        ),
     )
     task_create.handle(make_email_event())
     assert created == {} and summary_calls == []
     assert rows == [
         {
-            "message_id": "msg-123", "category": "review", "importance": "P1",
-            "subject": "Quarterly report", "sender": "alice@example.com",
-            "reason": "coach fact", "source": "agent", "related_task_gid": None,
+            "message_id": "msg-123",
+            "category": "review",
+            "importance": "P1",
+            "subject": "Quarterly report",
+            "sender": "alice@example.com",
+            "reason": "coach fact",
+            "source": "agent",
+            "related_task_gid": None,
             "evidence": [{"kind": "fact", "ref": "Coach", "note": "x"}],
         }
     ]
     assert counts == [
-        {"category": "review", "importance": "P1", "source": "agent",
-         "attached": "false", "resolves": "false"}
+        {
+            "category": "review",
+            "importance": "P1",
+            "source": "agent",
+            "attached": "false",
+            "resolves": "false",
+        }
     ]
 
 
@@ -251,10 +268,15 @@ def test_attached_decision_comments_on_related_task(monkeypatch):
     _stub_enrichment(monkeypatch)
     created = _capture_create(monkeypatch)
     stories = _stub_story(monkeypatch)
-    _stub_triage(monkeypatch, Decision(actionable=False, reason="same refund", related_task_gid="t9", outcome="attached"))
+    _stub_triage(
+        monkeypatch,
+        Decision(actionable=False, reason="same refund", related_task_gid="t9", outcome="attached"),
+    )
     task_create.handle(make_email_event())
     assert created == {}
-    assert stories == [("t9", "Related email: Quarterly report — same refund — https://outlook.example/msg-123")]
+    assert stories == [
+        ("t9", "Related email: Quarterly report — same refund — https://outlook.example/msg-123")
+    ]
     assert rows[0]["related_task_gid"] == "t9" and rows[0]["source"] == "agent"
     assert counts[0]["attached"] == "true"
 
@@ -268,14 +290,22 @@ def test_resolving_decision_asks_ben_to_close(monkeypatch):
     stories = _stub_story(monkeypatch)
     _stub_triage(
         monkeypatch,
-        Decision(actionable=False, reason="refund landed", related_task_gid="t9",
-                 resolves=True, outcome="attached"),
+        Decision(
+            actionable=False,
+            reason="refund landed",
+            related_task_gid="t9",
+            resolves=True,
+            outcome="attached",
+        ),
     )
     task_create.handle(make_email_event())
     assert created == {}
     assert stories == [
-        ("t9", "Looks resolved — close this task if you agree. Quarterly report"
-               " — refund landed — https://outlook.example/msg-123")
+        (
+            "t9",
+            "Looks resolved — close this task if you agree. Quarterly report"
+            " — refund landed — https://outlook.example/msg-123",
+        )
     ]
     assert counts[0]["resolves"] == "true"
     assert rows[0]["related_task_gid"] == "t9"
@@ -304,7 +334,10 @@ def test_story_failure_does_not_resurrect_task(monkeypatch):
     _stub_enrichment(monkeypatch)
     created = _capture_create(monkeypatch)
     _stub_story(monkeypatch, fail=True)
-    _stub_triage(monkeypatch, Decision(actionable=False, reason="r", related_task_gid="t9", outcome="attached"))
+    _stub_triage(
+        monkeypatch,
+        Decision(actionable=False, reason="r", related_task_gid="t9", outcome="attached"),
+    )
     task_create.handle(make_email_event())
     assert created == {} and len(rows) == 1
 

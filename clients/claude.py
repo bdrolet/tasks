@@ -81,19 +81,23 @@ def run_agent(
     deadline_s is checked only between turns (after a message completes,
     before the next tool-use turn is requested) — it bounds when a new turn
     may start, not a hard wall-clock stop on a turn already in flight."""
-    runner = _get_client().with_options(max_retries=1).beta.messages.tool_runner(
-        model=AGENT_MODEL,
-        max_tokens=4096,
-        max_iterations=max_iterations,
-        thinking={"type": "adaptive"},
-        output_config={
-            "effort": "medium",
-            "format": {"type": "json_schema", "schema": output_schema},
-        },
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user}],
-        tools=tools,
-        timeout=request_timeout,
+    runner = (
+        _get_client()
+        .with_options(max_retries=1)
+        .beta.messages.tool_runner(
+            model=AGENT_MODEL,
+            max_tokens=4096,
+            max_iterations=max_iterations,
+            thinking={"type": "adaptive"},
+            output_config={
+                "effort": "medium",
+                "format": {"type": "json_schema", "schema": output_schema},
+            },
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user}],
+            tools=tools,
+            timeout=request_timeout,
+        )
     )
     started = time.monotonic()
     last = None

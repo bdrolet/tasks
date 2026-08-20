@@ -37,7 +37,10 @@ def _install(monkeypatch, runner, captured):
     fake_client = SimpleNamespace(
         beta=SimpleNamespace(messages=SimpleNamespace(tool_runner=fake_tool_runner))
     )
-    fake_client.with_options = lambda **kwargs: (captured.setdefault("with_options", kwargs), fake_client)[1]
+    fake_client.with_options = lambda **kwargs: (
+        captured.setdefault("with_options", kwargs),
+        fake_client,
+    )[1]
     monkeypatch.setattr(claude, "_get_client", lambda: fake_client)
 
 
@@ -53,7 +56,10 @@ def test_run_agent_returns_final_text_and_passes_params(monkeypatch):
     assert captured["max_iterations"] == 4
     assert captured["thinking"] == {"type": "adaptive"}
     assert captured["output_config"]["effort"] == "medium"
-    assert captured["output_config"]["format"] == {"type": "json_schema", "schema": {"type": "object"}}
+    assert captured["output_config"]["format"] == {
+        "type": "json_schema",
+        "schema": {"type": "object"},
+    }
     assert captured["system"][0]["text"] == "SYS"
     assert captured["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert captured["messages"] == [{"role": "user", "content": "USER"}]

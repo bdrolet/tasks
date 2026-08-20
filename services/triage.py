@@ -89,7 +89,15 @@ def search_emails(query: str, mode: str = "graph", limit: int = 10) -> str:
     _count("search_emails")
     try:
         rows = inbox_api.search(query, mode=mode, limit=max(1, min(limit, MAX_RESULTS)))
-        keep = ("message_id", "subject", "sender", "received_at", "preview", "category", "importance")
+        keep = (
+            "message_id",
+            "subject",
+            "sender",
+            "received_at",
+            "preview",
+            "category",
+            "importance",
+        )
         return json.dumps([{k: r.get(k) for k in keep} for r in rows], default=str)
     except Exception as exc:  # noqa: BLE001 — tool contract: never raise
         return _err(exc)
@@ -391,6 +399,10 @@ def decide(event: EmailClassifiedEvent, *, today: str | None = None) -> Decision
     otel.triage_duration.record((time.monotonic() - t0) * 1000, {"outcome": decision.outcome})
     logger.info(
         "triage outcome=%s actionable=%s related=%s message_id=%s reason=%s",
-        decision.outcome, decision.actionable, decision.related_task_gid, message_id, decision.reason,
+        decision.outcome,
+        decision.actionable,
+        decision.related_task_gid,
+        message_id,
+        decision.reason,
     )
     return decision

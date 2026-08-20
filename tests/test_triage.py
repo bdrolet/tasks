@@ -29,7 +29,7 @@ def _gid_verifies(monkeypatch, exists: bool):
     monkeypatch.setattr(
         triage.asana,
         "get_task_detail",
-        lambda gid: ({"name": "x"} if exists else None),
+        lambda gid: {"name": "x"} if exists else None,
     )
 
 
@@ -40,7 +40,9 @@ def _ok(actionable=False, reason="coach fact applies", gid=None, evidence=None, 
             "reason": reason,
             "related_task_gid": gid,
             "resolves": resolves,
-            "evidence": evidence if evidence is not None else [{"kind": "fact", "ref": "Assistant Coach", "note": "resigned"}],
+            "evidence": evidence
+            if evidence is not None
+            else [{"kind": "fact", "ref": "Assistant Coach", "note": "resigned"}],
         }
     )
 
@@ -157,7 +159,7 @@ def test_fail_open_paths(monkeypatch):
         (None, "timeout"),
         ("not json", "end_turn"),
         (json.dumps({"actionable": "maybe"}), "end_turn"),
-        (_ok(False, ""), "end_turn"),            # suppression with empty reason
+        (_ok(False, ""), "end_turn"),  # suppression with empty reason
         (_ok(False, "   "), "end_turn"),
     ]
     for text, stop in cases:
@@ -183,7 +185,9 @@ def test_current_message_id_is_set_during_run_and_cleared_after(monkeypatch):
 def test_duration_metric_recorded(monkeypatch):
     _roles(monkeypatch, "")
     recorded = []
-    monkeypatch.setattr(triage.otel.triage_duration, "record", lambda ms, attrs: recorded.append(attrs))
+    monkeypatch.setattr(
+        triage.otel.triage_duration, "record", lambda ms, attrs: recorded.append(attrs)
+    )
     _agent(monkeypatch, _ok(True, "x"))
     triage.decide(make_email_event())
     assert recorded == [{"outcome": "actionable"}]
@@ -193,7 +197,13 @@ def test_output_schema_is_strict_object():
     s = triage.OUTPUT_SCHEMA
     assert s["type"] == "object" and s["additionalProperties"] is False
     assert s["properties"]["resolves"]["type"] == "boolean"
-    assert set(s["required"]) == {"actionable", "reason", "related_task_gid", "resolves", "evidence"}
+    assert set(s["required"]) == {
+        "actionable",
+        "reason",
+        "related_task_gid",
+        "resolves",
+        "evidence",
+    }
 
 
 def test_related_task_gid_uses_anyof_nullable_form():
@@ -212,7 +222,18 @@ def test_evidence_items_schema_is_strict():
 
 def test_system_prompt_carries_the_rules():
     p = triage.SYSTEM_PROMPT
-    for needle in ("ONLY", "period", "cc", "no action required", "automatic payment",
-                   "related_task_gid", "evidence", "Action required", "not evidence",
-                   "exactly one", "prefer an open task", "resolves to true only"):
+    for needle in (
+        "ONLY",
+        "period",
+        "cc",
+        "no action required",
+        "automatic payment",
+        "related_task_gid",
+        "evidence",
+        "Action required",
+        "not evidence",
+        "exactly one",
+        "prefer an open task",
+        "resolves to true only",
+    ):
         assert needle in p, needle
