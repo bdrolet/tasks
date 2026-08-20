@@ -34,3 +34,8 @@ override.tf.json
 
 # Subagent-driven-development scratch (briefs, reports, review packages)
 .superpowers/
+
+# Local scratch facts only — the real ones live in the private context repo.
+context/*
+!context/README.md
+!context/standing-context.example.md

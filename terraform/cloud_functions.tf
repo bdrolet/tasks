@@ -98,7 +98,24 @@ resource "google_cloudfunctions2_function" "tasks_events" {
     max_instance_count    = 3
     timeout_seconds       = 300 # triage agent: ≤60s decide + enrichment + Asana
     available_memory      = "512Mi"
-    environment_variables = local.common_env
+    environment_variables = merge(local.common_env, {
+      # services/standing_context.py reads a path, so mounting the secret as a
+      # file (below) needs no code change. The facts live in the private
+      # bdrolet/context repo; this function only ever reads them.
+      STANDING_CONTEXT_PATH = "/etc/context/standing-context.md"
+    })
+
+    # Read-only mount of the declared facts. Pinned to "latest" so a merge in
+    # the context repo takes effect on the next cold start with no deploy here.
+    secret_volumes {
+      mount_path = "/etc/context"
+      project_id = var.project_id
+      secret     = data.google_secret_manager_secret.shared["standing-context"].secret_id
+      versions {
+        version = "latest"
+        path    = "standing-context.md"
+      }
+    }
 
     secret_environment_variables {
       key        = "ASANA_API_KEY"
