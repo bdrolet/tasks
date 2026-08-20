@@ -349,7 +349,8 @@ def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exis
         return _fail_open("schema", message_id)
     reason = str(data.get("reason") or "").strip()
     gid = data.get("related_task_gid") or None
-    evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
+    raw_evidence = data.get("evidence")
+    evidence: list = raw_evidence if isinstance(raw_evidence, list) else []
     actionable = data["actionable"]
     if gid is not None and not gid_exists(str(gid)):
         gid = None

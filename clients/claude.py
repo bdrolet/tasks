@@ -112,5 +112,11 @@ def run_agent(
             return None, "timeout"
     if last is None or last.stop_reason == "tool_use":
         return None, "max_iterations"
-    text = "".join(b.text for b in last.content if getattr(b, "type", None) == "text")
-    return text, last.stop_reason
+    text = "".join(
+        b.text  # type: ignore[union-attr]
+        for b in last.content
+        if getattr(b, "type", None) == "text"
+    )
+    # A terminal message always carries a stop reason; treat a missing one as
+    # unknown rather than success — _parse fails open on anything but end_turn.
+    return text, last.stop_reason or "unknown"
