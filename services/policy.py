@@ -15,7 +15,7 @@ def warrants_task(event: EmailClassifiedEvent) -> bool:
     return event.get("category") in _TASK_CATEGORIES
 
 
-# Deterministic backstop for gate 2 (docs/no_action_needed_example.md): if the
+# Deterministic backstop for gate 2: if the
 # enrichment's own key points contain an explicit no-action phrase, do not
 # create the task. Free to test; catches what the agent missed when the
 # summarizer wrote the disqualifier down anyway. This runs AFTER the triage
