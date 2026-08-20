@@ -11,17 +11,22 @@ the agent's evidence instead of aborting the run. decide() is fail-open."""
 import contextvars
 import json
 import logging
+import time
+from datetime import date
 from html.parser import HTMLParser
 
 from anthropic import beta_tool
 
 import clients.asana as asana
+import clients.claude as claude
 import clients.inbox_api as inbox_api
 import clients.otel as otel
 import clients.vertex as vertex
 from clients.db import get_conn
+from models.events import Decision, EmailClassifiedEvent
 from repo import task_index as repo_index
 from repo import tasks as repo_tasks
+from services import standing_context
 
 logger = logging.getLogger(__name__)
 
@@ -216,3 +221,135 @@ def get_task(task_gid: str) -> str:
 
 
 TOOLS = [search_emails, get_email, search_tasks, get_task]
+
+
+MAX_ITERATIONS = 6
+DEADLINE_S = 60.0
+BODY_CAP = 3000
+
+OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "actionable": {"type": "boolean"},
+        "reason": {
+            "type": "string",
+            "description": "One sentence naming the fact, email, or task that decided it.",
+        },
+        "related_task_gid": {
+            "type": ["string", "null"],
+            "description": "GID of an existing task covering the same matter, else null.",
+        },
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["email", "task", "fact", "thread"]},
+                    "ref": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+                "required": ["kind", "ref", "note"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["actionable", "reason", "related_task_gid", "evidence"],
+    "additionalProperties": False,
+}
+
+SYSTEM_PROMPT = """You triage Ben's email for his task list. An email has already been classified as task-worthy on its own terms. Your job is to decide whether, given everything you can find out, it still requires anything of Ben. You have read-only tools to search and read his mail and his Asana tasks; use them when the email's shape calls for it (recurring bills and renewals → prior mail from the sender; refunds, disputes, follow-ups, replies → existing tasks), and skip them when the email is plainly a new request.
+
+Rules:
+- Set actionable to false ONLY when evidence you actually have — a standing fact that currently applies, prior mail, an existing task, or the thread itself — clearly shows the email requires nothing of Ben. If unsure, actionable is true.
+- A standing fact that states a period applies only inside that period; compare against today's date.
+- A reply to a thread Ben started, or a message where Ben is only on cc and the content is acknowledgment ("thanks for letting us know", "sounds good", "best wishes"), is not a task.
+- "no action required", "no action is needed", "for your records", "automatic payment", "autopay", "will be charged automatically" — in this email or in prior mail from the same sender — disqualifies a payment or review task.
+- The sender's schedule (a statement posted, a payment series ending, a feature auto-enabling on a date) is not Ben's deadline. Broadcast vendor announcements default to not actionable. Never treat "Action required" as present unless the source says it.
+- If an existing task covers the same matter — same vendor/amount/instrument within small variance, same thread, same saga — set related_task_gid to it, open or completed, but only after you have fetched it (get_task) or seen enough of it to be sure. If the email shows a closed matter has regressed, leave related_task_gid null and set actionable true.
+- Name every lookup or fact you relied on in evidence (kind: email|task|fact|thread; ref: message_id, task gid, fact heading, or "thread"; note: what it showed).
+- Do not reason beyond the facts given and the evidence you retrieved.
+
+Respond with the JSON object only."""
+
+
+def build_user_message(event: EmailClassifiedEvent, *, today: str, roles: str) -> str:
+    parts = [f"Today is {today}."]
+    if roles:
+        parts.append(
+            "Standing facts about Ben (some state the period they apply to; a fact "
+            "whose period has passed does not apply):\n\n" + roles
+        )
+    parts.append(
+        "The email:\n"
+        f"Subject: {event.get('subject') or ''}\n"
+        f"From: {event.get('sender') or ''}"
+        + (f" ({event['sender_display']})" if event.get("sender_display") else "")
+        + "\n"
+        f"To: {', '.join(event.get('to') or [])}\n"
+        f"Cc: {', '.join(event.get('cc') or [])}\n"
+        f"Received: {event.get('received_at') or ''}\n"
+        f"Classified: {event.get('category')} / {event.get('importance')}\n"
+        f"Message id: {event.get('message_id')}\n\n"
+        f"{(event.get('body') or '')[:BODY_CAP]}"
+    )
+    return "\n\n".join(parts)
+
+
+def _fail_open(reason: str, message_id: str) -> Decision:
+    logger.warning("triage fail-open (%s) message_id=%s", reason, message_id)
+    return Decision(outcome="fail_open")
+
+
+def _parse(text: str | None, stop: str, message_id: str) -> Decision:
+    if stop != "end_turn" or not text:
+        return _fail_open(stop, message_id)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return _fail_open("unparseable", message_id)
+    if not isinstance(data, dict) or not isinstance(data.get("actionable"), bool):
+        return _fail_open("schema", message_id)
+    reason = str(data.get("reason") or "").strip()
+    gid = data.get("related_task_gid") or None
+    evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
+    actionable = data["actionable"]
+    if gid is not None:
+        return Decision(actionable=False, reason=reason, related_task_gid=str(gid), evidence=evidence, outcome="attached")
+    if actionable:
+        return Decision(actionable=True, reason=reason, evidence=evidence, outcome="actionable")
+    if not reason:
+        return _fail_open("no_reason", message_id)
+    return Decision(actionable=False, reason=reason, evidence=evidence, outcome="suppressed")
+
+
+def decide(event: EmailClassifiedEvent, *, today: str | None = None) -> Decision:
+    """Gate 2. Never raises; every failure returns the actionable default."""
+    if event.get("category") == "urgent":
+        return Decision()
+    message_id = event["message_id"]
+    today = today or date.today().isoformat()
+    roles = standing_context.section("Roles")
+    user = build_user_message(event, today=today, roles=roles)
+    token = CURRENT_MESSAGE_ID.set(message_id)
+    t0 = time.monotonic()
+    try:
+        text, stop = claude.run_agent(
+            system=SYSTEM_PROMPT,
+            user=user,
+            tools=TOOLS,
+            output_schema=OUTPUT_SCHEMA,
+            max_iterations=MAX_ITERATIONS,
+            deadline_s=DEADLINE_S,
+        )
+        decision = _parse(text, stop, message_id)
+    except Exception:  # noqa: BLE001 — fail-open by contract
+        logger.exception("triage agent failed message_id=%s", message_id)
+        decision = Decision(outcome="fail_open")
+    finally:
+        CURRENT_MESSAGE_ID.reset(token)
+    otel.triage_duration.record((time.monotonic() - t0) * 1000, {"outcome": decision.outcome})
+    logger.info(
+        "triage outcome=%s actionable=%s related=%s message_id=%s reason=%s",
+        decision.outcome, decision.actionable, decision.related_task_gid, message_id, decision.reason,
+    )
+    return decision
