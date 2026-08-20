@@ -59,6 +59,12 @@ def test_search_emails_error_is_returned_not_raised(monkeypatch):
     assert _j(triage.search_emails, query="x") == {"error": "RuntimeError: inbox-api down"}
 
 
+def test_search_emails_malformed_result_is_returned_not_raised(monkeypatch):
+    monkeypatch.setattr(inbox_api, "search", lambda *a, **k: ["not-a-dict"])
+    out = _j(triage.search_emails, query="x")
+    assert "error" in out
+
+
 # --- get_email ---------------------------------------------------------------
 
 def test_get_email_returns_body_and_recipients(monkeypatch):
@@ -84,6 +90,16 @@ def test_get_email_returns_body_and_recipients(monkeypatch):
     assert out["to"] == ["ben@drolet.cloud"]
     assert out["cc"] == ["christy@example.com"]
     assert out["body"] == "Ok thanks, Ben."  # html stripped
+
+
+def test_get_email_malformed_recipients_is_returned_not_raised(monkeypatch):
+    monkeypatch.setattr(
+        inbox_api,
+        "get_email",
+        lambda mid: {"body": "hi", "body_type": "text", "to": ["not-a-dict"], "cc": []},
+    )
+    out = _j(triage.get_email, message_id="m1")
+    assert "error" in out
 
 
 def test_get_email_caps_body(monkeypatch):
@@ -175,6 +191,18 @@ def test_get_task_returns_detail_and_comments(monkeypatch):
 def test_get_task_missing(monkeypatch):
     monkeypatch.setattr(asana, "get_task_detail", lambda gid: None)
     assert _j(triage.get_task, task_gid="nope") == {"error": "not found"}
+
+
+def test_get_task_malformed_stories_is_returned_not_raised(monkeypatch):
+    monkeypatch.setattr(
+        asana,
+        "get_task_detail",
+        lambda gid: {"gid": gid, "name": "Follow up", "notes": "", "completed": False,
+                     "due_on": None, "permalink_url": None},
+    )
+    monkeypatch.setattr(asana, "get_stories", lambda gid: ["not-a-dict"])
+    out = _j(triage.get_task, task_gid="1")
+    assert "error" in out
 
 
 def test_tool_calls_are_counted(monkeypatch):

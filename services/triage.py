@@ -80,10 +80,10 @@ def search_emails(query: str, mode: str = "graph", limit: int = 10) -> str:
     _count("search_emails")
     try:
         rows = inbox_api.search(query, mode=mode, limit=max(1, min(limit, MAX_RESULTS)))
+        keep = ("message_id", "subject", "sender", "received_at", "preview", "category", "importance")
+        return json.dumps([{k: r.get(k) for k in keep} for r in rows], default=str)
     except Exception as exc:  # noqa: BLE001 — tool contract: never raise
         return _err(exc)
-    keep = ("message_id", "subject", "sender", "received_at", "preview", "category", "importance")
-    return json.dumps([{k: r.get(k) for k in keep} for r in rows], default=str)
 
 
 @beta_tool
@@ -99,22 +99,22 @@ def get_email(message_id: str) -> str:
     _count("get_email")
     try:
         e = inbox_api.get_email(message_id)
+        body = e.get("body") or ""
+        if (e.get("body_type") or "").lower() == "html":
+            body = _strip_html(body)
+        return json.dumps(
+            {
+                "subject": e.get("subject"),
+                "sender": e.get("from_email"),
+                "to": [r.get("address") for r in e.get("to") or []],
+                "cc": [r.get("address") for r in e.get("cc") or []],
+                "received_at": e.get("received_at"),
+                "body": body[:EMAIL_BODY_CAP],
+            },
+            default=str,
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-    body = e.get("body") or ""
-    if (e.get("body_type") or "").lower() == "html":
-        body = _strip_html(body)
-    return json.dumps(
-        {
-            "subject": e.get("subject"),
-            "sender": e.get("from_email"),
-            "to": [r.get("address") for r in e.get("to") or []],
-            "cc": [r.get("address") for r in e.get("cc") or []],
-            "received_at": e.get("received_at"),
-            "body": body[:EMAIL_BODY_CAP],
-        },
-        default=str,
-    )
 
 
 @beta_tool
@@ -191,28 +191,28 @@ def get_task(task_gid: str) -> str:
         if t is None:
             return json.dumps({"error": "not found"})
         stories = asana.get_stories(task_gid)
+        comments = [
+            {
+                "text": s.get("text"),
+                "created_at": s.get("created_at"),
+                "by": (s.get("created_by") or {}).get("name"),
+            }
+            for s in stories
+            if s.get("type") == "comment"
+        ][-5:]
+        return json.dumps(
+            {
+                "name": t.get("name"),
+                "notes": (t.get("notes") or "")[:TASK_NOTES_CAP],
+                "completed": bool(t.get("completed")),
+                "due_on": t.get("due_on"),
+                "permalink_url": t.get("permalink_url"),
+                "comments": comments,
+            },
+            default=str,
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-    comments = [
-        {
-            "text": s.get("text"),
-            "created_at": s.get("created_at"),
-            "by": (s.get("created_by") or {}).get("name"),
-        }
-        for s in stories
-        if s.get("type") == "comment"
-    ][-5:]
-    return json.dumps(
-        {
-            "name": t.get("name"),
-            "notes": (t.get("notes") or "")[:TASK_NOTES_CAP],
-            "completed": bool(t.get("completed")),
-            "due_on": t.get("due_on"),
-            "permalink_url": t.get("permalink_url"),
-            "comments": comments,
-        },
-        default=str,
-    )
 
 
 TOOLS = [search_emails, get_email, search_tasks, get_task]
