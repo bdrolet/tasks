@@ -58,10 +58,24 @@ def test_file_is_read_once_until_reset(ctx_file):
     assert standing_context.section("Roles") == "Changed."
 
 
-def test_shipped_file_has_roles_and_calendar():
-    """The real context/standing-context.md must parse with both sections."""
+def test_example_file_documents_the_shipped_format():
+    """The real facts live in the private bdrolet/context repo and reach the
+    function as a mounted secret, so there is nothing here to parse. The example
+    is the documented contract between the two repos — if it stops parsing into
+    the sections consumers ask for, the docs have drifted from the loader."""
     standing_context.reset_cache()
-    real = Path(__file__).resolve().parent.parent / "context" / "standing-context.md"
-    text = real.read_text()
+    example = Path(__file__).resolve().parent.parent / "context" / "standing-context.example.md"
+    text = example.read_text()
     assert standing_context.section("Roles", text=text)
     assert standing_context.section("Calendar", text=text)
+
+
+def test_no_real_facts_committed():
+    """context/ is gitignored apart from the README and the example — a real
+    fact file appearing here would be personal data in a public repo."""
+    ctx = Path(__file__).resolve().parent.parent / "context"
+    stray = {p.name for p in ctx.glob("*.md")} - {
+        "README.md",
+        "standing-context.example.md",
+    }
+    assert not stray, f"unexpected files in context/: {sorted(stray)}"

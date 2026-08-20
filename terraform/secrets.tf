@@ -1,13 +1,21 @@
-# Shared secrets created and version-managed by the inbox repo's terraform —
-# referenced read-only here. Do NOT convert to resources: two states owning
-# the same secret_id fails with "already exists".
+# Shared secrets created and version-managed elsewhere — referenced read-only
+# here. Do NOT convert to resources: two states owning the same secret_id fails
+# with "already exists".
+#
+# All but standing-context come from the inbox repo's terraform.
+# standing-context is published by the PRIVATE bdrolet/context repo's CI, which
+# concatenates its per-domain fact files and adds a new version on merge. It is
+# mounted as a file (see cloud_functions.tf) rather than injected as an env var:
+# services/standing_context.py reads a path, so the mount needs no code change,
+# and a fact edit takes effect on the next cold start with no deploy here.
 data "google_secret_manager_secret" "shared" {
   for_each = toset([
     "asana-api-key",
     "grafana-otlp-endpoint",
     "grafana-otlp-token",
     "webhook-label-token",
-    "search-token", # inbox-api bearer auth (clients/inbox_api.py)
+    "search-token",     # inbox-api bearer auth (clients/inbox_api.py)
+    "standing-context", # declared facts — github.com/bdrolet/context (private)
   ])
   secret_id = each.key
   project   = var.project_id

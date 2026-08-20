@@ -10,7 +10,6 @@ on:
       - 'models/**'
       - 'services/**'
       - 'handlers/**'
-      - 'context/**'
       - 'requirements.txt'
       - 'terraform/**'
 

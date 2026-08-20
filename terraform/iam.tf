@@ -40,8 +40,15 @@ resource "google_service_account" "tasks_webhook_cf" {
   display_name = "Tasks Webhook Cloud Function"
 }
 
+# standing-context is deliberately excluded: the webhook CF never reads the
+# declared facts, and it is the one function that must stay publicly invokable
+# (Asana posts to it unauthenticated), so it gets no read access to personal
+# data it has no use for.
 resource "google_secret_manager_secret_iam_member" "webhook_cf_shared" {
-  for_each  = data.google_secret_manager_secret.shared
+  for_each = {
+    for k, v in data.google_secret_manager_secret.shared : k => v
+    if k != "standing-context"
+  }
   secret_id = each.value.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.tasks_webhook_cf.email}"
