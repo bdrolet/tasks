@@ -13,7 +13,10 @@ import httpx
 INBOX_API_URL = os.environ.get("INBOX_API_URL", "")
 INBOX_API_TOKEN = os.environ.get("INBOX_API_TOKEN", "")
 
-SEARCH_TIMEOUT = 10
+# Graph search fans out across the primary mailbox plus several shared
+# mailboxes and M365 groups; 10s was observed to time out against real mail,
+# and a timed-out search silently costs the triage agent its evidence.
+SEARCH_TIMEOUT = 20
 
 
 def _get(path: str) -> dict:

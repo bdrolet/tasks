@@ -215,3 +215,11 @@ def test_tool_calls_are_counted(monkeypatch):
 
 def test_tools_list_and_names():
     assert [t.name for t in triage.TOOLS] == ["search_emails", "get_email", "search_tasks", "get_task"]
+
+
+def test_search_emails_description_advises_sender_alone_first():
+    # .description is the SDK's generated tool description (the prose before
+    # Args: in the docstring) — what actually ships to the model. Collapse
+    # whitespace since the docstring wraps across lines.
+    description = " ".join(triage.search_emails.description.split())
+    assert "sender alone" in description

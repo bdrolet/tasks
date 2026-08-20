@@ -211,5 +211,5 @@ def test_evidence_items_schema_is_strict():
 def test_system_prompt_carries_the_rules():
     p = triage.SYSTEM_PROMPT
     for needle in ("ONLY", "period", "cc", "no action required", "automatic payment",
-                   "related_task_gid", "evidence", "Action required"):
+                   "related_task_gid", "evidence", "Action required", "not evidence"):
         assert needle in p, needle

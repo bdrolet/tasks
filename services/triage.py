@@ -71,8 +71,12 @@ def search_emails(query: str, mode: str = "graph", limit: int = 10) -> str:
     obligation (a bill, renewal, subscription, payment) to see whether prior
     mail from the same sender shows it is already automated or already paid
     ("automatic payment", "thanks for your payment"), or when you need the
-    rest of a thread. Returns a JSON list of {message_id, subject, sender,
-    received_at, preview, category, importance}; pass a message_id to
+    rest of a thread. When checking a sender's prior mail, query the sender
+    alone first (`from:someone@example.com`) and read what comes back, rather
+    than AND-ing a guessed keyword onto it — vendors phrase the same fact many
+    ways ("automatic payment", "autopay", "auto-pay", "scheduled payment",
+    "payment processed"). Returns a JSON list of {message_id, subject,
+    sender, received_at, preview, category, importance}; pass a message_id to
     get_email for the full body.
 
     Args:
@@ -271,6 +275,7 @@ Rules:
 - If an existing task covers the same matter — same vendor/amount/instrument within small variance, same thread, same saga — set related_task_gid to it, open or completed, but only after you have fetched it (get_task) or seen enough of it to be sure. If the email shows a closed matter has regressed, leave related_task_gid null and set actionable true.
 - Name every lookup or fact you relied on in evidence (kind: email|task|fact|thread; ref: message_id, task gid, fact heading, or "thread"; note: what it showed).
 - Do not reason beyond the facts given and the evidence you retrieved.
+- A search returning nothing is not evidence that nothing exists — it may be the wrong query. Before concluding an obligation is genuinely unhandled, broaden the query (drop keywords, search the sender alone) and try once more; a tool result that came back as an error is missing evidence, not absence of evidence, so prefer actionable: true in that case.
 
 Respond with the JSON object only."""
 
