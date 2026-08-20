@@ -6,6 +6,7 @@ from datetime import date
 
 import clients.claude as claude
 from models.events import EmailClassifiedEvent
+from services import standing_context
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,10 @@ logger = logging.getLogger(__name__)
 def extract_deadline(event: EmailClassifiedEvent) -> str | None:
     """Return ISO 8601 due date if the email states an explicit deadline, else None."""
     today = date.today().isoformat()
+    calendar = standing_context.section("Calendar")
+    preamble = f"Calendar facts:\n{calendar}\n\n" if calendar else ""
     prompt = (
+        f"{preamble}"
         f"Today is {today}.\n"
         "Does the following email contain an explicit deadline or due date?\n"
         "If yes, reply with ONLY the date in ISO 8601 format (YYYY-MM-DD).\n"
