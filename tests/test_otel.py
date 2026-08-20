@@ -22,3 +22,10 @@ def test_api_requests_counter_exists():
 
     # NoOp until setup_telemetry(); must exist and accept add() without error.
     otel.api_requests.add(1, {"route": "/search", "status": "200"})
+
+
+def test_triage_instruments_exist_as_noops():
+    import clients.otel as otel
+
+    for name in ("tasks_suppressed", "triage_duration", "triage_tool_calls"):
+        assert hasattr(otel, name)

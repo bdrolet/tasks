@@ -3,11 +3,89 @@ import logging
 import clients.asana as asana
 import clients.otel as otel
 from clients.db import get_conn
-from models.events import EmailClassifiedEvent
+from models.events import Decision, EmailClassifiedEvent
+from repo import suppressions as repo_suppressions
 from repo import tasks as repo_tasks
-from services import deadline, email_summary, policy, sections, tags, task_content, task_index
+from services import (
+    deadline,
+    email_summary,
+    policy,
+    sections,
+    tags,
+    task_content,
+    task_index,
+    triage,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _suppress(
+    event: EmailClassifiedEvent,
+    *,
+    reason: str,
+    source: str,
+    related_task_gid: str | None,
+    evidence: list,
+    resolves: bool = False,
+) -> None:
+    """Gate-2 outcome: no task. Optionally attach the email to a related task
+    as a comment, then record. Every step is best-effort — the decision was
+    made on evidence and a recording failure never reverses it.
+
+    The gate never closes a task. When the email settles the related task's
+    matter (resolves=True) the comment says so and asks Ben to close it — the
+    judgement is the model's, the decision stays his, and an open task with a
+    "close me" comment is obvious on review in a way a silent close is not."""
+    if related_task_gid:
+        lead = "Looks resolved — close this task if you agree." if resolves else "Related email:"
+        try:
+            asana.create_story(
+                related_task_gid,
+                text=f"{lead} {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(
+                    " —"
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "related-task comment failed gid=%s message_id=%s",
+                related_task_gid,
+                event["message_id"],
+            )
+    try:
+        with get_conn() as conn:
+            repo_suppressions.insert(
+                conn,
+                message_id=event["message_id"],
+                category=event["category"],
+                importance=event["importance"],
+                subject=event.get("subject"),
+                sender=event.get("sender"),
+                reason=reason,
+                source=source,
+                related_task_gid=related_task_gid,
+                evidence=evidence,
+            )
+    except Exception:
+        logger.exception("suppressed_emails insert failed message_id=%s", event["message_id"])
+    otel.tasks_suppressed.add(
+        1,
+        {
+            "category": event["category"],
+            "importance": event["importance"],
+            "source": source,
+            "attached": "true" if related_task_gid else "false",
+            "resolves": "true" if resolves else "false",
+        },
+    )
+    logger.info(
+        "Task suppressed source=%s related=%s resolves=%s message_id=%s reason=%s",
+        source,
+        related_task_gid,
+        resolves,
+        event["message_id"],
+        reason,
+    )
 
 
 def handle(event: EmailClassifiedEvent) -> None:
@@ -17,8 +95,24 @@ def handle(event: EmailClassifiedEvent) -> None:
         )
         return
 
+    decision: Decision = triage.decide(event)
+    if not decision.actionable or decision.related_task_gid:
+        _suppress(
+            event,
+            reason=decision.reason,
+            source="agent",
+            related_task_gid=decision.related_task_gid,
+            evidence=decision.evidence,
+            resolves=decision.resolves,
+        )
+        return
+
     # Enrichment: generated summary first, invite seeds from inbox appended.
     summary = email_summary.generate(event)
+    phrase = policy.no_action_phrase(summary.key_points)
+    if phrase:
+        _suppress(event, reason=phrase, source="phrase", related_task_gid=None, evidence=[])
+        return
     key_points = summary.key_points + (event.get("seed_key_points") or [])
     relevant_links = summary.relevant_links + (event.get("seed_links") or [])
 

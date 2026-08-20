@@ -29,3 +29,20 @@ CREATE TABLE IF NOT EXISTS task_index (
     embedding     vector(768),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Gate-2 audit trail: emails that passed the policy gate but were judged
+-- moot by the triage agent (source='agent') or the no-action phrase veto
+-- (source='phrase'). related_task_gid is set when the email was attached
+-- to an existing task as a comment instead. evidence = the agent's list.
+CREATE TABLE IF NOT EXISTS suppressed_emails (
+    message_id       TEXT PRIMARY KEY,
+    category         TEXT NOT NULL,
+    importance       TEXT NOT NULL,
+    subject          TEXT,
+    sender           TEXT,
+    reason           TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    related_task_gid TEXT,
+    evidence         JSONB,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
