@@ -4,7 +4,7 @@ pytest>=8.0
 pre-commit>=3.7
 # Runtime deps the test suite imports (CI installs only this file):
 httpx>=0.27
-anthropic>=0.25
+anthropic>=0.116,<1  # keep in step with requirements.txt or CI type-checks a different SDK
 functions-framework>=3.0
 # [binary] pulls the psycopg-binary wheel, which bundles libpq. Without it a
 # fresh venv has no libpq on macOS and the DB-touching test modules fail at

@@ -29,7 +29,10 @@ def _record_usage(response) -> None:
 
 def extract(prompt: str) -> str:
     """Single-turn extraction call. Temperature 0, max_tokens 20. Returns raw stripped text."""
-    response = _get_client().messages.create(
+    # temperature is gone from the Messages overloads in newer SDKs (the 4.7+
+    # models reject it outright) but is still accepted at runtime by the older
+    # models these two calls pin. Keep the determinism; silence the typing.
+    response = _get_client().messages.create(  # type: ignore[call-overload]
         model="claude-sonnet-4-6",
         max_tokens=20,
         temperature=0,
@@ -41,7 +44,7 @@ def extract(prompt: str) -> str:
 
 def summarize(prompt: str) -> str:
     """Extract structured summary. Haiku, temperature 0, max_tokens 400. Returns raw text."""
-    response = _get_client().messages.create(
+    response = _get_client().messages.create(  # type: ignore[call-overload]
         model="claude-haiku-4-5-20251001",
         max_tokens=400,
         temperature=0,
