@@ -6,6 +6,7 @@ description: >
   returns a formatted list with task GIDs and permalinks. Read-only: it never creates,
   edits, or completes anything. Use when the answer is "which tasks match X".
 tools: Bash, Read, Skill
+model: haiku
 ---
 
 # Task Lister

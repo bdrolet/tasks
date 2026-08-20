@@ -7,6 +7,7 @@ description: >
   and records findings and open questions as comments. Use when a task should be
   created properly rather than verbatim.
 tools: Bash, WebSearch, WebFetch, Read, Grep, Skill
+model: sonnet
 ---
 
 # Task Builder
