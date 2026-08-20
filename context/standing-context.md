@@ -5,19 +5,24 @@ Declared facts about Ben that the pipeline cannot derive from mail. Read by
 `Roles` feeds the triage agent (services/triage.py); `Calendar` feeds
 deadline extraction (services/deadline.py). A fact that applies only for a
 period states that period in its own prose — the model is given today's date
-and decides whether it still applies. Retire a fact by deleting its block.
+and decides whether it still applies. A bounded fact must say, as a direct
+instruction, when it stops applying — leaving the end date as background
+detail reads as permanent to the model, as live testing on the coach-role
+fact below confirmed. Retire a fact by deleting its block.
 
 ## Roles
 
 ### Assistant Coach, West Portal Proud Panthers (SF Microsoccer / SF Vikings)
-**Ended 2026-08-14, for the 2026 fall season — that season runs 2026-09-12 to
-2026-12-18.** Ben resigned; Christy Dillon is handling the replacement.
-Elijah remains a player on the team.
+Ben resigned this role on 2026-08-14, covering only the 2026 fall season
+(2026-09-12 to 2026-12-18); Christy Dillon is handling the replacement.
+**This fact stops applying after 2026-12-18 — judge coach- and
+admin-directed mail on its own terms from that date on.** Elijah remains a
+player on the team throughout, unaffected by this fact's expiry.
 
-- Coach- and admin-directed mail — schedules to review, coach admin
-  requirements, Micro Admin broadcasts — is NOT actionable for this season.
+- Through 2026-12-18, coach- and admin-directed mail — schedules to review,
+  coach admin requirements, Micro Admin broadcasts — is NOT actionable.
 - Mail about Elijah as a player — invitations, rosters, parent logistics —
-  IS actionable.
+  IS actionable at any time.
 
 ## Calendar
 
