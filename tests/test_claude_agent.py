@@ -37,6 +37,7 @@ def _install(monkeypatch, runner, captured):
     fake_client = SimpleNamespace(
         beta=SimpleNamespace(messages=SimpleNamespace(tool_runner=fake_tool_runner))
     )
+    fake_client.with_options = lambda **kwargs: (captured.setdefault("with_options", kwargs), fake_client)[1]
     monkeypatch.setattr(claude, "_get_client", lambda: fake_client)
 
 
@@ -58,6 +59,18 @@ def test_run_agent_returns_final_text_and_passes_params(monkeypatch):
     assert captured["messages"] == [{"role": "user", "content": "USER"}]
     assert captured["tools"] == ["t"]
     assert captured["timeout"] == 30.0
+    assert captured["max_tokens"] == 4096
+    assert captured["with_options"] == {"max_retries": 1}
+
+
+def test_run_agent_max_tokens_stop_reason_is_not_collapsed(monkeypatch):
+    captured = {}
+    runner = _FakeRunner([_msg("max_tokens", text='{"actionable"')])
+    _install(monkeypatch, runner, captured)
+    text, stop = claude.run_agent(system="s", user="u", tools=[], output_schema={})
+    assert stop == "max_tokens"
+    assert text == '{"actionable"'
+    assert captured["max_tokens"] == 4096
 
 
 def test_run_agent_refusal(monkeypatch):

@@ -13,12 +13,14 @@ import httpx
 INBOX_API_URL = os.environ.get("INBOX_API_URL", "")
 INBOX_API_TOKEN = os.environ.get("INBOX_API_TOKEN", "")
 
+SEARCH_TIMEOUT = 10
+
 
 def _get(path: str) -> dict:
     resp = httpx.get(
         f"{INBOX_API_URL}{path}",
         headers={"Authorization": f"Bearer {INBOX_API_TOKEN}"},
-        timeout=30,
+        timeout=SEARCH_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()
@@ -32,9 +34,6 @@ def get_email(message_id: str) -> dict:
 def get_attachments(message_id: str) -> dict:
     """Attachment list with content — GET /emails/{message_id}/attachments."""
     return _get(f"/emails/{message_id}/attachments")
-
-
-SEARCH_TIMEOUT = 10
 
 
 def search(

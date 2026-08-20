@@ -301,7 +301,10 @@ def test_phrase_veto_after_summary(monkeypatch):
     _stub_triage(monkeypatch, Decision(actionable=True, reason="looked fine", outcome="actionable"))
     task_create.handle(make_email_event())
     assert created == {}
-    assert rows[0]["source"] == "phrase" and rows[0]["reason"] == "no action required"
+    assert (
+        rows[0]["source"] == "phrase"
+        and rows[0]["reason"] == "Final payment will be sent; no action required"
+    )
     assert counts[0]["source"] == "phrase"
 
 

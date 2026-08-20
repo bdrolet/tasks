@@ -224,6 +224,9 @@ TOOLS = [search_emails, get_email, search_tasks, get_task]
 
 
 MAX_ITERATIONS = 6
+# Checked between turns by run_agent (after a message completes, before the
+# next tool-use turn is requested) — bounds when a new turn may start, not a
+# hard wall-clock stop on a turn already in flight.
 DEADLINE_S = 60.0
 BODY_CAP = 3000
 
@@ -236,7 +239,7 @@ OUTPUT_SCHEMA: dict = {
             "description": "One sentence naming the fact, email, or task that decided it.",
         },
         "related_task_gid": {
-            "type": ["string", "null"],
+            "anyOf": [{"type": "string"}, {"type": "null"}],
             "description": "GID of an existing task covering the same matter, else null.",
         },
         "evidence": {

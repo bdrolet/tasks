@@ -65,12 +65,25 @@ def run_agent(
     request_timeout: float = 30.0,
 ) -> tuple[str | None, str]:
     """Run a tool-use loop with the SDK tool runner. Returns (final_text, stop)
-    where stop is 'end_turn' | 'refusal' | 'max_iterations' | 'timeout'.
+    where stop is the SDK's stop reason verbatim — 'end_turn' is the only
+    success value. Anything else means the caller should fail open: a
+    non-tool-use, non-refusal stop such as 'max_tokens' (a turn truncated
+    before it finished) surfaces here under its own name instead of being
+    collapsed into 'end_turn', plus the sentinels 'max_iterations' and
+    'timeout' this function itself produces on the corresponding failure.
     final_text is the last assistant message's text (JSON per output_schema)
-    only for 'end_turn'. Exceptions propagate — the caller owns fail-open."""
-    runner = _get_client().beta.messages.tool_runner(
+    for 'end_turn' and any other stop reached by breaking out of the loop
+    (e.g. 'max_tokens'); it is None for 'refusal', 'max_iterations', and
+    'timeout'. Callers should only read the text on 'end_turn' (see
+    services/triage.py::_parse). Exceptions propagate — the caller owns
+    fail-open.
+
+    deadline_s is checked only between turns (after a message completes,
+    before the next tool-use turn is requested) — it bounds when a new turn
+    may start, not a hard wall-clock stop on a turn already in flight."""
+    runner = _get_client().with_options(max_retries=1).beta.messages.tool_runner(
         model=AGENT_MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         max_iterations=max_iterations,
         thinking={"type": "adaptive"},
         output_config={
@@ -96,4 +109,4 @@ def run_agent(
     if last is None or last.stop_reason == "tool_use":
         return None, "max_iterations"
     text = "".join(b.text for b in last.content if getattr(b, "type", None) == "text")
-    return text, "end_turn"
+    return text, last.stop_reason

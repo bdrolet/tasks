@@ -26,6 +26,7 @@ def test_get_email_hits_endpoint_with_bearer(monkeypatch):
     assert inbox_api.get_email("m1") == {"subject": "hi"}
     assert calls[0]["url"] == "https://inbox-api.example/emails/m1"
     assert calls[0]["headers"]["Authorization"] == "Bearer tok"
+    assert calls[0]["timeout"] == inbox_api.SEARCH_TIMEOUT
 
 
 def test_get_attachments_endpoint(monkeypatch):

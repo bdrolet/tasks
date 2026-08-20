@@ -194,6 +194,20 @@ def test_output_schema_is_strict_object():
     assert set(s["required"]) == {"actionable", "reason", "related_task_gid", "evidence"}
 
 
+def test_related_task_gid_uses_anyof_nullable_form():
+    prop = triage.OUTPUT_SCHEMA["properties"]["related_task_gid"]
+    assert "type" not in prop
+    assert prop["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    assert prop["description"]
+
+
+def test_evidence_items_schema_is_strict():
+    items = triage.OUTPUT_SCHEMA["properties"]["evidence"]["items"]
+    assert items["type"] == "object"
+    assert items["additionalProperties"] is False
+    assert set(items["required"]) == {"kind", "ref", "note"}
+
+
 def test_system_prompt_carries_the_rules():
     p = triage.SYSTEM_PROMPT
     for needle in ("ONLY", "period", "cc", "no action required", "automatic payment",
