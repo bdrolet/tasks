@@ -16,7 +16,7 @@ exists in Asana.
 Today `handlers/task_create.py` decides from one event in isolation:
 
 ```python
-if not policy.warrants_task(event):   # category in {urgent, review, respond}
+if not policy.warrants_task(event):  # category in {urgent, review, respond}
     return
 ```
 

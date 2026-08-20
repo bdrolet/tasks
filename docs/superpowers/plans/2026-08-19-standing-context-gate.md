@@ -397,10 +397,18 @@ def test_insert_writes_all_columns_and_is_idempotent():
     assert "ON CONFLICT (message_id) DO NOTHING" in query
     assert "%s::jsonb" in query
     assert params[:8] == (
-        "m1", "review", "P1", "Your bill", "billing@xfinity.com",
-        "autopay already processed", "agent", None,
+        "m1",
+        "review",
+        "P1",
+        "Your bill",
+        "billing@xfinity.com",
+        "autopay already processed",
+        "agent",
+        None,
     )
-    assert json.loads(params[8]) == [{"kind": "email", "ref": "m0", "note": "Thanks for your payment"}]
+    assert json.loads(params[8]) == [
+        {"kind": "email", "ref": "m0", "note": "Thanks for your payment"}
+    ]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -598,7 +606,10 @@ def test_run_agent_returns_final_text_and_passes_params(monkeypatch):
     assert captured["max_iterations"] == 4
     assert captured["thinking"] == {"type": "adaptive"}
     assert captured["output_config"]["effort"] == "medium"
-    assert captured["output_config"]["format"] == {"type": "json_schema", "schema": {"type": "object"}}
+    assert captured["output_config"]["format"] == {
+        "type": "json_schema",
+        "schema": {"type": "object"},
+    }
     assert captured["system"][0]["text"] == "SYS"
     assert captured["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert captured["messages"] == [{"role": "user", "content": "USER"}]
@@ -791,6 +802,7 @@ def _j(tool, **kwargs):
 
 # --- search_emails -----------------------------------------------------------
 
+
 def test_search_emails_returns_trimmed_rows(monkeypatch):
     calls = []
 
@@ -837,6 +849,7 @@ def test_search_emails_error_is_returned_not_raised(monkeypatch):
 
 # --- get_email ---------------------------------------------------------------
 
+
 def test_get_email_returns_body_and_recipients(monkeypatch):
     monkeypatch.setattr(
         inbox_api,
@@ -873,38 +886,89 @@ def test_get_email_caps_body(monkeypatch):
 
 # --- search_tasks ------------------------------------------------------------
 
+
 def _stub_conn(monkeypatch, rows, message_gid=None):
     conn = FakeConn()
     monkeypatch.setattr(triage, "get_conn", lambda: conn)
     monkeypatch.setattr(repo_index, "substring_candidates", lambda c, **kw: rows)
-    monkeypatch.setattr(repo_index, "get_rows", lambda c, gids: [r for r in rows if r["task_gid"] in gids])
+    monkeypatch.setattr(
+        repo_index, "get_rows", lambda c, gids: [r for r in rows if r["task_gid"] in gids]
+    )
     monkeypatch.setattr(repo_tasks, "get_gid_by_message", lambda c, mid: message_gid)
     return conn
 
 
 def test_search_tasks_substring_path(monkeypatch):
-    _stub_conn(monkeypatch, [{"task_gid": "t1", "title": "Disney", "notes": "n", "completed": True,
-                              "due_on": None, "project": "P", "permalink_url": "u"}])
+    _stub_conn(
+        monkeypatch,
+        [
+            {
+                "task_gid": "t1",
+                "title": "Disney",
+                "notes": "n",
+                "completed": True,
+                "due_on": None,
+                "project": "P",
+                "permalink_url": "u",
+            }
+        ],
+    )
     out = _j(triage.search_tasks, query="disney", completed=None)
-    assert out == [{"task_gid": "t1", "title": "Disney", "notes": "n", "completed": True,
-                    "due_on": None, "project": "P", "permalink_url": "u"}]
+    assert out == [
+        {
+            "task_gid": "t1",
+            "title": "Disney",
+            "notes": "n",
+            "completed": True,
+            "due_on": None,
+            "project": "P",
+            "permalink_url": "u",
+        }
+    ]
 
 
 def test_search_tasks_semantic_path_attaches_scores(monkeypatch):
-    rows = [{"task_gid": "t1", "title": "Refund", "notes": "", "completed": False,
-             "due_on": None, "project": None, "permalink_url": None}]
+    rows = [
+        {
+            "task_gid": "t1",
+            "title": "Refund",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "project": None,
+            "permalink_url": None,
+        }
+    ]
     _stub_conn(monkeypatch, rows)
     monkeypatch.setattr(vertex, "embed", lambda text, *, task_type: [0.1] * 768)
-    monkeypatch.setattr(repo_index, "semantic_candidates", lambda c, **kw: [{"task_gid": "t1", "score": 0.91}])
+    monkeypatch.setattr(
+        repo_index, "semantic_candidates", lambda c, **kw: [{"task_gid": "t1", "score": 0.91}]
+    )
     out = _j(triage.search_tasks, query="disney refund", semantic=True)
     assert out[0]["task_gid"] == "t1" and out[0]["score"] == 0.91
 
 
 def test_search_tasks_prepends_this_emails_existing_task(monkeypatch):
-    rows = [{"task_gid": "t1", "title": "Other", "notes": "", "completed": False,
-             "due_on": None, "project": None, "permalink_url": None},
-            {"task_gid": "t0", "title": "Same thread", "notes": "", "completed": False,
-             "due_on": None, "project": None, "permalink_url": None}]
+    rows = [
+        {
+            "task_gid": "t1",
+            "title": "Other",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "project": None,
+            "permalink_url": None,
+        },
+        {
+            "task_gid": "t0",
+            "title": "Same thread",
+            "notes": "",
+            "completed": False,
+            "due_on": None,
+            "project": None,
+            "permalink_url": None,
+        },
+    ]
     _stub_conn(monkeypatch, rows, message_gid="t0")
     token = triage.CURRENT_MESSAGE_ID.set("msg-123")
     try:
@@ -925,27 +989,40 @@ def test_search_tasks_error_is_returned(monkeypatch):
 
 # --- get_task ----------------------------------------------------------------
 
+
 def test_get_task_returns_detail_and_comments(monkeypatch):
     monkeypatch.setattr(
         asana,
         "get_task_detail",
-        lambda gid: {"gid": gid, "name": "Follow up on refund", "notes": "N" * 1000,
-                     "completed": True, "due_on": "2026-07-01", "permalink_url": "https://a/1"},
+        lambda gid: {
+            "gid": gid,
+            "name": "Follow up on refund",
+            "notes": "N" * 1000,
+            "completed": True,
+            "due_on": "2026-07-01",
+            "permalink_url": "https://a/1",
+        },
     )
     monkeypatch.setattr(
         asana,
         "get_stories",
         lambda gid: [
             {"type": "system", "text": "added to project", "created_at": "2026-06-01T00:00:00Z"},
-            {"type": "comment", "text": "Refund landed", "created_at": "2026-07-02T00:00:00Z",
-             "created_by": {"name": "Ben"}},
+            {
+                "type": "comment",
+                "text": "Refund landed",
+                "created_at": "2026-07-02T00:00:00Z",
+                "created_by": {"name": "Ben"},
+            },
         ],
     )
     out = _j(triage.get_task, task_gid="1")
     assert out["name"] == "Follow up on refund"
     assert out["completed"] is True
     assert len(out["notes"]) == triage.TASK_NOTES_CAP
-    assert out["comments"] == [{"text": "Refund landed", "created_at": "2026-07-02T00:00:00Z", "by": "Ben"}]
+    assert out["comments"] == [
+        {"text": "Refund landed", "created_at": "2026-07-02T00:00:00Z", "by": "Ben"}
+    ]
 
 
 def test_get_task_missing(monkeypatch):
@@ -962,7 +1039,12 @@ def test_tool_calls_are_counted(monkeypatch):
 
 
 def test_tools_list_and_names():
-    assert [t.name for t in triage.TOOLS] == ["search_emails", "get_email", "search_tasks", "get_task"]
+    assert [t.name for t in triage.TOOLS] == [
+        "search_emails",
+        "get_email",
+        "search_tasks",
+        "get_task",
+    ]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1254,7 +1336,9 @@ def _ok(actionable=False, reason="coach fact applies", gid=None, evidence=None):
             "actionable": actionable,
             "reason": reason,
             "related_task_gid": gid,
-            "evidence": evidence if evidence is not None else [{"kind": "fact", "ref": "Assistant Coach", "note": "resigned"}],
+            "evidence": evidence
+            if evidence is not None
+            else [{"kind": "fact", "ref": "Assistant Coach", "note": "resigned"}],
         }
     )
 
@@ -1332,7 +1416,7 @@ def test_fail_open_paths(monkeypatch):
         (None, "timeout"),
         ("not json", "end_turn"),
         (json.dumps({"actionable": "maybe"}), "end_turn"),
-        (_ok(False, ""), "end_turn"),            # suppression with empty reason
+        (_ok(False, ""), "end_turn"),  # suppression with empty reason
         (_ok(False, "   "), "end_turn"),
     ]
     for text, stop in cases:
@@ -1358,7 +1442,9 @@ def test_current_message_id_is_set_during_run_and_cleared_after(monkeypatch):
 def test_duration_metric_recorded(monkeypatch):
     _roles(monkeypatch, "")
     recorded = []
-    monkeypatch.setattr(triage.otel.triage_duration, "record", lambda ms, attrs: recorded.append(attrs))
+    monkeypatch.setattr(
+        triage.otel.triage_duration, "record", lambda ms, attrs: recorded.append(attrs)
+    )
     _agent(monkeypatch, _ok(True, "x"))
     triage.decide(make_email_event())
     assert recorded == [{"outcome": "actionable"}]
@@ -1372,8 +1458,16 @@ def test_output_schema_is_strict_object():
 
 def test_system_prompt_carries_the_rules():
     p = triage.SYSTEM_PROMPT
-    for needle in ("ONLY", "period", "cc", "no action required", "automatic payment",
-                   "related_task_gid", "evidence", "Action required"):
+    for needle in (
+        "ONLY",
+        "period",
+        "cc",
+        "no action required",
+        "automatic payment",
+        "related_task_gid",
+        "evidence",
+        "Action required",
+    ):
         assert needle in p, needle
 ```
 
@@ -1476,7 +1570,13 @@ def _parse(text: str | None, stop: str, message_id: str) -> Decision:
     evidence = data.get("evidence") if isinstance(data.get("evidence"), list) else []
     actionable = data["actionable"]
     if gid is not None:
-        return Decision(actionable=False, reason=reason, related_task_gid=str(gid), evidence=evidence, outcome="attached")
+        return Decision(
+            actionable=False,
+            reason=reason,
+            related_task_gid=str(gid),
+            evidence=evidence,
+            outcome="attached",
+        )
     if actionable:
         return Decision(actionable=True, reason=reason, evidence=evidence, outcome="actionable")
     if not reason:
@@ -1512,7 +1612,11 @@ def decide(event: EmailClassifiedEvent, *, today: str | None = None) -> Decision
     otel.triage_duration.record((time.monotonic() - t0) * 1000, {"outcome": decision.outcome})
     logger.info(
         "triage outcome=%s actionable=%s related=%s message_id=%s reason=%s",
-        decision.outcome, decision.actionable, decision.related_task_gid, message_id, decision.reason,
+        decision.outcome,
+        decision.actionable,
+        decision.related_task_gid,
+        message_id,
+        decision.reason,
     )
     return decision
 ```
@@ -1552,7 +1656,10 @@ Append to `tests/test_policy.py`:
 @pytest.mark.parametrize(
     ("points", "expected"),
     [
-        (["Final payment will be sent; no action required unless you cancel"], "no action required"),
+        (
+            ["Final payment will be sent; no action required unless you cancel"],
+            "no action required",
+        ),
         (["No action is needed"], "no action is needed"),
         (["Statement attached for your records"], "for your records"),
         (["Your automatic payment of $70 will draw on 9/9"], "automatic payment"),
@@ -1573,9 +1680,15 @@ from services import standing_context
 
 def test_calendar_section_reaches_prompt(monkeypatch):
     captured = {}
-    monkeypatch.setattr(claude, "extract", lambda prompt: captured.setdefault("p", prompt) and "null")
     monkeypatch.setattr(
-        standing_context, "section", lambda name, **kw: "- SFUSD fall term: 2026-08-17 to 2026-12-18." if name == "Calendar" else ""
+        claude, "extract", lambda prompt: captured.setdefault("p", prompt) and "null"
+    )
+    monkeypatch.setattr(
+        standing_context,
+        "section",
+        lambda name, **kw: (
+            "- SFUSD fall term: 2026-08-17 to 2026-12-18." if name == "Calendar" else ""
+        ),
     )
     deadline.extract_deadline(make_email_event())
     p = captured["p"]
@@ -1585,7 +1698,9 @@ def test_calendar_section_reaches_prompt(monkeypatch):
 
 def test_empty_calendar_leaves_prompt_unchanged(monkeypatch):
     captured = {}
-    monkeypatch.setattr(claude, "extract", lambda prompt: captured.setdefault("p", prompt) and "null")
+    monkeypatch.setattr(
+        claude, "extract", lambda prompt: captured.setdefault("p", prompt) and "null"
+    )
     monkeypatch.setattr(standing_context, "section", lambda name, **kw: "")
     deadline.extract_deadline(make_email_event())
     assert captured["p"].startswith("Today is ")
@@ -1719,7 +1834,9 @@ def _stub_story(monkeypatch, fail=False):
 
 def _count_suppressed(monkeypatch):
     counts = []
-    monkeypatch.setattr(task_create.otel.tasks_suppressed, "add", lambda n, attrs: counts.append(attrs))
+    monkeypatch.setattr(
+        task_create.otel.tasks_suppressed, "add", lambda n, attrs: counts.append(attrs)
+    )
     return counts
 
 
@@ -1731,19 +1848,31 @@ def test_suppressed_decision_creates_nothing_and_records(monkeypatch):
     created = _capture_create(monkeypatch)
     _stub_triage(
         monkeypatch,
-        Decision(actionable=False, reason="coach fact", evidence=[{"kind": "fact", "ref": "Coach", "note": "x"}], outcome="suppressed"),
+        Decision(
+            actionable=False,
+            reason="coach fact",
+            evidence=[{"kind": "fact", "ref": "Coach", "note": "x"}],
+            outcome="suppressed",
+        ),
     )
     task_create.handle(make_email_event())
     assert created == {} and summary_calls == []
     assert rows == [
         {
-            "message_id": "msg-123", "category": "review", "importance": "P1",
-            "subject": "Quarterly report", "sender": "alice@example.com",
-            "reason": "coach fact", "source": "agent", "related_task_gid": None,
+            "message_id": "msg-123",
+            "category": "review",
+            "importance": "P1",
+            "subject": "Quarterly report",
+            "sender": "alice@example.com",
+            "reason": "coach fact",
+            "source": "agent",
+            "related_task_gid": None,
             "evidence": [{"kind": "fact", "ref": "Coach", "note": "x"}],
         }
     ]
-    assert counts == [{"category": "review", "importance": "P1", "source": "agent", "attached": "false"}]
+    assert counts == [
+        {"category": "review", "importance": "P1", "source": "agent", "attached": "false"}
+    ]
 
 
 def test_attached_decision_comments_on_related_task(monkeypatch):
@@ -1753,10 +1882,15 @@ def test_attached_decision_comments_on_related_task(monkeypatch):
     _stub_enrichment(monkeypatch)
     created = _capture_create(monkeypatch)
     stories = _stub_story(monkeypatch)
-    _stub_triage(monkeypatch, Decision(actionable=False, reason="same refund", related_task_gid="t9", outcome="attached"))
+    _stub_triage(
+        monkeypatch,
+        Decision(actionable=False, reason="same refund", related_task_gid="t9", outcome="attached"),
+    )
     task_create.handle(make_email_event())
     assert created == {}
-    assert stories == [("t9", "Related email: Quarterly report — same refund — https://outlook.example/msg-123")]
+    assert stories == [
+        ("t9", "Related email: Quarterly report — same refund — https://outlook.example/msg-123")
+    ]
     assert rows[0]["related_task_gid"] == "t9" and rows[0]["source"] == "agent"
     assert counts[0]["attached"] == "true"
 
@@ -1767,7 +1901,10 @@ def test_story_failure_does_not_resurrect_task(monkeypatch):
     _stub_enrichment(monkeypatch)
     created = _capture_create(monkeypatch)
     _stub_story(monkeypatch, fail=True)
-    _stub_triage(monkeypatch, Decision(actionable=False, reason="r", related_task_gid="t9", outcome="attached"))
+    _stub_triage(
+        monkeypatch,
+        Decision(actionable=False, reason="r", related_task_gid="t9", outcome="attached"),
+    )
     task_create.handle(make_email_event())
     assert created == {} and len(rows) == 1
 
@@ -1844,11 +1981,15 @@ def _suppress(
         try:
             asana.create_story(
                 related_task_gid,
-                text=f"Related email: {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(" —"),
+                text=f"Related email: {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(
+                    " —"
+                ),
             )
         except Exception:
             logger.exception(
-                "related-task comment failed gid=%s message_id=%s", related_task_gid, event["message_id"]
+                "related-task comment failed gid=%s message_id=%s",
+                related_task_gid,
+                event["message_id"],
             )
     try:
         with get_conn() as conn:
@@ -1877,7 +2018,10 @@ def _suppress(
     )
     logger.info(
         "Task suppressed source=%s related=%s message_id=%s reason=%s",
-        source, related_task_gid, event["message_id"], reason,
+        source,
+        related_task_gid,
+        event["message_id"],
+        reason,
     )
 ```
 
