@@ -6,6 +6,10 @@ itself was correctly classified; what was missing is context that lives
 *outside* the triggering email: prior mail in the same account, or a task
 already in Asana.
 
+> **Status (2026-08-19):** addressed by gate 2 — see
+> `docs/superpowers/specs/2026-08-18-standing-context-gate-design.md` and
+> `services/triage.py`. Keep logging new cases here; they are the eval set.
+
 These are not classification bugs. `services/policy.py::warrants_task` looks at
 one event in isolation, and by that standard each of these was a reasonable
 task. The failure is at a different altitude: the pipeline never asks *"given

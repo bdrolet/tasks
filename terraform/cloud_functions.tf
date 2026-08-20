@@ -96,7 +96,7 @@ resource "google_cloudfunctions2_function" "tasks_events" {
     service_account_email = google_service_account.tasks_events_cf.email
     min_instance_count    = 0
     max_instance_count    = 3
-    timeout_seconds       = 120
+    timeout_seconds       = 300 # triage agent: ≤60s decide + enrichment + Asana
     available_memory      = "512Mi"
     environment_variables = local.common_env
 

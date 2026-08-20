@@ -6,6 +6,10 @@ Tasks created from emails that require nothing of the recipient. Distinct from
 These are recognizable as no-action from the **thread itself** — the pipeline had
 everything it needed and still produced a task.
 
+> **Status (2026-08-19):** addressed by gate 2 — see
+> `docs/superpowers/specs/2026-08-18-standing-context-gate-design.md` and
+> `services/triage.py`. Keep logging new cases here; they are the eval set.
+
 Two families show up here.
 
 **Family A — acknowledgment replies.** Someone acknowledging a decision the user
