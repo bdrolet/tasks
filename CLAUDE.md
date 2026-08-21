@@ -123,8 +123,9 @@ CF URL changes): `docs/asana-webhook-setup.md`.
 
 The Asana consumer skills (`searching-tasks`, `fetching-task`,
 `editing-tasks`, `creating-tasks`, `planning-project-tasks`) and the
-`task-builder` / `task-lister` agents live in `.claude/skills/` / `.claude/agents/` and are
-symlinked into `~/.claude/` by `scripts/link-skills.sh` (per-skill
+`task-builder` / `task-lister` / `task-commenter` agents live in
+`.claude/skills/` / `.claude/agents/` and are symlinked into `~/.claude/`
+by `scripts/link-skills.sh` (per-skill
 symlinks — never the parent directory; run once per machine). That script
 also puts `scripts/task_ref.py` on PATH as `task-ref`, which every task
 listing pipes through.
@@ -137,6 +138,8 @@ does not apply here:
   goes to the `task-lister` agent.
 - A request to **create** a task from anything rougher than exact wording
   goes to the `task-builder` agent.
+- A request to **comment** on an existing task ("note on that task that X")
+  goes to the `task-commenter` agent.
 
 Use the underlying skills directly when agent dispatch is unavailable, or for
 a single trivial lookup. Both paths must produce the same ref-first listing

@@ -22,7 +22,7 @@ for skill in searching-tasks fetching-task editing-tasks creating-tasks planning
 done
 
 mkdir -p "$HOME/.claude/agents"
-for agent in task-builder task-lister; do
+for agent in task-builder task-lister task-commenter; do
   AGENT_DEST="$HOME/.claude/agents/$agent.md"
   if [[ -e "$AGENT_DEST" && ! -L "$AGENT_DEST" ]]; then
     echo "error: $AGENT_DEST exists and is not a symlink — remove the old copy first" >&2

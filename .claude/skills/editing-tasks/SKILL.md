@@ -1,6 +1,6 @@
 ---
 name: editing-tasks
-version: 1.1.0
+version: 1.2.0
 description: >
   Use when the user wants to update, complete, or comment on an existing Asana
   task — "mark that done", "push the due date", "move it to Done", "comment on
@@ -88,6 +88,11 @@ Unknown section/project names return 400 with the valid names — retry with one
 **To re-prioritize, send `name` and `priority` together** (priority alone is rejected). Any content field rewrite rewrites the description.
 
 ## Comments
+
+**For a note that needs a task resolved or the wording tightened, dispatch the
+`task-commenter` agent** — it finds the target, stops rather than guessing when
+two tasks match, and posts a clean comment. Post directly here when you already
+have the GID and the exact text.
 
 ```bash
 # Add (also supports {"html_text": ...})
