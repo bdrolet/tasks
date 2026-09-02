@@ -111,3 +111,39 @@ def test_run_agent_records_token_usage(monkeypatch):
     claude.run_agent(system="s", user="u", tools=[], output_schema={})
     assert (7, {"token_type": "input"}) in spent
     assert (3, {"token_type": "output"}) in spent
+
+
+def test_classify_sends_schema_and_returns_text(monkeypatch):
+    import clients.claude as claude
+
+    captured = {}
+
+    class _Block:
+        type = "text"
+        text = '  {"verdict": "task"}  '
+
+    class _Resp:
+        content = [_Block()]
+
+        class usage:
+            input_tokens = 10
+            output_tokens = 2
+
+    class _Messages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _Resp()
+
+    class _Client:
+        messages = _Messages()
+
+    monkeypatch.setattr(claude, "_get_client", lambda: _Client())
+
+    out = claude.classify(system="SYS", user="USER", schema={"type": "object"})
+
+    assert out == '{"verdict": "task"}'
+    assert captured["model"] == "claude-haiku-4-5"
+    assert captured["system"][0]["text"] == "SYS"
+    assert captured["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert captured["messages"] == [{"role": "user", "content": "USER"}]
+    assert captured["output_config"]["format"]["schema"] == {"type": "object"}

@@ -79,7 +79,6 @@ def test_user_message_has_date_roles_and_email(monkeypatch):
     assert "From: alice@example.com" in user
     assert "To: ben@drolet.cloud" in user
     assert "Cc: x@example.com" in user
-    assert "review / P1" in user
     assert user.count("B") >= triage.BODY_CAP and user.count("B") < 5000
 
 
@@ -141,13 +140,6 @@ def test_actionable_outcome(monkeypatch):
     _roles(monkeypatch, "")
     _agent(monkeypatch, _ok(True, "a real request"))
     assert triage.decide(make_email_event()).outcome == "actionable"
-
-
-def test_urgent_short_circuits_without_calling_agent(monkeypatch):
-    called = []
-    monkeypatch.setattr(claude, "run_agent", lambda **kw: called.append(1) or (None, "end_turn"))
-    d = triage.decide(make_email_event(category="urgent"))
-    assert d == Decision() and called == []
 
 
 def test_fail_open_paths(monkeypatch):
@@ -237,3 +229,52 @@ def test_system_prompt_carries_the_rules():
         "resolves to true only",
     ):
         assert needle in p, needle
+
+
+def test_urgent_now_runs_gate_two(monkeypatch):
+    """The bypass is gone: urgent mail is triaged like everything else."""
+    from models.events import Screening
+
+    called = []
+    monkeypatch.setattr(
+        claude, "run_agent", lambda **kw: called.append(1) or (_ok(actionable=True), "end_turn")
+    )
+    _roles(monkeypatch, "")
+    _gid_verifies(monkeypatch, True)
+
+    result = triage.decide(make_email_event(category="urgent"), screening=Screening(priority="P0"))
+
+    assert called == [1]
+    assert result.actionable is True
+
+
+def test_user_message_carries_the_screening_verdict():
+    from models.events import Screening
+
+    msg = triage.build_user_message(
+        make_email_event(),
+        today="2026-08-24",
+        roles="",
+        screening=Screening(verdict="task", priority="P1", reason="statements attached"),
+    )
+    assert "Screened: task / P1 — statements attached" in msg
+    assert "Classified:" not in msg
+
+
+def test_user_message_without_a_screening_verdict():
+    msg = triage.build_user_message(make_email_event(), today="2026-08-24", roles="")
+    assert "Screened:" not in msg
+
+
+def test_decide_forwards_the_screening_verdict(monkeypatch):
+    from models.events import Screening
+
+    captured = {}
+    _agent(monkeypatch, _ok(actionable=True), capture=captured)
+    _roles(monkeypatch, "")
+    _gid_verifies(monkeypatch, True)
+    triage.decide(
+        make_email_event(category="review"),
+        screening=Screening(priority="P0", reason="signed form requested"),
+    )
+    assert "Screened: task / P0 — signed form requested" in captured["user"]

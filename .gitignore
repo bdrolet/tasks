@@ -32,6 +32,10 @@ override.tf.json
 # macOS
 .DS_Store
 
+# Backtest output — real subjects and senders, this repo is public.
+*.tsv
+*.ids
+
 # Subagent-driven-development scratch (briefs, reports, review packages)
 .superpowers/
 

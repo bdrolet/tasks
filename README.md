@@ -11,23 +11,35 @@ Cloud.
 Inbox classifies every email and publishes an `email_classified` event
 (category, importance, tags, full body, reply-draft link for respond) to its
 `email-events` Pub/Sub topic — inbox classifies, this service decides. The
-`tasks-events` Cloud Function applies `services/policy.py` (urgent, review,
-and respond become tasks; reference and ignore don't), generates key points
-and extracts an explicit deadline via Claude, creates the Asana task with
-action links, and places it in the category's section. Human feedback on the
-action links flows back through inbox, which publishes `label_applied` — the
-task moves to the matching section. Completing a task in Asana fires a
-webhook to the `tasks-webhook` Cloud Function, which moves it to Done. A
-daily Cloud Scheduler cron hits `/escalate` to sweep incomplete past-due
-tasks into Overdue.
+`tasks-events` Cloud Function screens **every** email with
+`services/screening.py::screen` (a Haiku call, whatever category inbox filed
+it under) for a three-way verdict: `task` goes to `services/triage.py::decide`
+(a Sonnet tool-runner gate 2 — there's no `urgent` bypass, urgent mail is
+triaged like everything else), then Claude enrichment (key points + deadline)
+and creation, with priority and the `[PX]` prefix taken from the screener's
+verdict, not inbox's `importance`; `relate` finds the open task the email
+reports on (`services/relating.py::match`) and adds a **comment** — a match
+never closes the task, and no match is a normal outcome; `drop` records a
+`suppressed_emails` row and creates nothing. `services/policy.py::warrants_task`
+survives only as the outage fallback, degrading gate 1 to the old category
+rule (`task`/`drop` only, never `relate`) if Claude is unavailable. A created
+task is placed in a section by inbox's `category` (a mailbox-routing fact,
+not the screener's verdict) — only the creation path defaults a rescued email
+into Review; the `label_applied` feedback path below does not. Human feedback
+on the action links flows back through inbox, which publishes
+`label_applied` — the task moves to the matching section. Completing a task
+in Asana fires a webhook to the `tasks-webhook` Cloud Function, which moves
+it to Done. A daily Cloud Scheduler cron hits `/escalate` to sweep incomplete
+past-due tasks into Overdue.
 
 ```mermaid
 flowchart TD
     IB[inbox CF] -->|publish email_classified\nfor EVERY email| AE[email-events\nPub/Sub topic - inbox-owned]
     AE -->|trigger| CF1[tasks-events CF]
-    CF1 -->|policy: urgent/review/respond?| POL{task?}
-    POL -->|yes: enrich via Claude,\ncreate + place in section| AS[Asana project]
-    POL -->|no: reference/ignore| SKIP[no-op]
+    CF1 -->|screen: Haiku verdict\noutage -> policy.py fallback| SCR{task / relate / drop?}
+    SCR -->|task: triage gate 2,\nenrich, create + place in section| AS[Asana project]
+    SCR -->|relate: match to open task,\nadd comment - never closes| AS
+    SCR -->|drop| SKIP[no-op]
 
     IB -->|publish label_applied| AE
     CF1 -->|move task to section| AS
@@ -61,6 +73,35 @@ scripts/fetch-env.sh                 # .env from Secret Manager + tfvars
 .venv/bin/pytest tests/ -q           # unit tests
 .venv/bin/python scripts/test-task-create.py   # real-Asana smoke test
 ```
+
+### Backtesting the screener
+
+`scripts/backtest_screening.py` replays gate 1 over historical mail from the
+**inbox** database and creates nothing. Use it after any change to
+`services/screening.py::SYSTEM_PROMPT` or `services/relating.py::SIMILARITY_FLOOR`.
+
+    set -a; source .env; set +a
+    export STANDING_CONTEXT_PATH=~/path/to/standing-context.md
+    .venv/bin/python scripts/backtest_screening.py --out backtest.tsv
+
+`STANDING_CONTEXT_PATH` is required: without it `services/standing_context.py`
+falls back to `context/standing-context.md`, which doesn't exist in a clone —
+`context/` is gitignored and the real declared facts live in the private
+`bdrolet/context` repo (see `context/README.md`) — so the run silently screens
+with an empty `Roles` section instead of the config that ships. `task` and
+`relate` are scored separately — a promotion rate that folds them together is
+meaningless. A miss on the `positive` corpus (the population that already
+becomes a task today) is a behaviour change to review, not necessarily an
+error — inbox's category is not ground truth. Corpora and the ship gate:
+`docs/superpowers/specs/2026-08-27-tasks-owned-screening-design.md` §Verification.
+Full pass is ~1,200 screener calls plus the relate stage (~$3, 20-35 min);
+`--no-relate` for a cheaper screener-only pass, `--corpus recall_probe --limit 20`
+for a quick check. Iterating on a prompt or the similarity floor? Reach for
+`--ids FILE` first — it replays only the message_ids listed there, a
+seconds-long loop instead of the full run. Relate match rates are not
+comparable across runs — `task_index`'s open-task pool is small and live, so
+the corpus it matches against churns day to day (see spec §Verification
+caveat 3).
 
 ## Deployment
 

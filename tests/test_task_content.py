@@ -1,4 +1,5 @@
 from models.task_content import Source, TaskContent
+from services import task_content
 from services.task_content import for_email, render_html_notes
 from tests.test_events import make_email_event
 
@@ -144,3 +145,67 @@ def test_for_email_includes_draft_reply_action(monkeypatch):
         relevant_links=[],
     )
     assert ("Open draft reply in Outlook", "https://outlook/draft") in content.action_items
+
+
+def test_rescued_email_records_a_correction_not_a_confirmation(monkeypatch):
+    """A screener-rescued ignore email must not forge a human_confirmation."""
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    monkeypatch.delenv("WEBHOOK_LABEL_TOKEN", raising=False)
+    content = task_content.for_email(make_email_event(category="ignore"), [], [])
+    confirm_label, confirm_url = content.action_items[0]
+    assert confirm_label == "Confirmed review"
+    assert "label=review" in confirm_url
+    assert "source=human_correction" in confirm_url
+
+
+def test_matching_category_still_records_a_confirmation(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    monkeypatch.delenv("WEBHOOK_LABEL_TOKEN", raising=False)
+    content = task_content.for_email(make_email_event(category="review"), [], [])
+    assert "source=human_confirmation" in content.action_items[0][1]
+
+    respond = task_content.for_email(make_email_event(category="respond"), [], [])
+    assert "source=human_confirmation" in respond.action_items[0][1]
+
+
+def _sources_by_label(content):
+    """label -> source query-param, for every action_item's URL."""
+    result = {}
+    for label, url in content.action_items:
+        params = dict(p.split("=", 1) for p in url.split("?", 1)[1].split("&"))
+        result[label] = params["source"]
+    return result
+
+
+def test_rescued_ignore_emails_ignore_button_is_a_confirmation(monkeypatch):
+    """Mirror of the confirm-button bug Task 9 fixed: a screener-rescued
+    `ignore` email's Ignore button offers the label inbox already assigned,
+    so it must record human_confirmation, not a forged correction."""
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    monkeypatch.delenv("WEBHOOK_LABEL_TOKEN", raising=False)
+    content = task_content.for_email(make_email_event(category="ignore"), [], [])
+    sources = _sources_by_label(content)
+    assert sources["Ignore"] == "human_confirmation"
+    # the other three buttons offer labels inbox did NOT assign
+    assert sources["Confirmed review"] == "human_correction"
+    assert sources["Respond instead"] == "human_correction"
+    assert sources["Reference"] == "human_correction"
+
+
+def test_review_emails_reference_button_is_a_correction(monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    monkeypatch.delenv("WEBHOOK_LABEL_TOKEN", raising=False)
+    content = task_content.for_email(make_email_event(category="review"), [], [])
+    sources = _sources_by_label(content)
+    assert sources["Reference"] == "human_correction"
+    assert sources["Ignore"] == "human_correction"
+
+
+def test_reference_emails_reference_button_is_a_confirmation(monkeypatch):
+    """The mirror case: a `reference` email's own Reference button must not
+    be recorded as a correction either."""
+    monkeypatch.setenv("WEBHOOK_URL", "https://hook")
+    monkeypatch.delenv("WEBHOOK_LABEL_TOKEN", raising=False)
+    content = task_content.for_email(make_email_event(category="reference"), [], [])
+    sources = _sources_by_label(content)
+    assert sources["Reference"] == "human_confirmation"

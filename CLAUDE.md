@@ -2,7 +2,7 @@
 
 Asana task automation service. Inbox publishes `email_classified` domain
 events for **every** processed email to its `email-events` Pub/Sub topic;
-this repo owns the task policy ("should this be a task" — `services/policy.py`),
+this repo owns the task policy ("should this be a task" — `services/screening.py`),
 Claude enrichment (summary + deadline), and all Asana interactions. Dividing
 rule: mailbox-touching work (classification, invite detection, reply drafts)
 stays in inbox; task-serving work lives here.
@@ -35,7 +35,35 @@ stays in inbox; task-serving work lives here.
 
 ## Task policy
 
-`services/policy.py::warrants_task` — urgent/review/respond → task (gate 1).
+`services/screening.py::screen` — gate 1. A Haiku call over **every** email
+inbox publishes, whatever category it was filed under. It reads the email, its
+attachment metadata (names/types/sizes, fetched via `graph_message_id` — NOT
+`message_id`, which is inbox's UUID and gets rejected), and the `Roles` section
+of the declared facts, and returns a three-way verdict:
+
+- `task` → gate 2 (`services/triage.py`), then enrichment and creation.
+- `relate` → `services/relating.py`: embed the email, take the nearest open
+  tasks from `task_index`, apply a similarity floor (`SIMILARITY_FLOOR = 0.65`,
+  tuned against a measured 1,266-email run), confirm with one Haiku call, verify
+  the gid against Asana. A match becomes a **comment** on that task via
+  `_suppress()`'s related-task branch; no match is a normal outcome and still
+  records a row. Nothing here ever closes a task.
+- `drop` → a `suppressed_emails` row.
+
+Tasks owns its own priority from here: the `[PX]` prefix and the P0/P1 deadline
+gate read the screener's verdict, not inbox's `importance`. Section placement
+still reads inbox's `category` (a mailbox-routing fact); a rescued email (one
+`screen` kept that inbox filed as ignore/reference) lands in Review, but only
+where the caller opts in — `services/sections.py::for_category(category, *,
+default=False)` defaults to no section, and only `handlers/task_create.py`
+passes `default=True`. `handlers/label_applied.py` deliberately does not: it
+passes a *label*, where `ignore`/`reference` mean "no section move", not "move
+it to Review". `services/policy.py::warrants_task` is retained as the OUTAGE
+fallback — a Claude failure degrades gate 1 to the old category rule
+(`task`/`drop` only, never `relate`) rather than flooding the list.
+
+**There is no urgent bypass.** `urgent` mail runs gate 2 like everything else.
+
 Then `services/triage.py::decide` (gate 2) — a Sonnet 5 tool-runner agent with
 read-only `search_emails` / `get_email` / `search_tasks` / `get_task` tools
 that reads the `Roles` section of the declared facts and decides whether the
@@ -43,22 +71,23 @@ email still requires anything; non-actionable emails are recorded
 in `suppressed_emails` (optionally attached to a related task as a comment,
 after `decide` verifies the model-supplied `related_task_gid` against Asana —
 an unfetchable gid is treated as no match) and never created. Fail-open
-everywhere; `urgent` skips gate 2. A deterministic no-action-phrase veto
-(`policy.no_action_phrase`) runs on the Haiku key points as a backstop; its
-autopay/automatic-payment patterns are conditional — they only veto a key
-point that carries no failure or attention-needed language (see
-`CONDITIONAL_NO_ACTION_PATTERNS` in `services/policy.py`). Changing what
-becomes a task is a change HERE, never an inbox deploy. Changing a **declared
-fact** is a PR in the private `bdrolet/context` repo: its CI publishes the
-`standing-context` secret, which `terraform/cloud_functions.tf` mounts read-only
-at `/etc/context/standing-context.md` on the events CF (`STANDING_CONTEXT_PATH`
+everywhere. A deterministic no-action-phrase veto (`policy.no_action_phrase`)
+runs on the Haiku key points as a backstop; its autopay/automatic-payment
+patterns are conditional — they only veto a key point that carries no failure
+or attention-needed language (see `CONDITIONAL_NO_ACTION_PATTERNS` in
+`services/policy.py`). Changing what becomes a task is a change HERE, never an
+inbox deploy. Changing a **declared fact** is a PR in the private
+`bdrolet/context` repo: its CI publishes the `standing-context` secret, which
+`terraform/cloud_functions.tf` mounts read-only at
+`/etc/context/standing-context.md` on the events CF (`STANDING_CONTEXT_PATH`
 points there; `services/standing_context.py` just reads a path). Facts are
 personal and this repo is public — never commit one here; `context/` holds only
 a README and an example, and is otherwise gitignored. A fact edit needs no
 deploy of this service, only a cold start. Enrichment (summary via Claude
 Haiku, deadline extraction for P0/P1 via Sonnet — the latter reads the
 `Calendar` section) runs only for events that pass both gates. Design:
-`docs/superpowers/specs/2026-08-18-standing-context-gate-design.md`.
+`docs/superpowers/specs/2026-08-18-standing-context-gate-design.md`,
+`docs/superpowers/specs/2026-08-27-tasks-owned-screening-design.md`.
 
 ## Task title standard
 
@@ -158,6 +187,7 @@ scripts/fetch-env.sh        # .env from Secret Manager + terraform.tfvars
 .venv/bin/python scripts/test-task-create.py   # creates a REAL Asana task
 (set -a; source .env; set +a; .venv/bin/uvicorn api.main:app --port 8080)  # run tasks-api locally
 .venv/bin/python scripts/test-api-local.py                                  # smoke it (--write creates a REAL task)
+.venv/bin/python scripts/backtest_screening.py --out backtest.tsv  # dry-run gate 1 over history
 ```
 
 ## Development workflow

@@ -29,3 +29,10 @@ def test_triage_instruments_exist_as_noops():
 
     for name in ("tasks_suppressed", "triage_duration", "triage_tool_calls"):
         assert hasattr(otel, name)
+
+
+def test_screening_and_relating_counters_exist():
+    import clients.otel as otel
+
+    otel.tasks_screened.add(1, {"outcome": "relate", "priority": "P3"})
+    otel.tasks_related.add(1, {"matched": "false"})

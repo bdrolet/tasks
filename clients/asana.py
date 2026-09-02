@@ -106,10 +106,10 @@ def create_task(
         return None
 
     payload: dict = {
-        # Enriched title comes from the caller; this is only the last-resort
-        # fallback. Standard: "Title" section of docs/task-content-standard.md
-        # (authoritative — doc wins).
-        "name": title or f"[{event['importance']}] {event['subject'] or '(no subject)'}",
+        # Title is always built by the caller (handlers/task_create.py), which
+        # owns the [PX] prefix. Standard: "Title" section of
+        # docs/task-content-standard.md (authoritative — doc wins).
+        "name": title or event["subject"] or "(no subject)",
         "html_notes": html_notes,
         "projects": [ASANA_PROJECT_ID],
         "external": {"gid": event["message_id"], "data": "inbox"},
@@ -356,6 +356,19 @@ def get_task_detail(task_gid: str) -> dict | None:
         return None
     resp.raise_for_status()
     return resp.json()["data"]
+
+
+def task_exists(task_gid: str) -> bool:
+    """Whether a GID names a task we can actually fetch.
+
+    Shared by gate 2 (services/triage.py) and the relate path
+    (services/relating.py): both treat an unfetchable gid as no match, so any
+    failure counts as 'cannot fetch' rather than propagating."""
+    try:
+        return get_task_detail(task_gid) is not None
+    except Exception:  # noqa: BLE001 — unfetchable is unfetchable
+        logger.warning("task %s not fetchable — treating as no match", task_gid)
+        return False
 
 
 def get_subtasks(task_gid: str) -> list[dict]:

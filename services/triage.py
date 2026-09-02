@@ -23,7 +23,7 @@ import clients.inbox_api as inbox_api
 import clients.otel as otel
 import clients.vertex as vertex
 from clients.db import get_conn
-from models.events import Decision, EmailClassifiedEvent
+from models.events import Decision, EmailClassifiedEvent, Screening
 from repo import task_index as repo_index
 from repo import tasks as repo_tasks
 from services import standing_context
@@ -300,7 +300,13 @@ Rules:
 Respond with the JSON object only."""
 
 
-def build_user_message(event: EmailClassifiedEvent, *, today: str, roles: str) -> str:
+def build_user_message(
+    event: EmailClassifiedEvent,
+    *,
+    today: str,
+    roles: str,
+    screening: Screening | None = None,
+) -> str:
     parts = [f"Today is {today}."]
     if roles:
         parts.append(
@@ -316,8 +322,12 @@ def build_user_message(event: EmailClassifiedEvent, *, today: str, roles: str) -
         f"To: {', '.join(event.get('to') or [])}\n"
         f"Cc: {', '.join(event.get('cc') or [])}\n"
         f"Received: {event.get('received_at') or ''}\n"
-        f"Classified: {event.get('category')} / {event.get('importance')}\n"
-        f"Message id: {event.get('message_id')}\n\n"
+        + (
+            f"Screened: {screening.verdict} / {screening.priority} — {screening.reason}\n"
+            if screening
+            else ""
+        )
+        + f"Message id: {event.get('message_id')}\n\n"
         f"{(event.get('body') or '')[:BODY_CAP]}"
     )
     return "\n\n".join(parts)
@@ -330,12 +340,8 @@ def _fail_open(reason: str, message_id: str) -> Decision:
 
 def _gid_exists(task_gid: str) -> bool:
     """The spec's fail-open case: a related_task_gid we cannot fetch is
-    treated as no match. Any Asana failure counts as 'cannot fetch'."""
-    try:
-        return asana.get_task_detail(task_gid) is not None
-    except Exception:  # noqa: BLE001 — unfetchable is unfetchable
-        logger.warning("related_task_gid %s not fetchable — ignoring", task_gid)
-        return False
+    treated as no match. Shared with services/relating.py."""
+    return asana.task_exists(task_gid)
 
 
 def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exists) -> Decision:
@@ -372,14 +378,23 @@ def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exis
     return Decision(actionable=False, reason=reason, evidence=evidence, outcome="suppressed")
 
 
-def decide(event: EmailClassifiedEvent, *, today: str | None = None) -> Decision:
-    """Gate 2. Never raises; every failure returns the actionable default."""
-    if event.get("category") == "urgent":
-        return Decision()
+def decide(
+    event: EmailClassifiedEvent,
+    *,
+    today: str | None = None,
+    screening: Screening | None = None,
+) -> Decision:
+    """Gate 2. Never raises; every failure returns the actionable default.
+
+    There is no category bypass. `urgent` used to skip this gate entirely —
+    the heaviest coupling to inbox in the repo, on the label the correction
+    log disputes most. Being fail-open, running here cannot swallow urgent
+    mail through failure; only an affirmative, reasoned suppression can, which
+    is the exposure every other task-bound email already carries."""
     message_id = event["message_id"]
     today = today or date.today().isoformat()
     roles = standing_context.section("Roles")
-    user = build_user_message(event, today=today, roles=roles)
+    user = build_user_message(event, today=today, roles=roles, screening=screening)
     token = CURRENT_MESSAGE_ID.set(message_id)
     t0 = time.monotonic()
     try:

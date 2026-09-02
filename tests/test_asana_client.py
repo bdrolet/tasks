@@ -84,7 +84,7 @@ def test_create_task_builds_payload(monkeypatch):
     )
     assert task is not None and task.gid == "42"
     payload = calls[0]["json"]["data"]
-    assert payload["name"] == "[P1] Quarterly report"
+    assert payload["name"] == "Quarterly report"
     assert payload["external"] == {"gid": "msg-123", "data": "inbox"}
     assert payload["due_on"] == "2026-07-20"
     assert payload["tags"] == ["tg1"]
@@ -407,3 +407,49 @@ def test_get_subtasks_paginates(monkeypatch):
     assert calls[0]["url"].endswith("/tasks/t1/subtasks")
     assert calls[0]["params"]["opt_fields"] == asana.SEARCH_OPT_FIELDS
     assert calls[1]["params"]["offset"] == "abc"
+
+
+def test_task_exists_is_true_when_fetchable(monkeypatch):
+    import clients.asana as asana
+
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: {"name": "x"})
+    assert asana.task_exists("42") is True
+
+
+def test_task_exists_is_false_when_absent_or_erroring(monkeypatch):
+    import clients.asana as asana
+
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: None)
+    assert asana.task_exists("42") is False
+
+    def boom(gid):
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(asana, "get_task_detail", boom)
+    assert asana.task_exists("42") is False
+
+
+def test_create_task_does_not_read_importance(monkeypatch):
+    """The [PX] prefix is the handler's business; clients/ is I/O only."""
+    import clients.asana as asana
+    from tests.test_events import make_email_event
+
+    captured = {}
+
+    class _Resp:
+        status_code = 201
+
+        @staticmethod
+        def json():
+            return {"data": {"gid": "42", "permalink_url": "https://a/42"}}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    monkeypatch.setattr(asana, "ASANA_API_KEY", "k")
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "p")
+    monkeypatch.setattr(asana, "_request", lambda *a, **kw: captured.update(kw) or _Resp())
+
+    asana.create_task(make_email_event(importance="P0", subject="Quarterly report"))
+    assert captured["json"]["data"]["name"] == "Quarterly report"

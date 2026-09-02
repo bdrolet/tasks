@@ -1,7 +1,11 @@
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-exclude = [".claude", ".venv"]
+# docs/ excluded: ruff formats Python inside fenced markdown blocks, and the
+# plan/spec docs under docs/superpowers/ have illustrative code snippets that
+# are plan text, not real source — they should read exactly as authored, not
+# as ruff would reflow them.
+exclude = [".claude", ".venv", "docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

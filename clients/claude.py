@@ -54,6 +54,40 @@ def summarize(prompt: str) -> str:
     return response.content[0].text.strip()  # type: ignore[union-attr]
 
 
+def classify(*, system: str, user: str, schema: dict) -> str:
+    """Single-turn structured classification. Haiku, temperature 0,
+    max_tokens 512. Returns the raw JSON text produced under `schema`.
+
+    Used by both gate-1 stages: services/screening.py (the verdict) and
+    services/relating.py (the match confirm).
+
+    512 rather than the original 256: a verbose `reason`/`verb_check` value
+    plus JSON structural overhead can approach 256 tokens, and a response cut
+    off mid-string fails json.loads — which each caller's fail-open then
+    turns into a silent no-match/no-task rather than a visible error. Raising
+    the ceiling cannot make the model produce longer output on its own (nothing
+    here asks for more); it only removes a truncation failure mode observed
+    in a full backtest run (a confirmed JSONDecodeError from a truncated
+    response), so it is a strict improvement for both call sites.
+
+    Raises on any API failure — each caller owns its own fail-open behaviour,
+    and swallowing here would hide an outage behind a default verdict."""
+    response = _get_client().messages.create(  # type: ignore[call-overload]
+        model="claude-haiku-4-5",
+        max_tokens=512,
+        temperature=0,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        output_config={"format": {"type": "json_schema", "schema": schema}},
+        messages=[{"role": "user", "content": user}],
+    )
+    _record_usage(response)
+    return "".join(
+        b.text  # type: ignore[union-attr]
+        for b in response.content
+        if getattr(b, "type", None) == "text"
+    ).strip()
+
+
 AGENT_MODEL = "claude-sonnet-5"
 
 
