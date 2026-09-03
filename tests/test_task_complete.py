@@ -111,13 +111,14 @@ def test_repeat_tag_spawns_the_next_occurrence(monkeypatch):
 def test_completion_without_a_repeat_tag_touches_no_recurrence_code(monkeypatch):
     task = {"gid": "42", "completed": True, "tags": [{"gid": "t1", "name": "home"}]}
     moves = _wire_completion(monkeypatch, task)
-
-    def fail(*a, **k):
-        raise AssertionError("get_task_detail must not be called without a repeat tag")
-
-    monkeypatch.setattr(asana, "get_task_detail", fail)
+    # A raising stub would be swallowed by the handler's `except Exception` —
+    # record the call instead, so the assertion runs outside that guard.
+    detail_calls: list[str] = []
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: detail_calls.append(gid) or {})
 
     task_complete.handle("42")
+
+    assert detail_calls == []
     assert moves == [("42", "sec-done")]
 
 
