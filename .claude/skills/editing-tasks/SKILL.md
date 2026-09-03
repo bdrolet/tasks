@@ -51,6 +51,12 @@ instead of `due_on`), `tags` (kebab-case topic names — created if missing),
 `assignee` (`"me"`, an email, or a GID). There is no free-form `description` —
 the API renders the description from these fields so every task looks the same.
 
+**Recurring tasks.** A `repeat:<count><unit>` tag (`repeat:10d`, `repeat:2w`,
+`repeat:3mo`, `repeat:1y`) makes the task come back: completing it creates the
+next occurrence, due that interval after the completion date. Pass it in
+`tags` / `add_tags` like any other tag; remove it to stop the series. A
+malformed rule is rejected with a 400 — bare `m` is not accepted, use `mo`.
+
 ## Subtasks
 
 Create with `parent` (task GID) and **no `project`/`section`** — a subtask

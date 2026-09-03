@@ -93,6 +93,10 @@ Against the standard you read in step 1:
 - **`tags`** — reuse the existing vocabulary; fetch it first and only coin a new
   kebab-case topic tag when nothing fits:
   `curl -s "$BASE/tags" -H "Authorization: Bearer $TOKEN"`
+- If the request describes something that comes back on a cadence after it is
+  done ("every three months", "again a week after I finish"), add a
+  `repeat:<count><unit>` tag — `repeat:3mo`, `repeat:1w`. Recurrence is
+  completion-anchored: do not use it for a fixed calendar schedule.
 - **`project` / `section`** — omit for the default tasks project unless the request
   clearly belongs elsewhere. `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"`
   lists projects with their sections.
