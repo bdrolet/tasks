@@ -474,3 +474,62 @@ def test_patch_rejects_an_unknown_field_instead_of_silently_dropping_it(monkeypa
     monkeypatch.setattr(asana, "get_task_detail", lambda gid: {"gid": gid, "name": "x"})
     resp = client.patch("/tasks/t1", json={"proejct": "Ben's Board"}, headers=AUTH)
     assert resp.status_code == 422
+
+
+def test_create_rejects_a_malformed_repeat_tag():
+    resp = client.post(
+        "/tasks", json={"name": "Change the filter", "tags": ["repeat:3months?"]}, headers=AUTH
+    )
+    assert resp.status_code == 400
+    assert "repeat:" in str(resp.json()["detail"])
+
+
+def test_create_rejects_bare_m():
+    resp = client.post(
+        "/tasks", json={"name": "Change the filter", "tags": ["repeat:3m"]}, headers=AUTH
+    )
+    assert resp.status_code == 400
+
+
+def test_patch_rejects_a_malformed_repeat_tag(monkeypatch):
+    _patch_env(monkeypatch)
+    resp = client.patch("/tasks/t1", json={"add_tags": ["repeat:soon"]}, headers=AUTH)
+    assert resp.status_code == 400
+
+
+def test_a_valid_repeat_tag_is_accepted(monkeypatch):
+    from api.routers import tasks as tasks_router
+
+    captured = {}
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
+    )
+    monkeypatch.setattr(tasks_router.tags_service, "resolve_gids", lambda names: ["tg-repeat"])
+
+    resp = client.post(
+        "/tasks", json={"name": "Change the filter", "tags": ["repeat:3mo"]}, headers=AUTH
+    )
+    assert resp.status_code == 201
+    assert captured["tags"] == ["tg-repeat"]
+
+
+def test_ordinary_tags_are_untouched(monkeypatch):
+    from api.routers import tasks as tasks_router
+
+    monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: CreatedTask(gid="t9", permalink_url="https://a/t9"),
+    )
+    monkeypatch.setattr(tasks_router.tags_service, "resolve_gids", lambda names: ["tg1", "tg2"])
+
+    resp = client.post(
+        "/tasks", json={"name": "Change the filter", "tags": ["home", "urgent"]}, headers=AUTH
+    )
+    assert resp.status_code == 201

@@ -8,8 +8,8 @@ from api.auth import verify_token
 from api.errors import translate_asana_errors
 from api.routers.search import email_context, membership
 from models.task_content import TaskContent
+from services import recurrence, task_index, task_search
 from services import tags as tags_service
-from services import task_index, task_search
 from services.task_content import render_html_notes
 
 router = APIRouter()
@@ -119,6 +119,27 @@ def _title(name: str, priority: str | None) -> str:
     if priority not in _VALID_PRIORITIES:
         raise HTTPException(status_code=400, detail=f"invalid priority: {priority}")
     return f"[{priority}] {name}"
+
+
+def _validate_repeat_tags(tag_names: list[str]) -> None:
+    """400 on a malformed repeat: tag rather than creating a dead one.
+
+    tags_service.resolve_gids creates tags that do not exist, so an
+    unvalidated `repeat:3months` becomes a real workspace tag that looks live
+    in the UI and never fires."""
+    for name in tag_names:
+        if (
+            name.strip().casefold().startswith(recurrence.TAG_PREFIX)
+            and recurrence.parse(name) is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"malformed repeat tag: {name}",
+                    "expected": "repeat:<count><unit>, unit one of d|w|mo|y "
+                    "(e.g. repeat:10d, repeat:2w, repeat:3mo, repeat:1y)",
+                },
+            )
 
 
 def _content_fields_set(body) -> bool:
@@ -235,6 +256,7 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
 @router.post("/tasks", response_model=CreatedTaskResponse, status_code=201)
 def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> CreatedTaskResponse:
     title = _title(body.name, body.priority)  # validates priority before any Asana I/O
+    _validate_repeat_tags(body.tags)
     with translate_asana_errors():
         fields: dict = {
             "name": title,
@@ -272,6 +294,7 @@ def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> Cre
 def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token)) -> dict:
     if body.priority is not None and body.name is None:
         raise HTTPException(status_code=400, detail="priority requires name in the same request")
+    _validate_repeat_tags(body.add_tags)
 
     with translate_asana_errors():
         task = asana.get_task_detail(gid)
