@@ -1061,7 +1061,8 @@ Automated tests never touch Asana. Before merging, use the
 - [ ] Create a real task with `tags: ["repeat:2d"]` via `POST /tasks` and confirm the tag appears on it in Asana.
 - [ ] Confirm `POST /tasks` with `tags: ["repeat:2days!"]` returns 400.
 - [ ] Complete the task in the Asana UI. Confirm, in Asana: a successor exists dated two days out, it carries `repeat:2d` and the original's other tags, it sits in the section the original was in, the original has lost its `repeat:` tag, and the original has a comment linking to the successor.
-- [ ] Un-complete and re-complete the original. Confirm **no second successor** is created (the external-gid guard).
+- [ ] Un-complete the original, **re-add the `repeat:2d` tag** to it (completion stripped it), then re-complete it. Confirm **no second successor** is created and the CF logs show `Recurrence for … already created as … — skipping`. (Un-complete/re-complete *without* re-adding the tag proves nothing — `find_rule` returns `None` and `spawn_next` is never called, so the external-gid guard, and the `external:recur:<gid>` lookup it depends on, are never exercised.)
+- [ ] Confirm the `external:recur:<gid>` lookup shape works against real Asana at all: this is the one path no unit test exercises (every test stubs `find_task_by_external`), and it's a colon inside an external id, a shape no existing caller (`external:{message_id}`, a UUID) has ever sent. The previous step's "skipping" log line is exactly this — if it doesn't appear, or Asana 400s the lookup, that's a real recurrence bug, not a test gap.
 - [ ] Check the CF logs with the `fetch-tasks-logs` skill for the `Recurring task … → … due …` line and no exceptions.
 - [ ] Delete the test tasks and the `repeat:2d` workspace tag.
 

@@ -122,6 +122,35 @@ def test_completion_without_a_repeat_tag_touches_no_recurrence_code(monkeypatch)
     assert moves == [("42", "sec-done")]
 
 
+def test_a_failing_find_rule_still_completes_and_moves_the_task(monkeypatch):
+    # find_rule itself must be inside the guard, not just spawn_next — it
+    # indexes into Asana-supplied tag dicts (candidates[0]["gid"]) and can
+    # raise on its own, before spawn_next is ever reached.
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
+    db = FakeConn()
+    monkeypatch.setattr(task_complete, "get_conn", lambda: db)
+    task = {
+        "gid": "42",
+        "completed": True,
+        "completed_at": "2026-09-03T14:00:00.000Z",
+        "tags": [{"gid": "t2", "name": "repeat:3mo"}],
+    }
+    monkeypatch.setattr(asana, "get_task", lambda gid: task)
+    monkeypatch.setattr(asana, "current_section", lambda t: {"gid": "s-review", "name": "Review"})
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+
+    def boom(tags):
+        raise KeyError("gid")  # e.g. a repeat tag Asana returned without one
+
+    monkeypatch.setattr(recurrence, "find_rule", boom)
+
+    task_complete.handle("42")
+
+    assert moves == [("42", "sec-done")]
+    assert any("completed_at" in q for q, _ in db.executed)
+
+
 def test_a_failing_recurrence_still_completes_and_moves_the_task(monkeypatch):
     task = {
         "gid": "42",

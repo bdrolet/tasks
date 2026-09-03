@@ -26,14 +26,17 @@ def handle(task_gid: str) -> None:
 
     # Recurrence runs before the Done move: current_section is how the
     # successor learns where to live, and the move overwrites it. Guarded —
-    # a recurrence failure must never cost us the completion itself.
-    rule = recurrence.find_rule(task.get("tags") or [])
-    if rule:
-        try:
+    # a recurrence failure must never cost us the completion itself. find_rule
+    # is inside the guard too: it indexes into Asana-supplied tag dicts and
+    # parse() ultimately calls int() on attacker-controlled text, so it can
+    # raise just like the rest of the recurrence step.
+    try:
+        rule = recurrence.find_rule(task.get("tags") or [])
+        if rule:
             detail = asana.get_task_detail(task_gid) or {}
             recurrence.spawn_next(task, detail, asana.current_section(task), rule)
-        except Exception:
-            logger.exception("Recurrence failed for gid=%s — completion continues", task_gid)
+    except Exception:
+        logger.exception("Recurrence failed for gid=%s — completion continues", task_gid)
 
     try:
         with get_conn() as conn:

@@ -521,11 +521,14 @@ def test_a_valid_repeat_tag_is_accepted(monkeypatch):
 def test_ordinary_tags_are_untouched(monkeypatch):
     from api.routers import tasks as tasks_router
 
+    captured = {}
     monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p-email", "name": "Inbox"}])
     monkeypatch.setattr(
         asana,
         "create_task_from_fields",
-        lambda fields: CreatedTask(gid="t9", permalink_url="https://a/t9"),
+        lambda fields: (
+            captured.update(fields) or CreatedTask(gid="t9", permalink_url="https://a/t9")
+        ),
     )
     monkeypatch.setattr(tasks_router.tags_service, "resolve_gids", lambda names: ["tg1", "tg2"])
 
@@ -533,3 +536,4 @@ def test_ordinary_tags_are_untouched(monkeypatch):
         "/tasks", json={"name": "Change the filter", "tags": ["home", "urgent"]}, headers=AUTH
     )
     assert resp.status_code == 201
+    assert captured["tags"] == ["tg1", "tg2"]

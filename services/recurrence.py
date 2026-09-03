@@ -42,7 +42,10 @@ _UNITS = {
     "years": "years",
 }
 _MAX_COUNT = 3650  # ~10 years; a larger number is a typo, not an intention
-_RULE = re.compile(r"^\s*(\d+)\s*([a-z]+)\s*$")
+# Digit run is bounded so a pathological tag (thousands of digits) can't hit
+# CPython's int() conversion limit and raise inside parse() — see the "Never
+# raises" contract below. 6 digits comfortably covers _MAX_COUNT (4 digits).
+_RULE = re.compile(r"^\s*(\d{1,6})\s*([a-z]+)\s*$")
 
 # Asana timestamps are UTC. An 8pm ET completion is already tomorrow in UTC,
 # which would date the successor a day late — so the date is taken locally.
@@ -104,10 +107,12 @@ def find_rule(tags: list[dict]) -> tuple[str, relativedelta] | None:
 def next_due(completed_at: str | None, interval: relativedelta) -> date:
     """Local completion date + interval.
 
-    Falls back to today when Asana gave us no completed_at — a successor due
-    on a slightly wrong day beats no successor at all."""
+    Falls back to today (in local time, same as the timestamped path — a bare
+    UTC `date.today()` would be tomorrow after 8pm ET) when Asana gave us no
+    completed_at — a successor due on a slightly wrong day beats no successor
+    at all."""
     if not completed_at:
-        return date.today() + interval
+        return datetime.now(LOCAL_TZ).date() + interval
     moment = datetime.fromisoformat(completed_at)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
@@ -140,7 +145,10 @@ def spawn_next(
         "due_on": next_due(task.get("completed_at"), interval).isoformat(),
         "external": {"gid": external},
     }
-    tag_gids = [t["gid"] for t in detail.get("tags") or [] if t.get("gid")]
+    # get_task_detail can 404 (delete race) and hand back {}; get_task's tags
+    # (already on `task`) are the fallback so the successor still carries the
+    # repeat tag instead of silently dropping it and dead-ending the series.
+    tag_gids = [t["gid"] for t in (detail.get("tags") or task.get("tags") or []) if t.get("gid")]
     if tag_gids:
         fields["tags"] = tag_gids
     assignee_gid = (detail.get("assignee") or {}).get("gid")

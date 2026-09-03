@@ -119,9 +119,11 @@ aliases accepted; bare `m` rejected as ambiguous). Set or clear it with the
 ordinary `tags`/`add_tags`/`remove_tags` fields, or by hand in Asana.
 
 The successor copies name, description, section, tags and assignee — not
-comments, subtasks, attachments or time-of-day — and always lands in the
-service's configured project, the one the webhook watches, not necessarily
-the completed task's. It carries `external.gid = recur:{completed_gid}`, which
+comments, subtasks, attachments or time-of-day — and lands in the service's
+configured project; that's also the only project recurrence works in at all,
+since the Asana webhook is registered on it — a `repeat:` tag on a task in
+another project, or on a subtask, never fires. It carries
+`external.gid = recur:{completed_gid}`, which
 is the idempotency guard against webhook redelivery and uncomplete/recomplete.
 Completing strips the `repeat:` tag from the finished occurrence, so exactly
 one open task per series carries it. Design:

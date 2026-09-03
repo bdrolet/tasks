@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from dateutil.relativedelta import relativedelta
@@ -70,6 +70,20 @@ def test_unparseable_repeat_tag_is_ignored():
     assert recurrence.find_rule([{"gid": "t1", "name": "repeat:3months?"}]) is None
 
 
+def test_parse_never_raises_on_a_pathological_digit_run():
+    # int() on a run this long hits CPython's 4300-digit conversion limit and
+    # raises ValueError — which would violate parse()'s "never raises"
+    # contract and 500 both the API validator and the completion webhook.
+    assert recurrence.parse("repeat:" + "9" * 5000 + "d") is None
+
+
+def test_find_rule_never_raises_on_a_pathological_digit_run():
+    # Exercised through find_rule too, since that's the call on the
+    # completion path (handlers/task_complete.py), not parse() directly.
+    tags = [{"gid": "t1", "name": "repeat:" + "9" * 5000 + "d"}]
+    assert recurrence.find_rule(tags) is None
+
+
 def test_next_due_adds_days():
     assert recurrence.next_due("2026-09-03T14:00:00.000Z", relativedelta(days=10)) == date(
         2026, 9, 13
@@ -110,8 +124,14 @@ def test_next_due_treats_a_naive_timestamp_as_utc():
     assert recurrence.next_due("2026-09-03T23:30:00", relativedelta(days=1)) == date(2026, 9, 4)
 
 
-def test_next_due_falls_back_to_today_without_a_timestamp():
-    assert recurrence.next_due(None, relativedelta(days=1)) == date.today() + relativedelta(days=1)
+def test_next_due_falls_back_to_the_local_date_without_a_timestamp():
+    # Regression: a bare date.today() is UTC on Cloud Functions, which is
+    # already tomorrow after 8pm ET — one day late, the exact bug LOCAL_TZ
+    # exists to prevent. Compare against LOCAL_TZ "now", not a second bare
+    # date.today() call (which also removes midnight-boundary flakiness).
+    assert recurrence.next_due(None, relativedelta(days=1)) == datetime.now(
+        recurrence.LOCAL_TZ
+    ).date() + relativedelta(days=1)
 
 
 class FakeCreated:
@@ -233,6 +253,17 @@ def test_a_failed_tag_strip_does_not_lose_the_successor(asana_stub, monkeypatch)
     assert (
         recurrence.spawn_next(_task(), _detail(), None, ("t2", relativedelta(months=3))) == "new-1"
     )
+
+
+def test_spawn_next_falls_back_to_task_tags_when_detail_has_none(asana_stub, monkeypatch):
+    # get_task_detail can 404 (delete race) and hand back {} — the successor
+    # must still carry the repeat tag, taken from `task` (get_task) instead,
+    # or the chain dies silently: successor created, no tag, nothing logged.
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
+    task = _task(tags=[{"gid": "t-home", "name": "home"}, {"gid": "t2", "name": "repeat:3mo"}])
+    recurrence.spawn_next(task, {}, None, ("t2", relativedelta(months=3)))
+    fields = asana_stub["created"][0]
+    assert set(fields["tags"]) == {"t-home", "t2"}
 
 
 def test_spawn_next_copies_no_comments_or_subtasks(asana_stub):
