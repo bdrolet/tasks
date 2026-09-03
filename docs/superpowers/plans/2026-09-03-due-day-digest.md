@@ -774,7 +774,7 @@ def test_parse_links_empty_or_bad_html():
 
 def test_description_text_drops_actions_and_source():
     text = tb.description_text(NOTES)
-    assert text.startswith("Renew before the trip. Key points: Expires 2026-10-01")
+    assert text.startswith("Renew before the trip. Key points: Expires 2026-10-01 Agency needs DS-82")
     assert "Confirmed review" not in text
     assert "Outlook" not in text
     assert "DS-82 (filled)" in text
@@ -857,6 +857,8 @@ class _NotesParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if self._block == "stop":
             return
+        if tag in ("li", "ul", "strong", "p", "div", "br"):
+            self.text.append(" ")  # keep words apart when tags are the only separator
         if tag == "strong":
             self._in_strong = False
         elif tag == "a":
@@ -1421,6 +1423,8 @@ git add repo/schema.sql repo/due_digest.py tests/test_repo_due_digest.py && git 
 Create `tests/test_schedule_api.py`:
 
 ```python
+import json
+
 import httpx
 import pytest
 
@@ -1451,10 +1455,7 @@ def test_create_event_posts_all_day_transparent(monkeypatch):
     out = sapi.create_event(calendar="primary", day="2026-09-10", title="1 task due", sections=[{"title": "T"}])
     assert out["event_id"] == "e1"
     assert seen["url"] == "https://sched.example/events" and seen["auth"] == "Bearer tok"
-    body = httpx.Request("POST", "https://x", content=seen["json"]).read()
-    import json
-
-    payload = json.loads(body)
+    payload = json.loads(seen["json"])
     assert payload == {
         "calendar": "primary",
         "date": "2026-09-10",
@@ -1498,8 +1499,6 @@ def test_search_digest_events_filters_to_day(monkeypatch):
     seen = {}
 
     def handler(request):
-        import json
-
         seen["json"] = json.loads(request.read())
         return httpx.Response(
             200,
@@ -2333,7 +2332,7 @@ def test_dirty_flag_db_failure_does_not_fail_delivery(monkeypatch):
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `.venv/bin/pytest tests/test_main.py tests/test_asana_webhook.py -q -k "digest or dirty"`
-Expected: failures — `/digest` returns 405 (falls through to `request.method != "POST"`… actually returns the webhook path and 401 from signature), `AttributeError: _mark_digest_dirty`.
+Expected: 5 failures. The two `main` tests get a 401 from the webhook signature check (no `/digest` branch exists yet, so the request falls through to `asana_webhook.receive`); the three webhook tests fail with `AttributeError: module 'handlers.asana_webhook' has no attribute '_mark_digest_dirty'`.
 
 - [ ] **Step 3: Implement the route in `main.py`**
 

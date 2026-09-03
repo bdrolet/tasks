@@ -93,8 +93,9 @@ opt-fields constant adds `tags.name`, `html_notes`, `modified_at`, and
 tier has no due-date search endpoint, so the listing is the query.
 
 Kept: tasks with `completed = false` and `due_on` in `[today, today + 30]`,
-where *today* is the date in `America/Los_Angeles` (the primary calendar's
-zone, resolved from `GET /calendars` — never the CF's UTC clock). Subtasks
+where *today* is the date in `America/Los_Angeles` — a constant in
+`services/due_digest.py` matching the primary calendar's zone (per
+`GET /calendars`), never the CF's UTC clock. Subtasks
 appear only if a listing returns them (i.e. assigned to Ben); that is
 accepted, not engineered around.
 
