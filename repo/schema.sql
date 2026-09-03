@@ -46,3 +46,33 @@ CREATE TABLE IF NOT EXISTS suppressed_emails (
     evidence         JSONB,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Due-day digest (docs/superpowers/specs/2026-09-03-due-day-digest-design.md).
+-- One row per calendar event this service created for a (day, calendar):
+-- REQUIRED for the digest to run — without it we cannot tell our events
+-- from anything else on the calendar, so a DB outage skips the rebuild.
+CREATE TABLE IF NOT EXISTS due_day_events (
+    day          DATE  NOT NULL,
+    calendar_id  TEXT  NOT NULL,
+    event_id     TEXT  NOT NULL,
+    content_hash TEXT  NOT NULL,
+    task_gids    JSONB NOT NULL,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (day, calendar_id)
+);
+
+-- Haiku-condensed bullets per task, keyed on a hash of name + html_notes.
+CREATE TABLE IF NOT EXISTS task_bullets (
+    task_gid     TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    bullets      JSONB NOT NULL,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Single-row rebuild state: the Asana webhook sets dirty_at; POST /digest
+-- rebuilds when dirty_at > last_rebuilt_at or the last rebuild is stale.
+CREATE TABLE IF NOT EXISTS digest_state (
+    id              BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+    dirty_at        TIMESTAMPTZ,
+    last_rebuilt_at TIMESTAMPTZ
+);
