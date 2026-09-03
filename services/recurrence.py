@@ -10,6 +10,8 @@ Design: docs/superpowers/specs/2026-09-03-recurring-tasks-design.md
 
 import logging
 import re
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
@@ -37,6 +39,11 @@ _UNITS = {
 }
 _MAX_COUNT = 3650  # ~10 years; a larger number is a typo, not an intention
 _RULE = re.compile(r"^\s*(\d+)\s*([a-z]+)\s*$")
+
+# Asana timestamps are UTC. An 8pm ET completion is already tomorrow in UTC,
+# which would date the successor a day late — so the date is taken locally.
+# This is the repo's only timezone-aware code; it stays scoped to recurrence.
+LOCAL_TZ = ZoneInfo("America/New_York")
 
 
 def parse(tag_name: str) -> relativedelta | None:
@@ -82,3 +89,16 @@ def find_rule(tags: list[dict]) -> tuple[str, relativedelta] | None:
     if interval is None:
         return None
     return candidates[0]["gid"], interval
+
+
+def next_due(completed_at: str | None, interval: relativedelta) -> date:
+    """Local completion date + interval.
+
+    Falls back to today when Asana gave us no completed_at — a successor due
+    on a slightly wrong day beats no successor at all."""
+    if not completed_at:
+        return date.today() + interval
+    moment = datetime.fromisoformat(completed_at)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(LOCAL_TZ).date() + interval

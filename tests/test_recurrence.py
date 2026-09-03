@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 from dateutil.relativedelta import relativedelta
 
@@ -65,3 +67,38 @@ def test_two_repeat_tags_are_ambiguous_and_ignored(caplog):
 
 def test_unparseable_repeat_tag_is_ignored():
     assert recurrence.find_rule([{"gid": "t1", "name": "repeat:3months?"}]) is None
+
+
+def test_next_due_adds_days():
+    assert recurrence.next_due("2026-09-03T14:00:00.000Z", relativedelta(days=10)) == date(
+        2026, 9, 13
+    )
+
+
+def test_next_due_clamps_to_end_of_month():
+    # Jan 31 + 1 month has no Feb 31 to land on; relativedelta clamps.
+    assert recurrence.next_due("2026-01-31T14:00:00.000Z", relativedelta(months=1)) == date(
+        2026, 2, 28
+    )
+
+
+def test_next_due_handles_leap_year():
+    assert recurrence.next_due("2024-01-31T14:00:00.000Z", relativedelta(months=1)) == date(
+        2024, 2, 29
+    )
+
+
+def test_next_due_uses_the_local_completion_date_not_utc():
+    # 23:30 UTC on the 3rd is 19:30 ET on the 3rd. Taking the UTC date would
+    # date the successor a day late.
+    assert recurrence.next_due("2026-09-03T23:30:00.000Z", relativedelta(days=1)) == date(
+        2026, 9, 4
+    )
+
+
+def test_next_due_treats_a_naive_timestamp_as_utc():
+    assert recurrence.next_due("2026-09-03T23:30:00", relativedelta(days=1)) == date(2026, 9, 4)
+
+
+def test_next_due_falls_back_to_today_without_a_timestamp():
+    assert recurrence.next_due(None, relativedelta(days=1)) == date.today() + relativedelta(days=1)
