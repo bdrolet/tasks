@@ -89,9 +89,18 @@ def test_next_due_handles_leap_year():
 
 
 def test_next_due_uses_the_local_completion_date_not_utc():
-    # 23:30 UTC on the 3rd is 19:30 ET on the 3rd. Taking the UTC date would
-    # date the successor a day late.
+    # 23:30 UTC on the 3rd is 19:30 ET on the 3rd — same calendar day.
+    # This tests the ordinary (non-boundary) path.
     assert recurrence.next_due("2026-09-03T23:30:00.000Z", relativedelta(days=1)) == date(
+        2026, 9, 4
+    )
+
+
+def test_next_due_crosses_utc_et_date_boundary():
+    # 02:00 UTC on the 4th is 22:00 ET on the 3rd — different calendar days.
+    # This boundary case proves the conversion to local TZ is actually used:
+    # without it, an implementation taking the UTC date would wrongly return 2026-09-05.
+    assert recurrence.next_due("2026-09-04T02:00:00.000Z", relativedelta(days=1)) == date(
         2026, 9, 4
     )
 
