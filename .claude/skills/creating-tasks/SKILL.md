@@ -29,6 +29,8 @@ cannot see this conversation. Pass along anything relevant:
 - the parent task GID when the request is a subtask ("add a subtask under
   X") — find X with searching-tasks first if the GID isn't at hand
 - any deadline or priority the user stated explicitly
+- a recurring cadence the user mentioned ("every 3 months", "again a week
+  after I finish this") — task-builder adds the `repeat:<count><unit>` tag
 - today's date
 
 Missing context is the main failure mode: the agent re-derives it badly or misses

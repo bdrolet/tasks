@@ -108,6 +108,27 @@ enrichment yields no title; the manual/API path builds titles in
 vars → CF env). `services/sections.py` maps category/label → GID. Optional
 `ASANA_OVERDUE_TAG_GID` also tags escalated tasks.
 
+## Recurring tasks
+
+A task tagged `repeat:3mo` creates its next occurrence when it is completed,
+due `completion date + interval` — completion-anchored, not calendar-anchored.
+The rule lives in the Asana tag, not the database: `services/recurrence.py`
+parses it, `handlers/task_complete.py` acts on it before the Done move.
+Grammar is `repeat:<count><unit>` with unit `d`/`w`/`mo`/`y` (spelled-out
+aliases accepted; bare `m` rejected as ambiguous). Set or clear it with the
+ordinary `tags`/`add_tags`/`remove_tags` fields, or by hand in Asana.
+
+The successor copies name, description, section, tags and assignee — not
+comments, subtasks, attachments or time-of-day — and lands in the service's
+configured project; that's also the only project recurrence works in at all,
+since the Asana webhook is registered on it — a `repeat:` tag on a task in
+another project, or on a subtask, never fires. It carries
+`external.gid = recur:{completed_gid}`, which
+is the idempotency guard against webhook redelivery and uncomplete/recomplete.
+Completing strips the `repeat:` tag from the finished occurrence, so exactly
+one open task per series carries it. Design:
+`docs/superpowers/specs/2026-09-03-recurring-tasks-design.md`.
+
 ## Layer rules
 
 - `clients/` — I/O only (Asana REST, Cloud SQL, OTel); every Asana call goes

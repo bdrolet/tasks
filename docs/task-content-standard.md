@@ -58,7 +58,8 @@ resets its footer to `Source: Created manually`.
 - **Priority** — the `[P0–P3]` title prefix, nothing else (see **Title**). Don't
   put priority in a tag or a description line.
 - **Tags** — kebab-case topic words only. Not status, not priority (those have
-  their own slots).
+  their own slots). The one exception is `repeat:<count><unit>`, which drives
+  recurrence rather than naming a topic — see CLAUDE.md's "Recurring tasks".
 - **Due dates** — set only when a real date is known; never fabricate one.
 - **Comments** — terse, single-purpose status updates ("waiting on Alice"), not
   a restatement of the description.

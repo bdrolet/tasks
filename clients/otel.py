@@ -35,6 +35,7 @@ triage_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram(
 triage_tool_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 tasks_screened: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 tasks_related: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+recurrences: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -46,7 +47,7 @@ def setup_telemetry(service_name: str) -> None:
     global tasks_created, tasks_moved, tasks_completed, escalations, errors
     global claude_tokens, api_duration, api_requests, vertex_duration
     global tasks_suppressed, triage_duration, triage_tool_calls
-    global tasks_screened, tasks_related
+    global tasks_screened, tasks_related, recurrences
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -112,6 +113,9 @@ def setup_telemetry(service_name: str) -> None:
     tasks_related = meter.create_counter(
         "asana.tasks_related",
         description="relate verdicts that did and did not find an open task",
+    )
+    recurrences = meter.create_counter(
+        "asana.recurrences", description="Successor tasks created from a repeat: tag"
     )
 
     # --- Logs ---

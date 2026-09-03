@@ -453,3 +453,12 @@ def test_create_task_does_not_read_importance(monkeypatch):
 
     asana.create_task(make_email_event(importance="P0", subject="Quarterly report"))
     assert captured["json"]["data"]["name"] == "Quarterly report"
+
+
+def test_get_task_requests_tags_and_completed_at(monkeypatch):
+    calls = _capture(monkeypatch, _resp(200, {"data": {"gid": "1"}}))
+    asana.get_task("1")
+    fields = calls[0]["params"]["opt_fields"]
+    assert "tags.gid" in fields
+    assert "tags.name" in fields
+    assert "completed_at" in fields
