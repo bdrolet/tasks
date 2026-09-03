@@ -11,6 +11,7 @@ functions-framework>=3.0
 # collection, not at assert. Runtime requirements.txt stays plain — the CF/Run
 # images resolve libpq themselves.
 psycopg[binary]>=3.1
+python-dateutil>=2.9
 pg8000>=1.31
 cloud-sql-python-connector>=1.7.0
 opentelemetry-sdk>=1.24
