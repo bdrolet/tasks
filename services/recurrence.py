@@ -15,6 +15,10 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 
+import clients.asana as asana
+import clients.otel as otel
+from services import sections, task_index
+
 logger = logging.getLogger(__name__)
 
 TAG_PREFIX = "repeat:"
@@ -44,6 +48,12 @@ _RULE = re.compile(r"^\s*(\d+)\s*([a-z]+)\s*$")
 # which would date the successor a day late — so the date is taken locally.
 # This is the repo's only timezone-aware code; it stays scoped to recurrence.
 LOCAL_TZ = ZoneInfo("America/New_York")
+
+# Successors carry external.gid = "recur:<completed gid>". This is the
+# idempotency guard, and it is deliberately in Asana rather than Postgres:
+# a webhook redelivery or an uncomplete/recomplete must not create a second
+# occurrence even while the database is unreachable.
+EXTERNAL_PREFIX = "recur:"
 
 
 def parse(tag_name: str) -> relativedelta | None:
@@ -102,3 +112,75 @@ def next_due(completed_at: str | None, interval: relativedelta) -> date:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(LOCAL_TZ).date() + interval
+
+
+def spawn_next(
+    task: dict,
+    detail: dict,
+    section: dict | None,
+    rule: tuple[str, relativedelta],
+) -> str | None:
+    """Create the successor to a just-completed recurring task.
+
+    Returns the new gid, or None when a successor already exists. `section`
+    is where the completed task lived *before* it was moved to Done — the
+    successor goes back there."""
+    tag_gid, interval = rule
+    gid = task["gid"]
+    external = f"{EXTERNAL_PREFIX}{gid}"
+
+    existing = asana.find_task_by_external(external)
+    if existing:
+        logger.info("Recurrence for %s already created as %s — skipping", gid, existing)
+        return None
+
+    fields: dict = {
+        "name": detail.get("name") or task.get("name") or "",
+        "html_notes": detail.get("html_notes") or "<body></body>",
+        "due_on": next_due(task.get("completed_at"), interval).isoformat(),
+        "external": {"gid": external},
+    }
+    tag_gids = [t["gid"] for t in detail.get("tags") or [] if t.get("gid")]
+    if tag_gids:
+        fields["tags"] = tag_gids
+    assignee_gid = (detail.get("assignee") or {}).get("gid")
+    if assignee_gid:
+        fields["assignee"] = assignee_gid
+    if asana.ASANA_PROJECT_ID:
+        fields["projects"] = [asana.ASANA_PROJECT_ID]
+
+    created = asana.create_task_from_fields(fields)
+    otel.recurrences.add(1)
+    logger.info("Recurring task %s → %s due %s", gid, created.gid, fields["due_on"])
+
+    # The successor belongs where the last occurrence lived. If that was Done
+    # (dragged there by hand), leave it unsectioned rather than filing a chore
+    # under a mail-routing default.
+    if section and section["gid"] != sections.done():
+        _try(
+            "place the successor in a section",
+            asana.add_task_to_section,
+            created.gid,
+            section["gid"],
+        )
+
+    # Create-then-strip: the successor already exists, so a failed strip only
+    # risks a duplicate on re-complete, which the external-gid guard catches.
+    # The reverse order would risk a dead chain with nothing recorded.
+    _try("strip the repeat tag", asana.remove_tag, gid, tag_gid)
+    _try(
+        "post the forward link",
+        asana.create_story,
+        gid,
+        text=f"↻ Next occurrence: {created.permalink_url}",
+    )
+    task_index.refresh(created.gid)
+    return created.gid
+
+
+def _try(what: str, fn, *args, **kwargs) -> None:
+    """Run a follow-up Asana call that must not cost us the successor."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:
+        logger.exception("Recurrence: failed to %s", what)
