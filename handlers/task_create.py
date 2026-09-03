@@ -3,13 +3,15 @@ import logging
 import clients.asana as asana
 import clients.otel as otel
 from clients.db import get_conn
-from models.events import Decision, EmailClassifiedEvent
+from models.events import Decision, EmailClassifiedEvent, Screening
 from repo import suppressions as repo_suppressions
 from repo import tasks as repo_tasks
 from services import (
     deadline,
     email_summary,
     policy,
+    relating,
+    screening,
     sections,
     tags,
     task_content,
@@ -38,20 +40,53 @@ def _suppress(
     judgement is the model's, the decision stays his, and an open task with a
     "close me" comment is obvious on review in a way a silent close is not."""
     if related_task_gid:
-        lead = "Looks resolved — close this task if you agree." if resolves else "Related email:"
+        # Pub/Sub is at-least-once; the suppressed_emails insert below is
+        # idempotent on message_id, but an Asana story has no idempotency key
+        # of its own. A redelivery that reruns this far would otherwise post
+        # a second comment — possibly on a *different* task, since gate 1 and
+        # the relate confirm are non-deterministic. Guard by checking whether
+        # this message_id was already recorded before posting.
+        #
+        # This guard is strictly additive: it can only ever PREVENT a
+        # duplicate, never introduce a new way to lose a comment. If the
+        # check itself fails (DB down), fall back to today's behaviour and
+        # post the comment — this path is best-effort by contract and must
+        # not become a new single point of failure in it.
+        already_recorded = False
         try:
-            asana.create_story(
-                related_task_gid,
-                text=f"{lead} {event['subject']} — {reason} — {event.get('web_link') or ''}".rstrip(
-                    " —"
-                ),
-            )
+            with get_conn() as conn:
+                already_recorded = repo_suppressions.exists(conn, event["message_id"])
         except Exception:
             logger.exception(
-                "related-task comment failed gid=%s message_id=%s",
-                related_task_gid,
+                "suppressed_emails existence check failed message_id=%s — "
+                "posting the comment as if this were the first delivery",
                 event["message_id"],
             )
+            already_recorded = False
+
+        if already_recorded:
+            logger.info(
+                "Skipping duplicate comment — message_id=%s already recorded in "
+                "suppressed_emails (Pub/Sub redelivery)",
+                event["message_id"],
+            )
+        else:
+            lead = (
+                "Looks resolved — close this task if you agree." if resolves else "Related email:"
+            )
+            try:
+                asana.create_story(
+                    related_task_gid,
+                    text=(
+                        f"{lead} {event['subject']} — {reason} — {event.get('web_link') or ''}"
+                    ).rstrip(" —"),
+                )
+            except Exception:
+                logger.exception(
+                    "related-task comment failed gid=%s message_id=%s",
+                    related_task_gid,
+                    event["message_id"],
+                )
     try:
         with get_conn() as conn:
             repo_suppressions.insert(
@@ -89,13 +124,34 @@ def _suppress(
 
 
 def handle(event: EmailClassifiedEvent) -> None:
-    if not policy.warrants_task(event):
-        logger.info(
-            "No task for category=%r — message_id=%s", event["category"], event["message_id"]
+    verdict: Screening = screening.screen(event)
+
+    if verdict.verdict == "drop":
+        _suppress(
+            event,
+            reason=verdict.reason,
+            source="screen",
+            related_task_gid=None,
+            evidence=[],
         )
         return
 
-    decision: Decision = triage.decide(event)
+    if verdict.verdict == "relate":
+        # Needs no work of its own, but may report on an open task. relating
+        # finds it or gives up; either way the email is recorded, and a match
+        # reaches _suppress()'s comment branch.
+        found = relating.match(event)
+        _suppress(
+            event,
+            reason=found.reason or verdict.reason,
+            source="relate",
+            related_task_gid=found.task_gid,
+            evidence=found.evidence,
+            resolves=found.resolves,
+        )
+        return
+
+    decision: Decision = triage.decide(event, screening=verdict)
     if not decision.actionable or decision.related_task_gid:
         _suppress(
             event,
@@ -117,7 +173,7 @@ def handle(event: EmailClassifiedEvent) -> None:
     relevant_links = summary.relevant_links + (event.get("seed_links") or [])
 
     due_date = None
-    if event["importance"] in ("P0", "P1"):
+    if verdict.priority in ("P0", "P1"):
         try:
             due_date = deadline.extract_deadline(event)
         except Exception:
@@ -127,11 +183,10 @@ def handle(event: EmailClassifiedEvent) -> None:
     html_notes = task_content.render_html_notes(
         task_content.for_email(event, key_points, relevant_links)
     )
-    # Prepend the authoritative [PX] prefix per the "Title" section of
-    # docs/task-content-standard.md (doc wins over code). email_summary already
-    # produced a clean {verb} {object} (no priority tag); create_task falls back
-    # to [PX] {subject} when there is no enriched title.
-    title = f"[{event['importance']}] {summary.title}" if summary.title else None
+    # The authoritative [PX] prefix per the "Title" section of
+    # docs/task-content-standard.md (doc wins over code). email_summary
+    # produces a clean "{verb} {object}"; the subject is the last resort.
+    title = f"[{verdict.priority}] {summary.title or event['subject'] or '(no subject)'}"
     task = asana.create_task(
         event,
         tag_gids=tag_gids,
@@ -145,7 +200,14 @@ def handle(event: EmailClassifiedEvent) -> None:
         )
         return
 
-    otel.tasks_created.add(1, {"category": event["category"], "importance": event["importance"]})
+    otel.tasks_created.add(
+        1,
+        {
+            "category": event["category"],
+            "importance": verdict.priority,
+            "inbox_importance": event["importance"],
+        },
+    )
 
     try:
         with get_conn() as conn:
@@ -154,7 +216,7 @@ def handle(event: EmailClassifiedEvent) -> None:
                 task_gid=task.gid,
                 message_id=event["message_id"],
                 category=event["category"],
-                importance=event["importance"],
+                importance=verdict.priority,
             )
     except Exception:
         # The Asana task already exists — a DB hiccup must not crash the event
@@ -162,7 +224,7 @@ def handle(event: EmailClassifiedEvent) -> None:
         # label_applied's external-GID fallback covers the gap).
         logger.exception("tasks row insert failed for gid=%s", task.gid)
 
-    section_gid = sections.for_category(event["category"])
+    section_gid = sections.for_category(event["category"], default=True)
     if section_gid:
         asana.add_task_to_section(task.gid, section_gid)
 

@@ -106,11 +106,27 @@ def for_email(
         confirm_label, confirm_text = "review", "Confirmed review"
         alt_label, alt_text = "respond", "Respond instead"
 
+    # These buttons write back to inbox's classifier through the label
+    # webhook, so they must speak inbox's vocabulary — this is the correction
+    # channel, not a leaked dependency. But the source has to be DERIVED for
+    # EVERY button, not just the confirm one: for an email the gate-1
+    # screener rescued from reference/ignore, whichever button matches the
+    # category inbox actually assigned (e.g. Ignore, for a rescued `ignore`
+    # email) offers a label inbox already used, and recording that as a
+    # human_correction would forge a correction to a classification nobody
+    # disputed — corrupting the one labelled signal the pipeline has (this
+    # log is also the backtest harness's `hard_negative` and
+    # `regression_reclass` corpora). So each button's source is
+    # human_confirmation when its label equals event["category"], and
+    # human_correction otherwise — never hardcoded.
+    def _source(label: str) -> str:
+        return "human_confirmation" if label == event["category"] else "human_correction"
+
     action_items: list[tuple[str, str]] = [
-        (confirm_text, _action_url(message_id, confirm_label, "human_confirmation")),
-        (alt_text, _action_url(message_id, alt_label, "human_correction")),
-        ("Reference", _action_url(message_id, "reference", "human_correction")),
-        ("Ignore", _action_url(message_id, "ignore", "human_correction")),
+        (confirm_text, _action_url(message_id, confirm_label, _source(confirm_label))),
+        (alt_text, _action_url(message_id, alt_label, _source(alt_label))),
+        ("Reference", _action_url(message_id, "reference", _source("reference"))),
+        ("Ignore", _action_url(message_id, "ignore", _source("ignore"))),
     ]
     draft_link = event.get("draft_link")
     if draft_link:

@@ -1,8 +1,13 @@
-"""Task policy: which classified emails become Asana tasks.
+"""Task policy backstops.
 
-Inbox classifies; this module decides. Changing what becomes a task happens
-here — no inbox deploy needed. Urgent is included to match pre-extraction
-inbox behavior (urgent.handle created tasks too)."""
+`warrants_task` was gate 1 until services/screening.py took over. It is
+retained as that gate's OUTAGE FALLBACK: when the screener cannot reach
+Claude, screening._fallback calls this so the pipeline degrades to the old
+category rule instead of marking every arriving email a task. Do not call it
+as a gate — screening.screen is the gate.
+
+`no_action_phrase` is unchanged: a deterministic backstop that runs AFTER
+enrichment, on the Haiku key points."""
 
 import re
 

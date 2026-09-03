@@ -30,6 +30,12 @@ class EmailClassifiedEvent(TypedDict):
     draft_link: NotRequired[str | None]  # respond only
     seed_key_points: NotRequired[list[str] | None]  # invite facts from inbox
     seed_links: NotRequired[list[list[str]] | None]  # invite/RSVP [url, label] pairs
+    # Published by inbox since the schedule extraction; declared here so the
+    # screener can reach attachments. graph_message_id is the IMMUTABLE GRAPH
+    # id — message_id is inbox's internal UUID and inbox-api rejects it with
+    # ErrorInvalidIdMalformed.
+    graph_message_id: NotRequired[str]
+    has_attachments: NotRequired[bool]
 
 
 class LabelAppliedEvent(TypedDict):
@@ -64,3 +70,38 @@ class Decision:
     resolves: bool = False  # related task's matter is settled by this email
     evidence: list = field(default_factory=list)
     outcome: str = "actionable"  # actionable | suppressed | attached | fail_open
+
+
+@dataclass
+class Screening:
+    """Gate-1 verdict from services/screening.py.
+
+    Three-way by design: `drop` and `relate` are both "no task", but they are
+    not the same answer. `relate` means the email needs no work of its own AND
+    plausibly reports on something already tracked — a confirmation, a receipt,
+    a "your request was processed". services/relating.py turns that into a
+    comment. Collapsing the two loses the only path to _suppress()'s
+    related-task branch.
+
+    Defaults ARE the fail-open state: it is a task, at middling priority."""
+
+    verdict: str = "task"  # task | relate | drop
+    priority: str = "P2"  # P0 | P1 | P2 | P3
+    reason: str = ""
+    outcome: str = "task"  # task | relate | drop | fail_open
+
+    @property
+    def is_task(self) -> bool:
+        return self.verdict == "task"
+
+
+@dataclass
+class Match:
+    """Result of services/relating.py. Defaults ARE the no-match state, which
+    is a normal outcome: the email is recorded as a plain suppression and no
+    comment is posted."""
+
+    task_gid: str | None = None
+    resolves: bool = False
+    reason: str = ""
+    evidence: list = field(default_factory=list)

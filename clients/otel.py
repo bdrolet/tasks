@@ -33,6 +33,8 @@ vertex_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram(
 tasks_suppressed: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 triage_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
 triage_tool_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+tasks_screened: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+tasks_related: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -44,6 +46,7 @@ def setup_telemetry(service_name: str) -> None:
     global tasks_created, tasks_moved, tasks_completed, escalations, errors
     global claude_tokens, api_duration, api_requests, vertex_duration
     global tasks_suppressed, triage_duration, triage_tool_calls
+    global tasks_screened, tasks_related
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -101,6 +104,14 @@ def setup_telemetry(service_name: str) -> None:
     )
     triage_tool_calls = meter.create_counter(
         "asana.triage.tool_calls", description="Triage agent tool invocations by tool"
+    )
+    tasks_screened = meter.create_counter(
+        "asana.tasks_screened",
+        description="Gate-1 verdicts by outcome (task|relate|drop|fail_open) and priority",
+    )
+    tasks_related = meter.create_counter(
+        "asana.tasks_related",
+        description="relate verdicts that did and did not find an open task",
     )
 
     # --- Logs ---

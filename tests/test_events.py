@@ -52,3 +52,41 @@ def test_summary_and_created_task():
     assert summary.key_points == [] and summary.relevant_links == []
     task = CreatedTask(gid="42", permalink_url="https://app.asana.com/0/1/42")
     assert task.gid == "42"
+
+
+def test_email_event_graph_fields_optional():
+    event = make_email_event()
+    assert event.get("graph_message_id") is None
+    assert event.get("has_attachments") is None
+    with_att = make_email_event(graph_message_id="AAMkAGI0", has_attachments=True)
+    assert with_att["graph_message_id"] == "AAMkAGI0"
+    assert with_att["has_attachments"] is True
+
+
+def test_screening_defaults_are_the_fail_open_state():
+    from models.events import Screening
+
+    s = Screening()
+    assert s.verdict == "task"
+    assert s.is_task is True
+    assert s.priority == "P2"
+    assert s.reason == ""
+    assert s.outcome == "task"
+
+
+def test_screening_is_task_tracks_the_verdict():
+    from models.events import Screening
+
+    assert Screening(verdict="task").is_task is True
+    assert Screening(verdict="relate").is_task is False
+    assert Screening(verdict="drop").is_task is False
+
+
+def test_match_defaults_are_no_match():
+    from models.events import Match
+
+    m = Match()
+    assert m.task_gid is None
+    assert m.resolves is False
+    assert m.reason == ""
+    assert m.evidence == []

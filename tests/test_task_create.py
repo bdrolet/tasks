@@ -16,6 +16,14 @@ def _default_triage(monkeypatch):
     monkeypatch.setattr(triage, "decide", lambda event, **kw: Decision())
 
 
+@pytest.fixture(autouse=True)
+def _default_screening(monkeypatch):
+    from models.events import Screening
+    from services import screening
+
+    monkeypatch.setattr(screening, "screen", lambda event, **kw: Screening(priority="P1"))
+
+
 def _stub_db(monkeypatch):
     monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
     inserts = []
@@ -52,6 +60,24 @@ def _capture_create(monkeypatch, result="42"):
 
     monkeypatch.setattr(asana, "create_task", fake_create)
     return created
+
+
+def _screen_as(monkeypatch, **kwargs):
+    from models.events import Screening
+    from services import screening
+
+    verdict = Screening(**kwargs)
+    monkeypatch.setattr(screening, "screen", lambda event, **kw: verdict)
+    return verdict
+
+
+def _relate_as(monkeypatch, **kwargs):
+    from models.events import Match
+    from services import relating
+
+    result = Match(**kwargs)
+    monkeypatch.setattr(relating, "match", lambda event: result)
+    return result
 
 
 def test_handle_enriches_creates_places_and_stores(monkeypatch):
@@ -94,25 +120,17 @@ def test_handle_passes_enriched_title(monkeypatch):
     assert created["title"] == "[P1] Review Q3 board deck"
 
 
-def test_handle_passes_none_title_when_unenriched(monkeypatch):
-    _stub_db(monkeypatch)
-    _stub_enrichment(monkeypatch)  # title defaults to None
-    created = _capture_create(monkeypatch)
-    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
-
-    task_create.handle(make_email_event())
-
-    assert created["title"] is None
-
-
-def test_handle_skips_non_task_categories_without_enrichment(monkeypatch):
+def test_handle_skips_enrichment_when_the_screener_drops(monkeypatch):
+    _screen_as(monkeypatch, verdict="drop", reason="marketing newsletter", outcome="drop")
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(repo_suppressions, "insert", lambda conn, **kw: None)
     summary_calls, _ = _stub_enrichment(monkeypatch)
     created = _capture_create(monkeypatch)
 
     task_create.handle(make_email_event(category="ignore"))
     task_create.handle(make_email_event(category="reference"))
 
-    assert summary_calls == []  # policy gate runs BEFORE enrichment — no Claude spend
+    assert summary_calls == []  # gate 1 runs BEFORE enrichment — no Claude spend
     assert created == {}
 
 
@@ -123,10 +141,12 @@ def test_deadline_extraction_only_for_p0_p1(monkeypatch):
     _capture_create(monkeypatch)
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
 
-    task_create.handle(make_email_event(importance="P2"))
+    _screen_as(monkeypatch, priority="P2")
+    task_create.handle(make_email_event())
     assert deadline_calls == []
 
-    task_create.handle(make_email_event(importance="P0"))
+    _screen_as(monkeypatch, priority="P0")
+    task_create.handle(make_email_event())
     assert len(deadline_calls) == 1
 
 
@@ -175,10 +195,11 @@ def test_created_task_is_indexed(monkeypatch):
 def test_no_task_means_no_index_refresh(monkeypatch):
     refreshed = []
     monkeypatch.setattr(task_create.task_index, "refresh", refreshed.append)
-    event = make_email_event()
-    event["category"] = "ignore"  # policy gate rejects
+    _screen_as(monkeypatch, verdict="drop", reason="policy gate rejects", outcome="drop")
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(repo_suppressions, "insert", lambda conn, **kw: None)
 
-    task_create.handle(event)
+    task_create.handle(make_email_event())
     assert refreshed == []
 
 
@@ -385,6 +406,162 @@ def test_phrase_veto_after_summary(monkeypatch):
 
 def test_gate1_still_runs_before_triage(monkeypatch):
     calls = _stub_triage(monkeypatch, Decision())
+    _screen_as(monkeypatch, verdict="drop", reason="reference material", outcome="drop")
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(repo_suppressions, "insert", lambda conn, **kw: None)
     created = _capture_create(monkeypatch)
     task_create.handle(make_email_event(category="reference"))
     assert calls == [] and created == {}
+
+
+def test_drop_verdict_suppresses_and_records(monkeypatch):
+    _screen_as(monkeypatch, verdict="drop", reason="marketing newsletter", outcome="drop")
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
+    rows = []
+    monkeypatch.setattr(repo_suppressions, "insert", lambda conn, **kw: rows.append(kw))
+    created = _capture_create(monkeypatch)
+
+    task_create.handle(make_email_event(category="ignore"))
+
+    assert created == {}
+    assert rows[0]["source"] == "screen"
+    assert rows[0]["reason"] == "marketing newsletter"
+    assert rows[0]["related_task_gid"] is None
+
+
+def test_relate_verdict_comments_on_the_matched_task(monkeypatch):
+    """The Enterprise case: a confirmation settles an open task."""
+    _screen_as(monkeypatch, verdict="relate", reason="rental confirmation", outcome="relate")
+    _relate_as(
+        monkeypatch,
+        task_gid="1217730397662201",
+        resolves=True,
+        reason="same reservation number",
+        evidence=[{"kind": "task", "ref": "1217730397662201", "note": "same reservation"}],
+    )
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
+    rows = []
+    monkeypatch.setattr(repo_suppressions, "insert", lambda conn, **kw: rows.append(kw))
+    stories = []
+    monkeypatch.setattr(asana, "create_story", lambda gid, text: stories.append((gid, text)))
+    created = _capture_create(monkeypatch)
+
+    task_create.handle(make_email_event(category="reference"))
+
+    assert created == {}
+    assert stories[0][0] == "1217730397662201"
+    assert "Looks resolved" in stories[0][1]
+    assert rows[0]["source"] == "relate"
+    assert rows[0]["related_task_gid"] == "1217730397662201"
+
+
+def test_relate_with_no_match_still_records(monkeypatch):
+    _screen_as(monkeypatch, verdict="relate", reason="delivery notice", outcome="relate")
+    _relate_as(monkeypatch, reason="no open task above the similarity floor")
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
+    rows = []
+    monkeypatch.setattr(repo_suppressions, "insert", lambda conn, **kw: rows.append(kw))
+    stories = []
+    monkeypatch.setattr(asana, "create_story", lambda gid, text: stories.append(gid))
+
+    task_create.handle(make_email_event(category="ignore"))
+
+    assert stories == []
+    assert rows[0]["source"] == "relate"
+    assert rows[0]["related_task_gid"] is None
+    assert rows[0]["reason"] == "no open task above the similarity floor"
+
+
+def test_duplicate_redelivery_skips_the_comment_but_still_records(monkeypatch):
+    """Pub/Sub redelivery: suppressed_emails already has this message_id (an
+    earlier delivery got there first), so the comment must not be posted a
+    second time — but the (idempotent) insert still runs."""
+    _screen_as(monkeypatch, verdict="relate", reason="rental confirmation", outcome="relate")
+    _relate_as(monkeypatch, task_gid="t9", reason="same reservation number", resolves=False)
+    monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn(row={"exists": 1}))
+    stories = _stub_story(monkeypatch)
+
+    task_create.handle(make_email_event())
+
+    assert stories == []  # already recorded — no duplicate write to Asana
+
+
+def test_existence_check_failure_falls_back_to_posting_the_comment(monkeypatch):
+    """Ruling: if the existence check itself fails, behave exactly as if the
+    guard did not exist — post the comment. The guard may only ever PREVENT
+    a duplicate, never introduce a new way to lose one."""
+    _screen_as(monkeypatch, verdict="relate", reason="rental confirmation", outcome="relate")
+    _relate_as(monkeypatch, task_gid="t9", reason="same reservation number", resolves=False)
+    calls = {"n": 0}
+
+    def flaky_get_conn():
+        calls["n"] += 1
+        if calls["n"] == 1:  # the existence check
+            raise RuntimeError("db down")
+        return FakeConn()  # the later suppressed_emails insert
+
+    monkeypatch.setattr(task_create, "get_conn", flaky_get_conn)
+    stories = _stub_story(monkeypatch)
+
+    task_create.handle(make_email_event())  # must not raise
+
+    assert stories[0][0] == "t9"
+
+
+def test_existence_check_never_raises_into_handle(monkeypatch):
+    """Even if EVERY db call fails (check and insert both), handle() must
+    not raise, and the comment must still be posted (fail-open guard)."""
+    _screen_as(monkeypatch, verdict="relate", reason="rental confirmation", outcome="relate")
+    _relate_as(monkeypatch, task_gid="t9", reason="same reservation number", resolves=False)
+    monkeypatch.setattr(
+        task_create, "get_conn", lambda: (_ for _ in ()).throw(RuntimeError("db down"))
+    )
+    stories = _stub_story(monkeypatch)
+
+    task_create.handle(make_email_event())  # must not raise
+
+    assert stories[0][0] == "t9"
+
+
+def test_screener_rescues_an_ignore_email(monkeypatch):
+    """The Dana case: inbox said ignore/P3, the screener says task/P1."""
+    monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
+    _screen_as(monkeypatch, verdict="task", priority="P1", reason="bank statements attached")
+    monkeypatch.setattr(tags, "resolve_gids", lambda names: [])
+    inserts = _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch, due="2026-09-01", title="review Dana's bank statements")
+    created = _capture_create(monkeypatch)
+    placed = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda gid, sec: placed.append(sec))
+
+    task_create.handle(make_email_event(category="ignore", importance="P3"))
+
+    assert created["title"] == "[P1] review Dana's bank statements"
+    assert created["due_date"] == "2026-09-01"  # P1 → deadline extraction ran
+    assert inserts[0]["importance"] == "P1"  # screener priority, not inbox's P3
+    assert placed == ["sec-review"]  # rescued → Review, not unsectioned
+
+
+def test_deadline_extraction_follows_screener_priority(monkeypatch):
+    _screen_as(monkeypatch, priority="P3")
+    monkeypatch.setattr(tags, "resolve_gids", lambda names: [])
+    _stub_db(monkeypatch)
+    _, deadline_calls = _stub_enrichment(monkeypatch, due="2026-09-01", title="do a thing")
+    created = _capture_create(monkeypatch)
+
+    task_create.handle(make_email_event(importance="P0"))
+
+    assert deadline_calls == []  # inbox said P0; the screener says P3
+    assert created["due_date"] is None
+
+
+def test_title_falls_back_to_subject_with_screener_priority(monkeypatch):
+    _screen_as(monkeypatch, priority="P2")
+    monkeypatch.setattr(tags, "resolve_gids", lambda names: [])
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch, title=None)
+    created = _capture_create(monkeypatch)
+
+    task_create.handle(make_email_event(subject="Quarterly report"))
+
+    assert created["title"] == "[P2] Quarterly report"

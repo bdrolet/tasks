@@ -5,6 +5,17 @@ import json
 from typing import Any
 
 
+def exists(conn: Any, message_id: str) -> bool:
+    """Has this message_id already been recorded? Used to guard against
+    posting a duplicate Asana comment on Pub/Sub redelivery — the insert
+    below is idempotent on message_id, but an Asana story has no
+    idempotency key of its own."""
+    row = conn.execute(
+        "SELECT 1 FROM suppressed_emails WHERE message_id = %s", (message_id,)
+    ).fetchone()
+    return row is not None
+
+
 def insert(
     conn: Any,
     *,
