@@ -110,3 +110,39 @@ def test_build_events_groups_by_day_and_calendar():
     }
     assert ev.content_hash() == events[("2026-09-10", "primary")].content_hash()
     assert ev.content_hash() != events[("2026-09-11", "primary")].content_hash()
+
+
+def _row(day, cal="primary", event_id="e1", content_hash="h"):
+    return {
+        "day": day,
+        "calendar_id": cal,
+        "event_id": event_id,
+        "content_hash": content_hash,
+        "task_gids": [],
+    }
+
+
+def test_plan_creates_updates_deletes_and_leaves_past_alone():
+    today = date(2026, 9, 10)
+    desired = dd.build_events(
+        [_task("1", "[P1] A", "2026-09-10"), _task("2", "[P1] B", "2026-09-12")]
+    )
+    same = desired[("2026-09-12", "primary")]
+    stored = [
+        _row("2026-09-12", content_hash=same.content_hash(), event_id="keep"),  # unchanged
+        _row("2026-09-11", event_id="gone"),  # in window, no tasks → delete
+        _row("2026-09-01", event_id="past"),  # past → untouched
+    ]
+    p = dd.plan(desired, stored, today)
+    assert [e.day for e in p.creates] == ["2026-09-10"]
+    assert p.updates == []
+    assert [r["event_id"] for r in p.deletes] == ["gone"]
+
+
+def test_plan_updates_when_hash_differs():
+    today = date(2026, 9, 10)
+    desired = dd.build_events([_task("1", "[P1] A", "2026-09-10")])
+    stored = [_row("2026-09-10", content_hash="stale", event_id="e9")]
+    p = dd.plan(desired, stored, today)
+    assert p.creates == [] and p.deletes == []
+    assert p.updates[0][0].day == "2026-09-10" and p.updates[0][1]["event_id"] == "e9"

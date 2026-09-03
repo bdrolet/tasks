@@ -7,7 +7,7 @@ import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from models.digest import DigestEvent, DigestTask
+from models.digest import DigestEvent, DigestTask, Plan
 
 PRIMARY = "primary"
 WINDOW_DAYS = 30
@@ -86,3 +86,22 @@ def build_events(tasks: list[DigestTask]) -> dict[tuple[str, str], DigestEvent]:
             task_gids=[t.gid for t in ordered],
         )
     return events
+
+
+def plan(desired: dict[tuple[str, str], DigestEvent], stored: list[dict], today: date) -> Plan:
+    """Diff desired events against stored rows. Past days are never touched:
+    the calendar keeps what was there. `day` in rows is ISO text (the repo
+    normalizes it)."""
+    result = Plan()
+    by_key = {(str(r["day"]), r["calendar_id"]): r for r in stored}
+    for key, event in desired.items():
+        row = by_key.get(key)
+        if row is None:
+            result.creates.append(event)
+        elif row["content_hash"] != event.content_hash():
+            result.updates.append((event, row))
+    today_iso = today.isoformat()
+    for key, row in by_key.items():
+        if key not in desired and key[0] >= today_iso:
+            result.deletes.append(row)
+    return result
