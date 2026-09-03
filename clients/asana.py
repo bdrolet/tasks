@@ -189,8 +189,8 @@ def get_task(task_gid: str) -> dict:
         f"/tasks/{task_gid}",
         operation="get_task",
         params={
-            "opt_fields": "completed,name,memberships.section.gid,"
-            "memberships.section.name,memberships.project.gid"
+            "opt_fields": "completed,completed_at,name,tags.gid,tags.name,"
+            "memberships.section.gid,memberships.section.name,memberships.project.gid"
         },
     )
     resp.raise_for_status()

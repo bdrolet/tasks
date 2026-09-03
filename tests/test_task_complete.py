@@ -1,5 +1,8 @@
+from dateutil.relativedelta import relativedelta
+
 import clients.asana as asana
 from handlers import task_complete
+from services import recurrence
 from tests.test_repo import FakeConn
 
 
@@ -68,3 +71,70 @@ def test_already_in_done_is_a_noop(monkeypatch):
 
     task_complete.handle("42")
     assert moves == []
+
+
+def _wire_completion(monkeypatch, task):
+    """The minimum stubs for handle() to reach the Done move."""
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(asana, "get_task", lambda gid: task)
+    monkeypatch.setattr(asana, "current_section", lambda t: {"gid": "s-review", "name": "Review"})
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+    return moves
+
+
+def test_repeat_tag_spawns_the_next_occurrence(monkeypatch):
+    task = {
+        "gid": "42",
+        "completed": True,
+        "completed_at": "2026-09-03T14:00:00.000Z",
+        "tags": [{"gid": "t2", "name": "repeat:3mo"}],
+    }
+    moves = _wire_completion(monkeypatch, task)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: {"name": "x", "tags": []})
+    spawned = []
+    monkeypatch.setattr(
+        recurrence,
+        "spawn_next",
+        lambda t, d, s, rule: spawned.append((t["gid"], s, rule)) or "new-1",
+    )
+
+    task_complete.handle("42")
+
+    assert spawned == [
+        ("42", {"gid": "s-review", "name": "Review"}, ("t2", relativedelta(months=3)))
+    ]
+    assert moves == [("42", "sec-done")]  # the Done move still happens
+
+
+def test_completion_without_a_repeat_tag_touches_no_recurrence_code(monkeypatch):
+    task = {"gid": "42", "completed": True, "tags": [{"gid": "t1", "name": "home"}]}
+    moves = _wire_completion(monkeypatch, task)
+
+    def fail(*a, **k):
+        raise AssertionError("get_task_detail must not be called without a repeat tag")
+
+    monkeypatch.setattr(asana, "get_task_detail", fail)
+
+    task_complete.handle("42")
+    assert moves == [("42", "sec-done")]
+
+
+def test_a_failing_recurrence_still_completes_and_moves_the_task(monkeypatch):
+    task = {
+        "gid": "42",
+        "completed": True,
+        "completed_at": "2026-09-03T14:00:00.000Z",
+        "tags": [{"gid": "t2", "name": "repeat:3mo"}],
+    }
+    moves = _wire_completion(monkeypatch, task)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid: {"name": "x", "tags": []})
+
+    def boom(*a, **k):
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(recurrence, "spawn_next", boom)
+
+    task_complete.handle("42")
+    assert moves == [("42", "sec-done")]
