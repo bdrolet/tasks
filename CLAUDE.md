@@ -116,14 +116,15 @@ The rule lives in the Asana tag, not the database: `services/recurrence.py`
 parses it, `handlers/task_complete.py` acts on it before the Done move.
 Grammar is `repeat:<count><unit>` with unit `d`/`w`/`mo`/`y` (spelled-out
 aliases accepted; bare `m` rejected as ambiguous). Set or clear it with the
-ordinary `add_tags`/`remove_tags` fields, or by hand in Asana.
+ordinary `tags`/`add_tags`/`remove_tags` fields, or by hand in Asana.
 
-The successor copies name, description, project, section, tags and assignee —
-not comments, subtasks, attachments or time-of-day. It carries
-`external.gid = recur:{completed_gid}`, which is the idempotency guard against
-webhook redelivery and uncomplete/recomplete. Completing strips the `repeat:`
-tag from the finished occurrence, so exactly one open task per series carries
-it. Design:
+The successor copies name, description, section, tags and assignee — not
+comments, subtasks, attachments or time-of-day — and always lands in the
+service's configured project, the one the webhook watches, not necessarily
+the completed task's. It carries `external.gid = recur:{completed_gid}`, which
+is the idempotency guard against webhook redelivery and uncomplete/recomplete.
+Completing strips the `repeat:` tag from the finished occurrence, so exactly
+one open task per series carries it. Design:
 `docs/superpowers/specs/2026-09-03-recurring-tasks-design.md`.
 
 ## Layer rules
