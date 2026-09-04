@@ -36,3 +36,10 @@ def test_screening_and_relating_counters_exist():
 
     otel.tasks_screened.add(1, {"outcome": "relate", "priority": "P3"})
     otel.tasks_related.add(1, {"matched": "false"})
+
+
+def test_digest_counters_exist():
+    import clients.otel as otel
+
+    for name in ("digest_rebuilds", "digest_events", "digest_bullet_calls", "digest_errors"):
+        getattr(otel, name).add(1, {"outcome": "test"})  # no-op meter never raises

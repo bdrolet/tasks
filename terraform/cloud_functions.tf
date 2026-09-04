@@ -15,6 +15,10 @@ locals {
     CLOUD_SQL_CONNECTION_NAME = data.google_sql_database_instance.inbox.connection_name
     POSTGRES_USER             = google_sql_user.tasks.name
     POSTGRES_DB               = google_sql_database.tasks.name
+    SCHEDULE_API_URL          = var.schedule_api_url
+    ASANA_PROJECT_FAMILY_GID  = var.asana_project_family_gid
+    CALENDAR_FAMILY_ID        = var.calendar_family_id
+    CALENDAR_SHARED_ID        = var.calendar_shared_id
   }
 }
 
@@ -170,7 +174,7 @@ resource "google_cloudfunctions2_function" "tasks_events" {
 }
 
 # ---------------------------------------------------------------------------
-# tasks-webhook — HTTP-triggered (public): Asana webhooks + /escalate cron
+# tasks-webhook — HTTP-triggered (public): Asana webhooks + /escalate and /digest crons
 # ---------------------------------------------------------------------------
 resource "google_cloudfunctions2_function" "tasks_webhook" {
   name     = "tasks-webhook"
@@ -191,7 +195,7 @@ resource "google_cloudfunctions2_function" "tasks_webhook" {
     service_account_email = google_service_account.tasks_webhook_cf.email
     min_instance_count    = 0
     max_instance_count    = 3
-    timeout_seconds       = 120
+    timeout_seconds       = 300 # digest rebuild: listing + ≤40 Haiku calls + calendar writes
     available_memory      = "512Mi"
     environment_variables = local.common_env
 
@@ -229,6 +233,13 @@ resource "google_cloudfunctions2_function" "tasks_webhook" {
       key        = "ASANA_ESCALATE_TOKEN"
       project_id = var.project_id
       secret     = google_secret_manager_secret.tasks_escalate_token.secret_id
+      version    = "latest"
+    }
+
+    secret_environment_variables {
+      key        = "SCHEDULE_API_TOKEN"
+      project_id = var.project_id
+      secret     = data.google_secret_manager_secret.shared["schedule-api-token"].secret_id
       version    = "latest"
     }
 

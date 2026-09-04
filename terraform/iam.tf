@@ -6,8 +6,13 @@ resource "google_service_account" "tasks_events_cf" {
   display_name = "Tasks Events Cloud Function"
 }
 
+# schedule-api-token is deliberately excluded: only the webhook CF calls
+# schedule-api (POST /digest), so the events CF gets no calendar-write credential.
 resource "google_secret_manager_secret_iam_member" "events_cf_shared" {
-  for_each  = data.google_secret_manager_secret.shared
+  for_each = {
+    for k, v in data.google_secret_manager_secret.shared : k => v
+    if k != "schedule-api-token"
+  }
   secret_id = each.value.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.tasks_events_cf.email}"
@@ -43,7 +48,9 @@ resource "google_service_account" "tasks_webhook_cf" {
 # standing-context is deliberately excluded: the webhook CF never reads the
 # declared facts, and it is the one function that must stay publicly invokable
 # (Asana posts to it unauthenticated), so it gets no read access to personal
-# data it has no use for.
+# data it has no use for. This is also where the webhook CF's read access to
+# schedule-api-token comes from (POST /digest's only caller of schedule-api)
+# — no separate binding needed since it's in the shared set.
 resource "google_secret_manager_secret_iam_member" "webhook_cf_shared" {
   for_each = {
     for k, v in data.google_secret_manager_secret.shared : k => v

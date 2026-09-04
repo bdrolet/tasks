@@ -18,7 +18,8 @@ stays in inbox; task-serving work lives here.
 | **Webhook CF** | `tasks-webhook` — HTTP public, entry point `webhook` in `main.py` (same source zip) |
 | **API** | `tasks-api` — Cloud Run FastAPI service (`api/`), search/fetch/add/update for tasks + comments; list/create projects, list tags, subtasks; bearer auth via `tasks-api-token`; image in AR repo `tasks`, deployed by `deploy-api.yml`; `tasks-api.drolet.cloud` |
 | **Escalation** | Cloud Scheduler `tasks-escalation`, `0 6 * * *` America/New_York → `POST <webhook-url>/escalate` |
-| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus); schema in `repo/schema.sql` |
+| **Digest** | Cloud Scheduler `tasks-digest`, `*/10 * * * *` → `POST <webhook-url>/digest` (same bearer as escalate) — rebuilds the due-day calendar digest when the Asana webhook has set `digest_state.dirty_at` or the last rebuild is > 60 min old; writes through `clients/schedule_api.py` (`SCHEDULE_API_URL`/`SCHEDULE_API_TOKEN`, secret owned by schedule terraform) |
+| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`; schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
 | **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
 
@@ -129,6 +130,22 @@ Completing strips the `repeat:` tag from the finished occurrence, so exactly
 one open task per series carries it. Design:
 `docs/superpowers/specs/2026-09-03-recurring-tasks-design.md`.
 
+## Due-day digest
+
+One all-day event per day that has open tasks due, for a rolling 30-day
+window, on the calendar the task belongs to: Family Board (`ASANA_PROJECT_FAMILY_GID`)
+→ Family (`CALENDAR_FAMILY_ID`); a `cheryl` tag → "Ben | Cheryl"
+(`CALENDAR_SHARED_ID`); everything else → primary. Each task is a linked
+title plus 2–3 Haiku-condensed bullets (cached in `task_bullets` by content
+hash, ≤40 calls per rebuild) and the doc links from its Links section.
+`services/due_digest.py` is the pure policy, `handlers/due_digest.py` the
+rebuild, `repo/due_digest.py` the state. A completed task drops off its day;
+a day with nothing due has no event. Routing ids are personal — they live
+in `terraform.tfvars` and GitHub repo variables, never here. The Asana
+webhook only flips a dirty flag (Asana wants a reply in 10 s); other
+projects' edits land on the hourly rebuild. Design:
+`docs/superpowers/specs/2026-09-03-due-day-digest-design.md`.
+
 ## Layer rules
 
 - `clients/` — I/O only (Asana REST, Cloud SQL, OTel); every Asana call goes
@@ -143,7 +160,10 @@ one open task per series carries it. Design:
 
 DB usage in handlers is **best-effort**: Asana is the source of truth; a DB
 outage degrades lookups to the `external:{message_id}` fallback and must never
-crash an event.
+crash an event. The due-day digest is the documented exception —
+`handlers/due_digest.py` skips a rebuild outright when the DB is unavailable,
+since without `due_day_events` it cannot address its own calendar events and
+would risk duplicating them (spec D7).
 
 ## Secrets
 
@@ -156,9 +176,9 @@ here. (Ownership moves to a platform state in `~/src/infra` eventually — see
 `tasks-api-token` are owned here — the Anthropic key is **dedicated to this
 service** (Console key name `tasks-cf`), deliberately separate from inbox's
 `anthropic-api-key` for independent spend tracking and rotation; the escalate
-token is the bearer credential Cloud Scheduler sends on `POST /escalate`
-(webhook CF only — IAM can't restrict that route since the CF must stay
-publicly invokable for Asana's unauthenticated webhook posts); the API token
+token is the bearer credential Cloud Scheduler sends on `POST /escalate` and
+`POST /digest` (webhook CF only — IAM can't restrict that route since the CF
+must stay publicly invokable for Asana's unauthenticated webhook posts); the API token
 is the bearer credential for the tasks-api Cloud Run service — skills read it
 from `terraform.tfvars`. `ASANA_PROJECT_ID` and section GIDs are plain env
 vars, not secrets.
@@ -209,6 +229,7 @@ scripts/fetch-env.sh        # .env from Secret Manager + terraform.tfvars
 (set -a; source .env; set +a; .venv/bin/uvicorn api.main:app --port 8080)  # run tasks-api locally
 .venv/bin/python scripts/test-api-local.py                                  # smoke it (--write creates a REAL task)
 .venv/bin/python scripts/backtest_screening.py --out backtest.tsv  # dry-run gate 1 over history
+.venv/bin/python scripts/test-digest.py --dry-run   # due-day digest plan; without the flag writes REAL events
 ```
 
 ## Development workflow

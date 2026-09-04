@@ -58,7 +58,7 @@ variable "tasks_db_password" {
 }
 
 variable "tasks_escalate_token" {
-  description = "Bearer token Cloud Scheduler sends on POST /escalate — the webhook CF is publicly invokable (required for Asana's unauthenticated webhook posts), so this app-level token is what actually gates the escalation route. Generate with: openssl rand -base64 24 | tr -d '/+=' | head -c 32"
+  description = "Bearer token Cloud Scheduler sends on POST /escalate and POST /digest — the webhook CF is publicly invokable (required for Asana's unauthenticated webhook posts), so this app-level token is what actually gates those routes. Generate with: openssl rand -base64 24 | tr -d '/+=' | head -c 32"
   type        = string
   sensitive   = true
 }
@@ -90,4 +90,28 @@ variable "tasks_api_token" {
 variable "deployer_sa" {
   description = "Service account email used by GitHub Actions to deploy (GCP_DEPLOYER_SA secret). Granted AR writer + Cloud Run developer on tasks-api."
   type        = string
+}
+
+variable "schedule_api_url" {
+  description = "schedule-api Cloud Run URL (calendar gateway for clients/schedule_api.py)"
+  type        = string
+  default     = "https://schedule-api.drolet.cloud"
+}
+
+variable "asana_project_family_gid" {
+  description = "Asana project GID of the Family Board — its tasks' due-day digest goes to the Family calendar. Empty disables the rule."
+  type        = string
+  default     = ""
+}
+
+variable "calendar_family_id" {
+  description = "Google Calendar id of the Family calendar (GET schedule-api /calendars). Empty disables the rule."
+  type        = string
+  default     = ""
+}
+
+variable "calendar_shared_id" {
+  description = "Google Calendar id of the 'Ben | Cheryl' calendar — digest target for tasks tagged cheryl. Empty disables the rule."
+  type        = string
+  default     = ""
 }

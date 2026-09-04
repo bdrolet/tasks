@@ -30,6 +30,12 @@ DETAIL_OPT_FIELDS = (
     "memberships.section.gid,memberships.section.name"
 )
 STORY_OPT_FIELDS = "type,text,created_by.name,created_at,is_editable"
+# Due-day digest listing: tags (routing), html_notes (bullets + doc links),
+# project membership (routing), modified_at (diagnostics).
+DIGEST_OPT_FIELDS = (
+    "name,html_notes,due_on,completed,permalink_url,modified_at,tags.name,"
+    "memberships.project.gid,memberships.project.name,parent.gid"
+)
 
 _workspace_gid: str | None = None
 
@@ -325,20 +331,22 @@ def create_project(name: str, sections: list[str] | None = None) -> dict:
     }
 
 
-def list_project_tasks(project_gid: str, *, only_open: bool = False) -> list[dict]:
-    params: dict = {"project": project_gid, "opt_fields": SEARCH_OPT_FIELDS}
+def list_project_tasks(
+    project_gid: str, *, only_open: bool = False, opt_fields: str = SEARCH_OPT_FIELDS
+) -> list[dict]:
+    params: dict = {"project": project_gid, "opt_fields": opt_fields}
     if only_open:
         params["completed_since"] = "now"
     return _paginate("/tasks", params, operation="list_project_tasks")
 
 
-def list_my_tasks(*, only_open: bool = False) -> list[dict]:
+def list_my_tasks(*, only_open: bool = False, opt_fields: str = SEARCH_OPT_FIELDS) -> list[dict]:
     """Workspace tasks assigned to the token's user — catches My-Tasks items
     that are in no project. Overlaps with project listings; callers de-dupe."""
     params: dict = {
         "assignee": "me",
         "workspace": get_workspace_gid(),
-        "opt_fields": SEARCH_OPT_FIELDS,
+        "opt_fields": opt_fields,
     }
     if only_open:
         params["completed_since"] = "now"

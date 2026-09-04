@@ -16,10 +16,12 @@ inbox's process/sweep). Required env vars:
   ANTHROPIC_API_KEY                          — enrichment (summary, deadline)
   ASANA_SECTION_{REVIEW,RESPOND,URGENT,DONE,OVERDUE}_GID — section mapping
   ASANA_WEBHOOK_SECRET                       — HMAC key for X-Hook-Signature (webhook CF)
-  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate (webhook CF)
+  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate and POST /digest (webhook CF)
   WEBHOOK_URL / WEBHOOK_LABEL_TOKEN          — inbox webhook CF, for task action links
   CLOUD_SQL_CONNECTION_NAME / POSTGRES_*     — tasks database
   GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN — OTel export (optional)
+  SCHEDULE_API_URL / SCHEDULE_API_TOKEN      — schedule-api, for the due-day digest
+  ASANA_PROJECT_FAMILY_GID / CALENDAR_FAMILY_ID / CALENDAR_SHARED_ID — digest routing
 """
 
 import base64
@@ -39,7 +41,7 @@ import functions_framework
 from cloudevents.http import CloudEvent
 
 import clients.otel as otel
-from handlers import asana_webhook, label_applied, task_create
+from handlers import asana_webhook, due_digest, label_applied, task_create
 from services import escalation
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,17 @@ def webhook(request):
             if not escalation.is_authorized(request.headers.get("Authorization")):
                 return "", 401
             return escalation.run(), 200
+
+        if request.path == "/digest" and request.method == "POST":
+            if not escalation.is_authorized(request.headers.get("Authorization")):
+                return "", 401
+            try:
+                body = json.loads(request.get_data() or b"{}")
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            return due_digest.run(force=bool(body.get("force"))), 200
 
         if request.method != "POST":
             return "", 405

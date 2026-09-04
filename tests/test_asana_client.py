@@ -462,3 +462,24 @@ def test_get_task_requests_tags_and_completed_at(monkeypatch):
     assert "tags.gid" in fields
     assert "tags.name" in fields
     assert "completed_at" in fields
+
+
+def test_list_project_tasks_accepts_opt_fields_override(monkeypatch):
+    seen = {}
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [], "next_page": None}
+
+    def fake_request(method, path, *, operation, params=None, **kw):
+        seen["params"] = params
+        return Resp()
+
+    monkeypatch.setattr(asana, "_request", fake_request)
+    asana.list_project_tasks("p1", only_open=True, opt_fields=asana.DIGEST_OPT_FIELDS)
+    assert seen["params"]["opt_fields"] == asana.DIGEST_OPT_FIELDS
+    assert "tags.name" in asana.DIGEST_OPT_FIELDS and "html_notes" in asana.DIGEST_OPT_FIELDS
+    assert seen["params"]["completed_since"] == "now"

@@ -36,6 +36,10 @@ triage_tool_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("n
 tasks_screened: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 tasks_related: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 recurrences: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+digest_rebuilds: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+digest_events: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+digest_bullet_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+digest_errors: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -48,6 +52,7 @@ def setup_telemetry(service_name: str) -> None:
     global claude_tokens, api_duration, api_requests, vertex_duration
     global tasks_suppressed, triage_duration, triage_tool_calls
     global tasks_screened, tasks_related, recurrences
+    global digest_rebuilds, digest_events, digest_bullet_calls, digest_errors
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -116,6 +121,21 @@ def setup_telemetry(service_name: str) -> None:
     )
     recurrences = meter.create_counter(
         "asana.recurrences", description="Successor tasks created from a repeat: tag"
+    )
+    digest_rebuilds = meter.create_counter(
+        "asana.digest.rebuilds",
+        description="Due-day digest rebuilds by outcome (ok|partial|skipped|db_unavailable|error)",
+    )
+    digest_events = meter.create_counter(
+        "asana.digest.events",
+        description="Digest calendar events by op (create|update|delete|adopt)",
+    )
+    digest_bullet_calls = meter.create_counter(
+        "asana.digest.bullet_calls",
+        description="Bullet condensing by result (ok|cached|fallback|capped)",
+    )
+    digest_errors = meter.create_counter(
+        "asana.digest.errors", description="Digest failures by stage (list|bullets|calendar)"
     )
 
     # --- Logs ---
