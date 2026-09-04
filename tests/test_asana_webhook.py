@@ -155,3 +155,42 @@ def test_refresh_burst_capped_at_20(monkeypatch):
     body, sig = _signed(events)
     asana_webhook.receive(body, sig)
     assert len(refreshed) == 20
+
+
+def test_relevant_events_mark_digest_dirty(monkeypatch):
+    _capture(monkeypatch)
+    marks = []
+    monkeypatch.setattr(asana_webhook, "_mark_digest_dirty", lambda: marks.append(1))
+    body, sig = _signed(
+        [
+            {
+                "action": "changed",
+                "resource": {"gid": "t1", "resource_type": "task"},
+                "change": {"field": "due_on"},
+            }
+        ]
+    )
+    asana_webhook.receive(body, sig)
+    assert marks == [1]
+
+
+def test_irrelevant_events_do_not_mark_dirty(monkeypatch):
+    _capture(monkeypatch)
+    marks = []
+    monkeypatch.setattr(asana_webhook, "_mark_digest_dirty", lambda: marks.append(1))
+    body, sig = _signed(
+        [{"action": "changed", "resource": {"gid": "s1", "resource_type": "story"}}]
+    )
+    asana_webhook.receive(body, sig)
+    assert marks == []
+
+
+def test_dirty_flag_db_failure_does_not_fail_delivery(monkeypatch):
+    _capture(monkeypatch)
+
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(asana_webhook, "get_conn", boom)
+    body, sig = _signed([{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}])
+    assert asana_webhook.receive(body, sig) == ("", 200)

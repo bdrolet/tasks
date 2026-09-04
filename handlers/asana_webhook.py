@@ -9,7 +9,9 @@ import json
 import logging
 import os
 
+from clients.db import get_conn
 from handlers import task_complete
+from repo import due_digest as repo_due_digest
 from services import task_index
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,18 @@ def signature_valid(body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def _mark_digest_dirty() -> None:
+    """Best-effort: the 10-minute /digest tick also rebuilds hourly, so a
+    lost flag delays the digest, never the webhook."""
+    try:
+        with get_conn() as conn:
+            repo_due_digest.mark_dirty(conn)
+    except Exception:
+        logger.warning(
+            "Digest dirty flag write failed — hourly rebuild will catch up", exc_info=True
+        )
+
+
 def receive(body: bytes, signature: str) -> tuple:
     """Validate and dispatch one webhook delivery."""
     if not signature_valid(body, signature):
@@ -43,6 +57,7 @@ def receive(body: bytes, signature: str) -> tuple:
     handled = 0
     refresh_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     delete_gids: dict[str, None] = {}  # insertion-ordered de-dupe
+    digest_relevant = False
     for event in payload.get("events", []):
         resource = event.get("resource") or {}
         if resource.get("resource_type") != "task":
@@ -52,14 +67,20 @@ def receive(body: bytes, signature: str) -> tuple:
         if action == "changed" and field == "completed":
             task_complete.handle(resource["gid"])
             handled += 1
+            digest_relevant = True
         elif action in ("deleted", "removed"):
             delete_gids[resource["gid"]] = None
+            digest_relevant = True
         elif action == "added" or (action == "changed" and field in ("name", "notes", "due_on")):
             refresh_gids[resource["gid"]] = None
+            digest_relevant = True
 
     # delete wins: a gid deleted in this delivery is never also refreshed
     for gid in delete_gids:
         refresh_gids.pop(gid, None)
+
+    if digest_relevant:
+        _mark_digest_dirty()
 
     refresh_list = list(refresh_gids)
     if len(refresh_list) > _MAX_REFRESH_PER_DELIVERY:
