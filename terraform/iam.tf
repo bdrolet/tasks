@@ -43,7 +43,9 @@ resource "google_service_account" "tasks_webhook_cf" {
 # standing-context is deliberately excluded: the webhook CF never reads the
 # declared facts, and it is the one function that must stay publicly invokable
 # (Asana posts to it unauthenticated), so it gets no read access to personal
-# data it has no use for.
+# data it has no use for. This is also where the webhook CF's read access to
+# schedule-api-token comes from (POST /digest's only caller of schedule-api)
+# — no separate binding needed since it's in the shared set.
 resource "google_secret_manager_secret_iam_member" "webhook_cf_shared" {
   for_each = {
     for k, v in data.google_secret_manager_secret.shared : k => v
@@ -82,10 +84,3 @@ resource "google_secret_manager_secret_iam_member" "webhook_cf_escalate_token" {
 
 # The email-events topic and inbox-process-cf's publisher binding live in the
 # INBOX repo's terraform (producer owns the stream) — see plan Task 16 Step 2.
-
-# /digest runs on the webhook CF only — it is the only caller of schedule-api.
-resource "google_secret_manager_secret_iam_member" "webhook_cf_schedule_api_token" {
-  secret_id = data.google_secret_manager_secret.shared["schedule-api-token"].secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.tasks_webhook_cf.email}"
-}
