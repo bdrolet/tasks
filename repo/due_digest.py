@@ -3,7 +3,7 @@ Takes an open connection. Unlike the rest of repo/, due_day_events is NOT
 best-effort: handlers/due_digest.py skips a rebuild it cannot read."""
 
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 
@@ -99,8 +99,17 @@ def mark_dirty(conn: Any) -> None:
     )
 
 
-def mark_rebuilt(conn: Any) -> None:
+def mark_rebuilt(conn: Any, *, at: datetime | None = None) -> None:
+    """`at` is the rebuild's start time, so work that landed during the rebuild
+    still reads as dirty on the next tick. Defaults to the DB's now()."""
+    if at is None:
+        conn.execute(
+            "INSERT INTO digest_state (id, last_rebuilt_at) VALUES (true, now()) "
+            "ON CONFLICT (id) DO UPDATE SET last_rebuilt_at = now()"
+        )
+        return
     conn.execute(
-        "INSERT INTO digest_state (id, last_rebuilt_at) VALUES (true, now()) "
-        "ON CONFLICT (id) DO UPDATE SET last_rebuilt_at = now()"
+        "INSERT INTO digest_state (id, last_rebuilt_at) VALUES (true, %s) "
+        "ON CONFLICT (id) DO UPDATE SET last_rebuilt_at = EXCLUDED.last_rebuilt_at",
+        (at,),
     )

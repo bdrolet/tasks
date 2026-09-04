@@ -10,6 +10,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
+
 import clients.asana as asana
 import clients.otel as otel
 import clients.schedule_api as sapi
@@ -79,15 +81,18 @@ def _list_candidates() -> list[dict]:
     return out
 
 
+_ROUTING_ENV = {
+    "family_project_gid": "ASANA_PROJECT_FAMILY_GID",
+    "family_calendar_id": "CALENDAR_FAMILY_ID",
+    "shared_calendar_id": "CALENDAR_SHARED_ID",
+}
+
+
 def _routing() -> dict:
-    cfg = {
-        "family_project_gid": os.environ.get("ASANA_PROJECT_FAMILY_GID", ""),
-        "family_calendar_id": os.environ.get("CALENDAR_FAMILY_ID", ""),
-        "shared_calendar_id": os.environ.get("CALENDAR_SHARED_ID", ""),
-    }
+    cfg = {key: os.environ.get(env, "") for key, env in _ROUTING_ENV.items()}
     for key, value in cfg.items():
         if not value:
-            logger.warning("Digest routing: %s unset — that rule is skipped", key.upper())
+            logger.warning("Digest routing: %s unset — that rule is skipped", _ROUTING_ENV[key])
     return cfg
 
 
@@ -181,24 +186,27 @@ def _delete(row: dict, conn, counts: dict) -> None:
 
 
 def _apply(plan, conn, counts: dict) -> None:
+    """Only calendar (HTTP) failures are per-pair survivable. A DB error aborts
+    the whole rebuild: in one pg8000 transaction every later statement fails
+    too, so continuing would issue calendar writes whose rows all roll back."""
     for event in plan.creates:
         try:
             _create(event, conn, counts)
-        except Exception:
+        except httpx.HTTPError:
             counts["errors"] += 1
             otel.digest_errors.add(1, {"stage": "calendar"})
             logger.exception("Digest create failed for %s/%s", event.day, event.calendar_id)
     for event, row in plan.updates:
         try:
             _update(event, row, conn, counts)
-        except Exception:
+        except httpx.HTTPError:
             counts["errors"] += 1
             otel.digest_errors.add(1, {"stage": "calendar"})
             logger.exception("Digest update failed for %s/%s", event.day, event.calendar_id)
     for row in plan.deletes:
         try:
             _delete(row, conn, counts)
-        except Exception:
+        except httpx.HTTPError:
             counts["errors"] += 1
             otel.digest_errors.add(1, {"stage": "calendar"})
             logger.exception("Digest delete failed for %s/%s", row["day"], row["calendar_id"])
@@ -206,6 +214,7 @@ def _apply(plan, conn, counts: dict) -> None:
 
 def run(*, force: bool = False) -> dict:
     now = _now()
+    started = now  # stamped as last_rebuilt_at below — see mark_rebuilt call
     try:
         with get_conn() as conn:
             state = repo.get_state(conn)
@@ -249,9 +258,13 @@ def run(*, force: bool = False) -> dict:
                 plan = dd.plan(desired, stored, today)
                 _apply(plan, conn, counts)
                 repo.prune_events(conn, before=today - PRUNE_AFTER)
-                repo.mark_rebuilt(conn)
+                # Stamped with the rebuild's START: a webhook that fires while we
+                # were listing Asana leaves dirty_at > last_rebuilt_at, so the next
+                # tick picks it up (spec D8).
+                repo.mark_rebuilt(conn, at=started)
         except Exception:
             logger.exception("Digest: rebuild failed")
+            otel.digest_errors.add(1, {"stage": "rebuild"})
             otel.digest_rebuilds.add(1, {"outcome": "error"})
             return {"outcome": "error", **counts}
 

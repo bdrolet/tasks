@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 from repo import due_digest as repo
 
@@ -101,3 +101,14 @@ def test_state_defaults_and_marks():
     assert "dirty_at = now()" in conn.executed[0][0]
     assert "last_rebuilt_at = now()" in conn.executed[1][0]
     assert all("INSERT INTO digest_state" in q for q, _ in conn.executed)
+
+
+def test_mark_rebuilt_writes_supplied_timestamp():
+    at = datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc)
+    conn = RowsConn()
+    repo.mark_rebuilt(conn, at=at)
+    query, params = conn.executed[0]
+    assert "INSERT INTO digest_state (id, last_rebuilt_at) VALUES (true, %s)" in query
+    assert "last_rebuilt_at = EXCLUDED.last_rebuilt_at" in query
+    assert "now()" not in query
+    assert params == (at,)

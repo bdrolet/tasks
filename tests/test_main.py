@@ -124,6 +124,20 @@ def test_webhook_digest_route(monkeypatch):
     assert status == 200 and result == {"outcome": "ok"} and seen["force"] is True
 
 
+def test_webhook_digest_ignores_non_object_body(monkeypatch):
+    from handlers import due_digest
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    seen = {}
+    monkeypatch.setattr(
+        due_digest, "run", lambda force=False: seen.update(force=force) or {"outcome": "skipped"}
+    )
+    result, status = main.webhook(
+        Req(path="/digest", headers={"Authorization": "Bearer tok"}, body=b"[1]")
+    )
+    assert status == 200 and result == {"outcome": "skipped"} and seen["force"] is False
+
+
 def test_webhook_digest_rejects_bad_auth(monkeypatch):
     monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
     _, status = main.webhook(Req(path="/digest", headers={"Authorization": "Bearer wrong"}))

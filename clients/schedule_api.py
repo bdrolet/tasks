@@ -68,11 +68,14 @@ def delete_event(event_id: str, *, calendar: str) -> None:
 
 
 def search_digest_events(*, calendar: str, day: str) -> list[dict]:
-    """All-day events on `calendar` that start on `day`. The window is padded
-    a day each side because all-day events are matched by overlap in UTC."""
+    r"""All-day events on `calendar` that start on `day`. The window is padded
+    a day each side because all-day events are matched by overlap in UTC. The
+    query is the single term `due` — Google's `q` is term/prefix matching, and
+    "tasks due" would miss a "1 task due" title; the caller filters titles
+    against `^\d+ tasks? due$`."""
     d = date.fromisoformat(day)
     payload = {
-        "query": "tasks due",
+        "query": "due",
         "calendar": calendar,
         "time_min": f"{(d - timedelta(days=1)).isoformat()}T00:00:00Z",
         "time_max": f"{(d + timedelta(days=1)).isoformat()}T23:59:59Z",

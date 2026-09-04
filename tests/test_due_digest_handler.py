@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 import clients.asana as asana
@@ -76,6 +77,7 @@ class Store:
         self.state = state or {"dirty_at": NOW, "last_rebuilt_at": None}
         self.bullets = {}
         self.rebuilt = 0
+        self.rebuilt_at = None
 
     def patch(self, monkeypatch):
         monkeypatch.setattr(h, "get_conn", lambda: RowsConn())
@@ -101,10 +103,11 @@ class Store:
             ),
         )
 
-        def mark():
+        def mark(at=None):
             self.rebuilt += 1
+            self.rebuilt_at = at
 
-        monkeypatch.setattr(repo, "mark_rebuilt", lambda conn: mark())
+        monkeypatch.setattr(repo, "mark_rebuilt", lambda conn, at=None: mark(at))
 
 
 class Cal:
@@ -175,6 +178,8 @@ def test_rebuild_creates_routed_events_and_records_rows(env, monkeypatch):
     }
     assert store.rows[("2026-09-10", "primary")]["event_id"].startswith("new")
     assert store.rebuilt == 1
+    # Stamped with the rebuild's start, so a webhook mid-rebuild stays dirty.
+    assert store.rebuilt_at == NOW
 
 
 def test_rebuild_updates_deletes_and_recreates_on_404(env, monkeypatch):
@@ -212,6 +217,33 @@ def test_rebuild_updates_deletes_and_recreates_on_404(env, monkeypatch):
     assert ("2026-09-11", "primary") not in store.rows
 
 
+def test_rebuild_updates_changed_event_in_place(env, monkeypatch):
+    _asana(monkeypatch, [_task("1", "[P1] Work thing", "2026-09-10")])
+    monkeypatch.setattr(
+        tb, "points_for", lambda gid, name, notes, cache, budget: (["pt"], "cached")
+    )
+    store = Store(
+        rows=[
+            {
+                "day": "2026-09-10",
+                "calendar_id": "primary",
+                "event_id": "e9",
+                "content_hash": "stale",
+                "task_gids": ["1"],
+            }
+        ]
+    )
+    store.patch(monkeypatch)
+    cal = Cal()
+    cal.patch(monkeypatch)
+
+    out = h.run()
+    assert out["outcome"] == "ok" and out["updated"] == 1 and out["created"] == 0
+    assert cal.created == [] and cal.patched[0][0] == "e9"
+    row = store.rows[("2026-09-10", "primary")]
+    assert row["event_id"] == "e9" and row["content_hash"] != "stale"
+
+
 def test_rebuild_adopts_existing_digest_event_instead_of_creating(env, monkeypatch):
     _asana(monkeypatch, [_task("1", "[P1] Work thing", "2026-09-10")])
     monkeypatch.setattr(
@@ -240,13 +272,37 @@ def test_calendar_error_is_partial_and_continues(env, monkeypatch):
     def flaky(**kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise RuntimeError("500")
+            raise httpx.HTTPStatusError(
+                "500",
+                request=httpx.Request("POST", "https://s/events"),
+                response=httpx.Response(500),
+            )
         return {"event_id": "ok1", "calendar_id": kw["calendar"]}
 
     monkeypatch.setattr(sapi, "create_event", flaky)
     out = h.run()
     assert out["outcome"] == "partial" and out["created"] == 1 and out["errors"] == 1
     assert store.rebuilt == 1
+
+
+def test_db_error_during_apply_aborts_rebuild(env, monkeypatch):
+    """A failed statement poisons the pg8000 transaction — stop, do not keep
+    writing calendar events whose rows will all roll back."""
+    _asana(monkeypatch, [_task("1", "[P1] A", "2026-09-10"), _task("2", "[P1] B", "2026-09-11")])
+    monkeypatch.setattr(tb, "points_for", lambda gid, name, notes, cache, budget: ([], "cached"))
+    store = Store()
+    store.patch(monkeypatch)
+    cal = Cal()
+    cal.patch(monkeypatch)
+
+    def boom(conn, **kw):
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(repo, "upsert_event", boom)
+    out = h.run()
+    assert out["outcome"] == "error"
+    assert len(cal.created) == 1
+    assert store.rebuilt == 0
 
 
 def test_listing_error_aborts_without_touching_calendar(env, monkeypatch):

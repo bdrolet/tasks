@@ -107,6 +107,9 @@ def test_search_digest_events_filters_to_day(monkeypatch):
     out = sapi.search_digest_events(calendar="c", day="2026-09-10")
     assert [r["event_id"] for r in out] == ["a"]
     assert seen["json"]["calendar"] == "c" and seen["json"]["all_day"] is True
+    # Single term: Google's `q` is term/prefix matching, so "tasks due" would
+    # miss a "1 task due" title. The caller filters titles by regex.
+    assert seen["json"]["query"] == "due"
     assert seen["json"]["time_min"].startswith("2026-09-09") and seen["json"][
         "time_max"
     ].startswith("2026-09-11")

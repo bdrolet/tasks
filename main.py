@@ -88,8 +88,10 @@ def webhook(request):
             if not escalation.is_authorized(request.headers.get("Authorization")):
                 return "", 401
             try:
-                body = json.loads(request.get_data() or b"{}") or {}
+                body = json.loads(request.get_data() or b"{}")
             except ValueError:
+                body = {}
+            if not isinstance(body, dict):
                 body = {}
             return due_digest.run(force=bool(body.get("force"))), 200
 
