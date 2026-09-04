@@ -26,6 +26,14 @@ resource "google_cloud_scheduler_job" "digest" {
   schedule  = "*/10 * * * *"
   time_zone = "America/Los_Angeles"
 
+  # The route is idempotent and the next tick is 10 minutes away, so an
+  # overlapping retry buys nothing — let a slow or failed tick simply drop.
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 0
+  }
+
   http_target {
     http_method = "POST"
     uri         = "${google_cloudfunctions2_function.tasks_webhook.service_config[0].uri}/digest"

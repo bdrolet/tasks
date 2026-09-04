@@ -160,7 +160,10 @@ projects' edits land on the hourly rebuild. Design:
 
 DB usage in handlers is **best-effort**: Asana is the source of truth; a DB
 outage degrades lookups to the `external:{message_id}` fallback and must never
-crash an event.
+crash an event. The due-day digest is the documented exception —
+`handlers/due_digest.py` skips a rebuild outright when the DB is unavailable,
+since without `due_day_events` it cannot address its own calendar events and
+would risk duplicating them (spec D7).
 
 ## Secrets
 
