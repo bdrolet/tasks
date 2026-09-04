@@ -71,6 +71,10 @@ curl -X PUT -H "Authorization: Bearer $ASANA_API_KEY" -H "Content-Type: applicat
 (Done 2026-08-06 to add the semantic-index freshness events; the live
 registration matches `register_webhook.py`.)
 
+Optional: adding `"tags"` to the `changed` filter's `fields` makes a `cheryl`
+tag change re-route the due-day digest within minutes; without it the change
+lands on the hourly rebuild.
+
 ## Where the secret lives (and healing when it's lost)
 
 The `X-Hook-Secret` exists in exactly three places, in order of authority:

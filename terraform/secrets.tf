@@ -14,8 +14,9 @@ data "google_secret_manager_secret" "shared" {
     "grafana-otlp-endpoint",
     "grafana-otlp-token",
     "webhook-label-token",
-    "search-token",     # inbox-api bearer auth (clients/inbox_api.py)
-    "standing-context", # declared facts — github.com/bdrolet/context (private)
+    "search-token",       # inbox-api bearer auth (clients/inbox_api.py)
+    "standing-context",   # declared facts — github.com/bdrolet/context (private)
+    "schedule-api-token", # schedule-api bearer auth (clients/schedule_api.py) — owned by schedule terraform
   ])
   secret_id = each.key
   project   = var.project_id

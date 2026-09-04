@@ -39,3 +39,12 @@ asana_webhook_secret = ""
 tasks_api_token = "CHANGE-ME"
 # GitHub Actions deployer SA (same value as the GCP_DEPLOYER_SA repo secret)
 deployer_sa = "inbox-deployer@bens-project-462804.iam.gserviceaccount.com"
+
+# Due-day digest routing (docs/superpowers/specs/2026-09-03-due-day-digest-design.md).
+# Family Board project GID: numeric id in the project URL. Calendar ids: run
+#   TOKEN=$(gcloud secrets versions access latest --secret=schedule-api-token --project bens-project-462804)
+#   curl -s https://schedule-api.drolet.cloud/calendars -H "Authorization: Bearer $TOKEN"
+# and copy calendar_id for "Family" and "Ben | Cheryl".
+asana_project_family_gid = "..."
+calendar_family_id       = "c_...@group.calendar.google.com"
+calendar_shared_id       = "c_...@group.calendar.google.com"

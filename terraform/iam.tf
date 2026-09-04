@@ -82,3 +82,10 @@ resource "google_secret_manager_secret_iam_member" "webhook_cf_escalate_token" {
 
 # The email-events topic and inbox-process-cf's publisher binding live in the
 # INBOX repo's terraform (producer owns the stream) — see plan Task 16 Step 2.
+
+# /digest runs on the webhook CF only — it is the only caller of schedule-api.
+resource "google_secret_manager_secret_iam_member" "webhook_cf_schedule_api_token" {
+  secret_id = data.google_secret_manager_secret.shared["schedule-api-token"].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_webhook_cf.email}"
+}
