@@ -34,6 +34,7 @@ BODY_CAP = 2000
 ATTACHMENT_CAP = 10
 PRIORITIES = ("P0", "P1", "P2", "P3")
 VERDICTS = ("task", "relate", "drop")
+AUDIENCES = ("self", "shared")
 
 OUTPUT_SCHEMA: dict = {
     "type": "object",
@@ -44,8 +45,17 @@ OUTPUT_SCHEMA: dict = {
             "type": "string",
             "description": "One sentence naming what decided it.",
         },
+        "audience": {
+            "type": "string",
+            "enum": list(AUDIENCES),
+            "description": (
+                "'shared' when the matter is one Ben's household holds jointly — a "
+                "joint account, a shared bill or subscription, a plan or obligation "
+                "involving his partner — per the household facts; 'self' otherwise."
+            ),
+        },
     },
-    "required": ["verdict", "priority", "reason"],
+    "required": ["verdict", "priority", "reason", "audience"],
     "additionalProperties": False,
 }
 
@@ -75,6 +85,8 @@ Priority is stakes, independent of urgency:
 - P3: minor, low-stakes, or purely informational.
 
 Set priority even for "relate" and "drop"; it is ignored in those cases.
+
+Audience, independent of the verdict: "shared" when the matter is one Ben's household holds jointly — a joint account, a shared bill or subscription, a plan, purchase, or obligation involving his partner — judged against the household facts when they are given. "self" when only Ben is involved, and when no household facts are given and nothing in the email says otherwise. A message that merely mentions a household member is "self".
 
 Respond with the JSON object only."""
 
@@ -120,13 +132,22 @@ def attachment_lines(event: EmailClassifiedEvent) -> list[str]:
 
 
 def build_user_message(
-    event: EmailClassifiedEvent, *, today: str, roles: str, attachments: list[str]
+    event: EmailClassifiedEvent,
+    *,
+    today: str,
+    roles: str,
+    attachments: list[str],
+    routing: str = "",
 ) -> str:
     parts = [f"Today is {today}."]
     if roles:
         parts.append(
             "Standing facts about Ben (a fact that states a period applies only "
             "inside that period):\n\n" + roles
+        )
+    if routing:
+        parts.append(
+            "Household facts (who counts as shared, for the audience field):\n\n" + routing
         )
     sender = event.get("sender") or ""
     if event.get("sender_display"):
@@ -178,11 +199,15 @@ def _parse(raw: str) -> Screening:
     priority = data.get("priority")
     if priority not in PRIORITIES:
         priority = "P2"
+    audience = data.get("audience")
+    if audience not in AUDIENCES:
+        audience = "self"
     return Screening(
         verdict=verdict,
         priority=priority,
         reason=str(data.get("reason") or "").strip(),
         outcome=verdict,
+        audience=audience,
     )
 
 
@@ -195,6 +220,7 @@ def screen(event: EmailClassifiedEvent, *, today: str | None = None) -> Screenin
             event,
             today=today or date.today().isoformat(),
             roles=standing_context.section("Roles"),
+            routing=standing_context.section("Calendar Routing"),
             attachments=attachment_lines(event),
         )
         verdict = _parse(claude.classify(system=SYSTEM_PROMPT, user=user, schema=OUTPUT_SCHEMA))

@@ -93,6 +93,11 @@ Against the standard you read in step 1:
 - **`tags`** — reuse the existing vocabulary; fetch it first and only coin a new
   kebab-case topic tag when nothing fits:
   `curl -s "$BASE/tags" -H "Authorization: Bearer $TOKEN"`
+- **`cheryl` tag** — add it when the task involves Cheryl or a matter the
+  household holds jointly (a shared bill or account, a joint plan or
+  purchase, something she has to do or sign). The due-day digest routes
+  tasks with this tag to the shared "Ben | Cheryl" calendar. A task that
+  merely mentions her does not get it.
 - **`repeat:<count><unit>` tag** — if the request describes something that
   comes back on a cadence after it is done ("every three months", "again a
   week after I finish"), add one — `repeat:3mo`, `repeat:1w`. Recurrence is

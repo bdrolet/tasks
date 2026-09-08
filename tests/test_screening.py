@@ -206,3 +206,67 @@ def test_screen_fallback_coerces_a_bad_inbox_importance(monkeypatch):
     _classify(monkeypatch, RuntimeError("down"))
     result = screening.screen(make_email_event(category="review", importance="high"))
     assert result.priority == "P2"
+
+
+# --- audience (shared-with-Cheryl) -------------------------------------------
+
+
+def _facts(monkeypatch, roles="", routing=""):
+    monkeypatch.setattr(
+        standing_context,
+        "section",
+        lambda name, **kw: {"Roles": roles, "Calendar Routing": routing}.get(name, ""),
+    )
+
+
+def _verdict_with_audience(audience):
+    return json.dumps(
+        {"verdict": "task", "priority": "P1", "reason": "because", "audience": audience}
+    )
+
+
+def test_output_schema_has_a_two_way_audience():
+    props = screening.OUTPUT_SCHEMA["properties"]
+    assert props["audience"]["enum"] == ["self", "shared"]
+    assert "audience" in screening.OUTPUT_SCHEMA["required"]
+
+
+def test_screen_reads_a_shared_audience(monkeypatch):
+    _no_attachments(monkeypatch)
+    _facts(monkeypatch)
+    _classify(monkeypatch, _verdict_with_audience("shared"))
+    result = screening.screen(make_email_event(), today="2026-09-04")
+    assert result.audience == "shared"
+
+
+def test_screen_defaults_audience_to_self_when_missing_or_unknown(monkeypatch):
+    _no_attachments(monkeypatch)
+    _facts(monkeypatch)
+    _classify(monkeypatch, _verdict("task", "P1", "x"))
+    assert screening.screen(make_email_event(), today="2026-09-04").audience == "self"
+    _classify(monkeypatch, _verdict_with_audience("everyone"))
+    assert screening.screen(make_email_event(), today="2026-09-04").audience == "self"
+
+
+def test_fallback_audience_is_self(monkeypatch):
+    _no_attachments(monkeypatch)
+    _facts(monkeypatch)
+    _classify(monkeypatch, RuntimeError("anthropic down"))
+    assert screening.screen(make_email_event(), today="2026-09-04").audience == "self"
+
+
+def test_screen_passes_household_facts_to_the_model(monkeypatch):
+    _no_attachments(monkeypatch)
+    _facts(monkeypatch, roles="Ben is treasurer.", routing="Household is Ben and his partner.")
+    captured = {}
+    _classify(monkeypatch, _verdict(), capture=captured)
+    screening.screen(make_email_event(), today="2026-09-04")
+    assert "Ben is treasurer." in captured["user"]
+    assert "Household is Ben and his partner." in captured["user"]
+
+
+def test_build_user_message_omits_household_block_when_empty():
+    msg = screening.build_user_message(
+        make_email_event(), today="2026-09-04", roles="", routing="", attachments=[]
+    )
+    assert "Household" not in msg

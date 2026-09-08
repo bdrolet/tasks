@@ -115,3 +115,10 @@ variable "calendar_shared_id" {
   type        = string
   default     = ""
 }
+
+variable "cheryl_emails" {
+  description = "Comma-separated email addresses that identify Cheryl on an email (sender/to/cc) — forces the `cheryl` tag on email-derived tasks (services/shared_tags.py). Personal: tfvars + GitHub secret only. Empty disables the address rule; the screener's judgment still applies."
+  type        = string
+  default     = ""
+  sensitive   = true
+}

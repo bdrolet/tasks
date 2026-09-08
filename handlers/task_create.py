@@ -13,6 +13,7 @@ from services import (
     relating,
     screening,
     sections,
+    shared_tags,
     tags,
     task_content,
     task_index,
@@ -179,7 +180,9 @@ def handle(event: EmailClassifiedEvent) -> None:
         except Exception:
             logger.exception("Deadline extraction failed for message_id=%s", event["message_id"])
 
-    tag_gids = tags.resolve_gids(event.get("tags") or [])
+    tag_gids = tags.resolve_gids(
+        shared_tags.for_event(event, verdict, addresses=shared_tags.addresses_from_env())
+    )
     html_notes = task_content.render_html_notes(
         task_content.for_email(event, key_points, relevant_links)
     )

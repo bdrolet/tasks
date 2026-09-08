@@ -88,6 +88,7 @@ class Screening:
     verdict: str = "task"  # task | relate | drop
     priority: str = "P2"  # P0 | P1 | P2 | P3
     reason: str = ""
+    audience: str = "self"  # self | shared — shared = held jointly by Ben's household
     outcome: str = "task"  # task | relate | drop | fail_open
 
     @property
