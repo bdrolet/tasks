@@ -26,6 +26,7 @@ SCHEDULE_API_TOKEN=$(secret schedule-api-token)
 ASANA_PROJECT_FAMILY_GID=$(tfvar asana_project_family_gid)
 CALENDAR_FAMILY_ID=$(tfvar calendar_family_id)
 CALENDAR_SHARED_ID=$(tfvar calendar_shared_id)
+CHERYL_EMAILS=$(tfvar cheryl_emails)
 CLOUD_SQL_CONNECTION_NAME=bens-project-462804:us-central1:inbox
 POSTGRES_USER=tasks
 POSTGRES_DB=tasks

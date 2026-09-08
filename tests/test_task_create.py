@@ -565,3 +565,57 @@ def test_title_falls_back_to_subject_with_screener_priority(monkeypatch):
     task_create.handle(make_email_event(subject="Quarterly report"))
 
     assert created["title"] == "[P2] Quarterly report"
+
+
+# --- cheryl tag ----------------------------------------------------------------
+
+
+def _capture_tag_names(monkeypatch):
+    names = []
+    monkeypatch.setattr(tags, "resolve_gids", lambda ns: names.extend(ns) or [])
+    return names
+
+
+def test_handle_tags_cheryl_when_screener_says_shared(monkeypatch):
+    from models.events import Screening
+    from services import screening
+
+    monkeypatch.delenv("CHERYL_EMAILS", raising=False)
+    monkeypatch.setattr(
+        screening, "screen", lambda event, **kw: Screening(priority="P1", audience="shared")
+    )
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch)
+    _capture_create(monkeypatch)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+    names = _capture_tag_names(monkeypatch)
+
+    task_create.handle(make_email_event(tags=["finance"]))
+
+    assert names == ["finance", "cheryl"]
+
+
+def test_handle_tags_cheryl_when_she_is_on_the_email(monkeypatch):
+    monkeypatch.setenv("CHERYL_EMAILS", "cheryl@example.com")
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch)
+    _capture_create(monkeypatch)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+    names = _capture_tag_names(monkeypatch)
+
+    task_create.handle(make_email_event(tags=["finance"], cc=["Cheryl@Example.com"]))
+
+    assert names == ["finance", "cheryl"]
+
+
+def test_handle_leaves_tags_alone_for_self_audience(monkeypatch):
+    monkeypatch.delenv("CHERYL_EMAILS", raising=False)
+    _stub_db(monkeypatch)
+    _stub_enrichment(monkeypatch)
+    _capture_create(monkeypatch)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+    names = _capture_tag_names(monkeypatch)
+
+    task_create.handle(make_email_event(tags=["finance"]))
+
+    assert names == ["finance"]

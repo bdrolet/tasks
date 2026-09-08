@@ -65,6 +65,13 @@ fallback — a Claude failure degrades gate 1 to the old category rule
 
 **There is no urgent bypass.** `urgent` mail runs gate 2 like everything else.
 
+Gate 1 also returns an `audience` (`self`|`shared`), judged against the
+`Calendar Routing` section of the declared facts. `services/shared_tags.py`
+adds the `cheryl` tag when the audience is `shared` **or** Cheryl is on the
+email (`CHERYL_EMAILS`, a comma-separated list from tfvars → CF env, never
+committed) — that tag is what routes the task's due-day digest to the shared
+calendar. Manual tasks get it from the `task-builder` agent's tagging rule.
+
 Then `services/triage.py::decide` (gate 2) — a Sonnet 5 tool-runner agent with
 read-only `search_emails` / `get_email` / `search_tasks` / `get_task` tools
 that reads the `Roles` section of the declared facts and decides whether the

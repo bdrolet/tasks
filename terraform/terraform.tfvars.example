@@ -48,3 +48,8 @@ deployer_sa = "inbox-deployer@bens-project-462804.iam.gserviceaccount.com"
 asana_project_family_gid = "..."
 calendar_family_id       = "c_...@group.calendar.google.com"
 calendar_shared_id       = "c_...@group.calendar.google.com"
+
+# Cheryl's email address(es), comma-separated. An email she sends or receives
+# makes the resulting task carry the `cheryl` tag (→ the "Ben | Cheryl"
+# digest calendar). Also set as the TF_VAR_CHERYL_EMAILS GitHub secret.
+cheryl_emails = "cheryl@example.com"

@@ -19,6 +19,7 @@ locals {
     ASANA_PROJECT_FAMILY_GID  = var.asana_project_family_gid
     CALENDAR_FAMILY_ID        = var.calendar_family_id
     CALENDAR_SHARED_ID        = var.calendar_shared_id
+    CHERYL_EMAILS             = var.cheryl_emails
   }
 }
 
