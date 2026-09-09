@@ -4,7 +4,8 @@ from models.digest import DigestTask
 from services import due_digest as dd
 
 ROUTE = dict(
-    family_project_gid="fam", family_calendar_id="cal-fam", shared_calendar_id="cal-shared"
+    project_calendars=[("fam", "cal-fam"), ("cheryl", "cal-shared"), ("carter", "cal-shared")],
+    shared_calendar_id="cal-shared",
 )
 
 
@@ -37,6 +38,34 @@ def test_route_family_project_wins_over_tag():
     assert dd.route(task, **ROUTE) == "cal-fam"
 
 
+def test_route_cheryl_board_to_shared_calendar():
+    task = {"memberships": [{"project": {"gid": "cheryl"}}], "tags": []}
+    assert dd.route(task, **ROUTE) == "cal-shared"
+
+
+def test_route_carter_board_to_shared_calendar():
+    task = {"memberships": [{"project": {"gid": "carter"}}], "tags": []}
+    assert dd.route(task, **ROUTE) == "cal-shared"
+
+
+def test_route_follows_list_order_not_gid_order():
+    # The rules are deliberately in descending-gid sequence: a regression that
+    # sorted or iterated by gid — or by Asana's membership order — would hand
+    # this task to Carter Board's calendar instead of Family's.
+    task = {
+        "memberships": [{"project": {"gid": "carter"}}, {"project": {"gid": "fam"}}],
+        "tags": [],
+    }
+    rules = [("fam", "cal-fam"), ("carter", "cal-shared")]
+    assert dd.route(task, project_calendars=rules, shared_calendar_id="cal-shared") == "cal-fam"
+
+
+def test_route_entry_without_calendar_never_matches():
+    task = {"memberships": [{"project": {"gid": "carter"}}], "tags": []}
+    rules = [("carter", ""), ("", "cal-fam")]
+    assert dd.route(task, project_calendars=rules, shared_calendar_id="") == dd.PRIMARY
+
+
 def test_route_cheryl_tag_case_insensitive():
     task = {"memberships": [{"project": {"gid": "other"}}], "tags": [{"name": "Cheryl"}]}
     assert dd.route(task, **ROUTE) == "cal-shared"
@@ -47,15 +76,16 @@ def test_route_default_primary():
     assert dd.route(task, **ROUTE) == dd.PRIMARY
 
 
-def test_route_skips_rules_whose_env_is_missing():
-    task = {"memberships": [{"project": {"gid": "fam"}}], "tags": [{"name": "cheryl"}]}
-    assert (
-        dd.route(task, family_project_gid="", family_calendar_id="", shared_calendar_id="")
-        == "primary"
-    )
-    assert (
-        dd.route(task, family_project_gid="", family_calendar_id="", shared_calendar_id="s") == "s"
-    )
+def test_route_empty_rules_falls_through_to_tag_then_primary():
+    tagged = {"memberships": [{"project": {"gid": "carter"}}], "tags": [{"name": "cheryl"}]}
+    untagged = {"memberships": [{"project": {"gid": "carter"}}], "tags": []}
+    assert dd.route(tagged, project_calendars=[], shared_calendar_id="cal-shared") == "cal-shared"
+    assert dd.route(untagged, project_calendars=[], shared_calendar_id="cal-shared") == dd.PRIMARY
+
+
+def test_route_tag_rule_skipped_without_shared_calendar():
+    task = {"memberships": [], "tags": [{"name": "cheryl"}]}
+    assert dd.route(task, project_calendars=[], shared_calendar_id="") == dd.PRIMARY
 
 
 def test_in_window_edges():

@@ -93,7 +93,10 @@ def _routing() -> dict:
     for key, value in cfg.items():
         if not value:
             logger.warning("Digest routing: %s unset — that rule is skipped", _ROUTING_ENV[key])
-    return cfg
+    return {
+        "project_calendars": [(cfg["family_project_gid"], cfg["family_calendar_id"])],
+        "shared_calendar_id": cfg["shared_calendar_id"],
+    }
 
 
 def _digest_tasks(candidates: list[dict], today: date, conn, counts: dict) -> list[DigestTask]:
