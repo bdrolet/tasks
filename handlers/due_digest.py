@@ -4,6 +4,7 @@ routes and condenses each task, diffs against due_day_events, and applies
 the diff through schedule-api. Called only from main.py.
 Design: docs/superpowers/specs/2026-09-03-due-day-digest-design.md."""
 
+import json
 import logging
 import os
 import re
@@ -81,22 +82,46 @@ def _list_candidates() -> list[dict]:
     return out
 
 
-_ROUTING_ENV = {
-    "family_project_gid": "ASANA_PROJECT_FAMILY_GID",
-    "family_calendar_id": "CALENDAR_FAMILY_ID",
-    "shared_calendar_id": "CALENDAR_SHARED_ID",
-}
+_PROJECT_CALENDARS_ENV = "ASANA_PROJECT_CALENDARS"
+_SHARED_CALENDAR_ENV = "CALENDAR_SHARED_ID"
+_DEFAULT_ORDER = 100
+
+
+def _project_calendars() -> list[tuple[str, str]]:
+    """ASANA_PROJECT_CALENDARS ({"<project gid>": {"calendar": ..., "order": ...}})
+    → [(project_gid, calendar_id)] in match order: ascending `order`, ties by
+    gid. Entries without a calendar are dropped. An unset or malformed map logs
+    and yields no rules, so a rebuild degrades to tag/primary routing rather
+    than failing."""
+    raw = os.environ.get(_PROJECT_CALENDARS_ENV, "").strip()
+    if not raw:
+        logger.warning(
+            "Digest routing: %s unset — every project rule is skipped", _PROJECT_CALENDARS_ENV
+        )
+        return []
+    try:
+        entries = [
+            (int(cfg.get("order", _DEFAULT_ORDER)), gid, str(cfg.get("calendar") or ""))
+            for gid, cfg in json.loads(raw).items()
+        ]
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.warning(
+            "Digest routing: %s is malformed (%s) — every project rule is skipped",
+            _PROJECT_CALENDARS_ENV,
+            exc,
+        )
+        return []
+    return [(gid, calendar) for _, gid, calendar in sorted(entries) if calendar]
 
 
 def _routing() -> dict:
-    cfg = {key: os.environ.get(env, "") for key, env in _ROUTING_ENV.items()}
-    for key, value in cfg.items():
-        if not value:
-            logger.warning("Digest routing: %s unset — that rule is skipped", _ROUTING_ENV[key])
-    return {
-        "project_calendars": [(cfg["family_project_gid"], cfg["family_calendar_id"])],
-        "shared_calendar_id": cfg["shared_calendar_id"],
-    }
+    """The keyword arguments dd.route takes."""
+    shared = os.environ.get(_SHARED_CALENDAR_ENV, "")
+    if not shared:
+        logger.warning(
+            "Digest routing: %s unset — the cheryl tag rule is skipped", _SHARED_CALENDAR_ENV
+        )
+    return {"project_calendars": _project_calendars(), "shared_calendar_id": shared}
 
 
 def _digest_tasks(candidates: list[dict], today: date, conn, counts: dict) -> list[DigestTask]:

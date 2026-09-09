@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -29,12 +30,84 @@ def test_should_rebuild_matrix():
     assert h.should_rebuild({"dirty_at": None, "last_rebuilt_at": rebuilt}, NOW, True)
 
 
+def test_project_calendars_sorts_by_order_and_drops_calendarless(monkeypatch):
+    # Keys are deliberately not in `order` sequence, and "boardless" would sort
+    # first by both key order and `order` if it were not dropped for having no
+    # calendar — a regression to key order fails this test.
+    monkeypatch.setenv(
+        "ASANA_PROJECT_CALENDARS",
+        json.dumps(
+            {
+                "carter": {"calendar": "cal-shared", "order": 20},
+                "boardless": {"order": 5},
+                "fam": {"calendar": "cal-fam", "order": 10},
+            }
+        ),
+    )
+    assert h._project_calendars() == [("fam", "cal-fam"), ("carter", "cal-shared")]
+
+
+def test_project_calendars_defaults_order_and_ties_break_by_gid(monkeypatch):
+    monkeypatch.setenv(
+        "ASANA_PROJECT_CALENDARS",
+        json.dumps(
+            {
+                "zeta": {"calendar": "cal-z"},
+                "alpha": {"calendar": "cal-a"},
+                "fam": {"calendar": "cal-fam", "order": 10},
+            }
+        ),
+    )
+    assert h._project_calendars() == [
+        ("fam", "cal-fam"),
+        ("alpha", "cal-a"),
+        ("zeta", "cal-z"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        "not json",
+        "[]",
+        '{"fam": "cal-fam"}',
+        '{"fam": {"calendar": "cal-fam", "order": "soon"}}',
+    ],
+)
+def test_project_calendars_unset_or_malformed_yields_no_rules(monkeypatch, raw):
+    monkeypatch.setenv("ASANA_PROJECT_CALENDARS", raw)
+    assert h._project_calendars() == []
+
+
+def test_routing_returns_routes_kwargs(env):
+    assert h._routing() == {
+        "project_calendars": [("fam", "cal-fam"), ("cheryl", "cal-shared")],
+        "shared_calendar_id": "cal-shared",
+    }
+
+
+def test_routing_without_shared_calendar_keeps_project_rules(env, monkeypatch):
+    monkeypatch.delenv("CALENDAR_SHARED_ID")
+    routing = h._routing()
+    assert routing["shared_calendar_id"] == ""
+    assert routing["project_calendars"] == [("fam", "cal-fam"), ("cheryl", "cal-shared")]
+
+
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("SCHEDULE_API_URL", "https://s")
     monkeypatch.setenv("SCHEDULE_API_TOKEN", "t")
-    monkeypatch.setenv("ASANA_PROJECT_FAMILY_GID", "fam")
-    monkeypatch.setenv("CALENDAR_FAMILY_ID", "cal-fam")
+    monkeypatch.setenv(
+        "ASANA_PROJECT_CALENDARS",
+        json.dumps(
+            {
+                "fam": {"calendar": "cal-fam", "order": 10},
+                "cheryl": {"calendar": "cal-shared", "order": 20},
+            }
+        ),
+    )
     monkeypatch.setenv("CALENDAR_SHARED_ID", "cal-shared")
     monkeypatch.setattr(h, "_now", lambda: NOW)
 
