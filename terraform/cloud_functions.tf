@@ -16,8 +16,7 @@ locals {
     POSTGRES_USER             = google_sql_user.tasks.name
     POSTGRES_DB               = google_sql_database.tasks.name
     SCHEDULE_API_URL          = var.schedule_api_url
-    ASANA_PROJECT_FAMILY_GID  = var.asana_project_family_gid
-    CALENDAR_FAMILY_ID        = var.calendar_family_id
+    ASANA_PROJECT_CALENDARS   = var.asana_project_calendars
     CALENDAR_SHARED_ID        = var.calendar_shared_id
     CHERYL_EMAILS             = var.cheryl_emails
   }

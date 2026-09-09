@@ -40,14 +40,17 @@ tasks_api_token = "CHANGE-ME"
 # GitHub Actions deployer SA (same value as the GCP_DEPLOYER_SA repo secret)
 deployer_sa = "inbox-deployer@bens-project-462804.iam.gserviceaccount.com"
 
-# Due-day digest routing (docs/superpowers/specs/2026-09-03-due-day-digest-design.md).
-# Family Board project GID: numeric id in the project URL. Calendar ids: run
+# Due-day digest routing (docs/superpowers/specs/2026-09-03-due-day-digest-design.md,
+# docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md).
+# Project GIDs: the numeric id in the project URL. Calendar ids: run
 #   TOKEN=$(gcloud secrets versions access latest --secret=schedule-api-token --project bens-project-462804)
 #   curl -s https://schedule-api.drolet.cloud/calendars -H "Authorization: Bearer $TOKEN"
 # and copy calendar_id for "Family" and "Ben | Cheryl".
-asana_project_family_gid = "..."
-calendar_family_id       = "c_...@group.calendar.google.com"
-calendar_shared_id       = "c_...@group.calendar.google.com"
+# The value is JSON inside an HCL string, so every inner quote is escaped and the
+# whole map is one line — scripts/fetch-env.sh unescapes it into .env. Lower
+# `order` wins: Family Board 10, the shared boards 20.
+asana_project_calendars = "{\"<family gid>\": {\"calendar\": \"c_family...@group.calendar.google.com\", \"order\": 10}, \"<cheryl board gid>\": {\"calendar\": \"c_shared...@group.calendar.google.com\", \"order\": 20}, \"<carter board gid>\": {\"calendar\": \"c_shared...@group.calendar.google.com\", \"order\": 20}}"
+calendar_shared_id      = "c_...@group.calendar.google.com"
 
 # Cheryl's email address(es), comma-separated. An email she sends or receives
 # makes the resulting task carry the `cheryl` tag (→ the "Ben | Cheryl"

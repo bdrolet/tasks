@@ -21,7 +21,7 @@ inbox's process/sweep). Required env vars:
   CLOUD_SQL_CONNECTION_NAME / POSTGRES_*     — tasks database
   GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN — OTel export (optional)
   SCHEDULE_API_URL / SCHEDULE_API_TOKEN      — schedule-api, for the due-day digest
-  ASANA_PROJECT_FAMILY_GID / CALENDAR_FAMILY_ID / CALENDAR_SHARED_ID — digest routing
+  ASANA_PROJECT_CALENDARS / CALENDAR_SHARED_ID — digest routing (project map, cheryl tag)
 """
 
 import base64

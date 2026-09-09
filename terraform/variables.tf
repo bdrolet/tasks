@@ -98,16 +98,10 @@ variable "schedule_api_url" {
   default     = "https://schedule-api.drolet.cloud"
 }
 
-variable "asana_project_family_gid" {
-  description = "Asana project GID of the Family Board — its tasks' due-day digest goes to the Family calendar. Empty disables the rule."
+variable "asana_project_calendars" {
+  description = "Due-day digest project routing, as a JSON object: {\"<project gid>\": {\"calendar\": \"<Google Calendar id>\", \"order\": <int>}}. First match wins by ascending order (ties by gid); entries without a calendar are ignored. Family = 10, shared boards = 20. Personal ids: terraform.tfvars + GitHub repo variable only. \"{}\" disables every project rule."
   type        = string
-  default     = ""
-}
-
-variable "calendar_family_id" {
-  description = "Google Calendar id of the Family calendar (GET schedule-api /calendars). Empty disables the rule."
-  type        = string
-  default     = ""
+  default     = "{}"
 }
 
 variable "calendar_shared_id" {

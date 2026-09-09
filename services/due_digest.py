@@ -22,16 +22,17 @@ def today_local(now: datetime | None = None) -> date:
     return now.astimezone(ZoneInfo(LOCAL_TZ)).date()
 
 
-def route(
-    task: dict, *, family_project_gid: str, family_calendar_id: str, shared_calendar_id: str
-) -> str:
-    """First match wins: Family Board membership → family calendar; a `cheryl`
-    tag → shared calendar; else primary. A rule whose configuration is empty
-    is skipped, so the digest still runs with a partial config."""
-    if family_project_gid and family_calendar_id:
-        for membership in task.get("memberships") or []:
-            if ((membership.get("project") or {}).get("gid")) == family_project_gid:
-                return family_calendar_id
+def route(task: dict, *, project_calendars: list[tuple[str, str]], shared_calendar_id: str) -> str:
+    """First match wins: a project with a configured calendar, in the order the
+    caller supplies; then a `cheryl` tag → shared calendar; else primary. A rule
+    whose configuration is empty is skipped, so the digest still runs on a
+    partial config. Never sorts — precedence is the caller's (handlers/due_digest
+    ::_project_calendars, by the `order` key). Design:
+    docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md."""
+    gids = {(m.get("project") or {}).get("gid") for m in task.get("memberships") or []}
+    for project_gid, calendar_id in project_calendars:
+        if project_gid and calendar_id and project_gid in gids:
+            return calendar_id
     if shared_calendar_id:
         for tag in task.get("tags") or []:
             if (tag.get("name") or "").strip().casefold() == "cheryl":

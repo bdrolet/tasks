@@ -106,8 +106,12 @@ Against the standard you read in step 1:
   API default: omitting `project` falls back to the email pipeline's project
   (Inbox), which is almost never where a manual task belongs.
   `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"` lists projects with
-  their sections — pick the one the request belongs to. The only exception is a
-  subtask, which takes `parent` instead (next bullet).
+  their sections — pick the one the request belongs to. A task tied to 3550
+  Carter Dr Unit 126 — the unit itself, its utilities, HOA, maintenance,
+  repairs, furnishing, appliances, or address changes — goes to
+  **Carter Board**; household matters not tied to the place keep their
+  existing homes. The only exception is a subtask, which takes `parent`
+  instead (next bullet).
 - **`parent`** — when the dispatch names a parent task (a subtask request),
   send its GID in `parent` and omit `project`/`section` entirely; report
   `subtask of <parent name>` in place of `<project>/<section>` in your
