@@ -4,6 +4,7 @@ set -e
 PROJECT=bens-project-462804
 secret() { gcloud secrets versions access latest --secret="$1" --project="$PROJECT"; }
 tfvar() { grep "^$1" terraform/terraform.tfvars | sed 's/.*= *"\(.*\)"/\1/'; }
+tfvar_json() { tfvar "$1" | sed 's/\\"/"/g'; }
 
 cat > .env <<EOF
 ASANA_API_KEY=$(secret asana-api-key)
@@ -23,8 +24,7 @@ INBOX_API_URL=$(tfvar inbox_api_url)
 INBOX_API_TOKEN=$(secret search-token)
 SCHEDULE_API_URL=https://schedule-api.drolet.cloud
 SCHEDULE_API_TOKEN=$(secret schedule-api-token)
-ASANA_PROJECT_FAMILY_GID=$(tfvar asana_project_family_gid)
-CALENDAR_FAMILY_ID=$(tfvar calendar_family_id)
+ASANA_PROJECT_CALENDARS='$(tfvar_json asana_project_calendars)'
 CALENDAR_SHARED_ID=$(tfvar calendar_shared_id)
 CHERYL_EMAILS=$(tfvar cheryl_emails)
 CLOUD_SQL_CONNECTION_NAME=bens-project-462804:us-central1:inbox

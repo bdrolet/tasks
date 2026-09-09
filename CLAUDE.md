@@ -140,8 +140,10 @@ one open task per series carries it. Design:
 ## Due-day digest
 
 One all-day event per day that has open tasks due, for a rolling 30-day
-window, on the calendar the task belongs to: Family Board (`ASANA_PROJECT_FAMILY_GID`)
-→ Family (`CALENDAR_FAMILY_ID`); a `cheryl` tag → "Ben | Cheryl"
+window, on the calendar the task belongs to: project membership first, from the
+`ASANA_PROJECT_CALENDARS` map (project gid → `{calendar, order}`; ascending
+`order`, first match wins — Family Board → Family, Cheryl's Board and Carter
+Board → "Ben | Cheryl"); then a `cheryl` tag → "Ben | Cheryl"
 (`CALENDAR_SHARED_ID`); everything else → primary. Each task is a linked
 title plus 2–3 Haiku-condensed bullets (cached in `task_bullets` by content
 hash, ≤40 calls per rebuild) and the doc links from its Links section.
@@ -151,7 +153,8 @@ a day with nothing due has no event. Routing ids are personal — they live
 in `terraform.tfvars` and GitHub repo variables, never here. The Asana
 webhook only flips a dirty flag (Asana wants a reply in 10 s); other
 projects' edits land on the hourly rebuild. Design:
-`docs/superpowers/specs/2026-09-03-due-day-digest-design.md`.
+`docs/superpowers/specs/2026-09-03-due-day-digest-design.md`; project
+routing: `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`.
 
 ## Layer rules
 

@@ -47,8 +47,7 @@ jobs:
           TF_VAR_asana_section_done_gid: ${{ vars.ASANA_SECTION_DONE_GID }}
           TF_VAR_asana_section_overdue_gid: ${{ vars.ASANA_SECTION_OVERDUE_GID }}
           TF_VAR_inbox_api_url: ${{ vars.INBOX_API_URL }}
-          TF_VAR_asana_project_family_gid: ${{ vars.ASANA_PROJECT_FAMILY_GID }}
-          TF_VAR_calendar_family_id: ${{ vars.CALENDAR_FAMILY_ID }}
+          TF_VAR_asana_project_calendars: ${{ vars.ASANA_PROJECT_CALENDARS }}
           TF_VAR_calendar_shared_id: ${{ vars.CALENDAR_SHARED_ID }}
           TF_VAR_tasks_db_password: ${{ secrets.TF_VAR_TASKS_DB_PASSWORD }}
           TF_VAR_tasks_escalate_token: ${{ secrets.TF_VAR_TASKS_ESCALATE_TOKEN }}
