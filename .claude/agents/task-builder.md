@@ -102,9 +102,12 @@ Against the standard you read in step 1:
   comes back on a cadence after it is done ("every three months", "again a
   week after I finish"), add one — `repeat:3mo`, `repeat:1w`. Recurrence is
   completion-anchored: do not use it for a fixed calendar schedule.
-- **`project` / `section`** — omit for the default tasks project unless the request
-  clearly belongs elsewhere. `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"`
-  lists projects with their sections.
+- **`project` / `section`** — always send an explicit `project`. Never rely on the
+  API default: omitting `project` falls back to the email pipeline's project
+  (Inbox), which is almost never where a manual task belongs.
+  `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"` lists projects with
+  their sections — pick the one the request belongs to. The only exception is a
+  subtask, which takes `parent` instead (next bullet).
 - **`parent`** — when the dispatch names a parent task (a subtask request),
   send its GID in `parent` and omit `project`/`section` entirely; report
   `subtask of <parent name>` in place of `<project>/<section>` in your
@@ -122,7 +125,8 @@ unsure of it, it belongs in the open-questions comment instead.
 ```bash
 curl -s -XPOST "$BASE/tasks" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"...","priority":"P1","context":"...","key_points":["..."],
-       "links":[["https://...","label"]],"due_on":"YYYY-MM-DD","tags":["..."]}'
+       "links":[["https://...","label"]],"due_on":"YYYY-MM-DD","tags":["..."],
+       "project":"...","section":"..."}'
 # -> {"task_gid":"...","permalink_url":"..."}
 ```
 
