@@ -149,9 +149,14 @@ title plus 2–3 Haiku-condensed bullets (cached in `task_bullets` by content
 hash, ≤40 calls per rebuild) and the doc links from its Links section.
 `services/due_digest.py` is the pure policy, `handlers/due_digest.py` the
 rebuild, `repo/due_digest.py` the state. A completed task drops off its day;
-a day with nothing due has no event. Routing ids are personal — they live
-in `terraform.tfvars` and GitHub repo variables, never here. The Asana
-webhook only flips a dirty flag (Asana wants a reply in 10 s); other
+a day with nothing due has no event. Routing **configuration** lives in
+`terraform.tfvars` and GitHub repo variables, never in a committed file, and
+**calendar ids are personal** — they never appear here at all, in code, config
+or prose (`terraform.tfvars.example` uses `c_...` placeholders). Asana project
+and section gids are opaque without a workspace token, so naming one in a
+design doc — "Carter Board (`1218...`)" — is fine, and is often the whole
+point of the record; that is not licence to hardcode one where config is read.
+The Asana webhook only flips a dirty flag (Asana wants a reply in 10 s); other
 projects' edits land on the hourly rebuild. Design:
 `docs/superpowers/specs/2026-09-03-due-day-digest-design.md`; project
 routing: `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`.

@@ -1,7 +1,7 @@
 # Project → calendar routing for the due-day digest
 
 **Date:** 2026-09-08
-**Status:** designed, not implemented
+**Status:** implemented — PR #25, merged as `c5183f2` on 2026-09-09
 **Extends:** `docs/superpowers/specs/2026-09-03-due-day-digest-design.md`
 **Related, independent:** `docs/superpowers/specs/2026-09-08-cross-project-recurrence-design.md`
 
