@@ -535,15 +535,16 @@ routing: `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`.
 
 ```bash
 grep -rn "ASANA_PROJECT_FAMILY_GID\|CALENDAR_FAMILY_ID\|asana_project_family_gid\|calendar_family_id" \
-  --exclude-dir=.venv --exclude-dir=.git --exclude-dir=plans .
+  clients services handlers repo models api tests scripts terraform .github main.py CLAUDE.md
 terraform -chdir=terraform fmt -check
 terraform -chdir=terraform validate
 .venv/bin/pytest tests/ -q
 ```
 
-Expected: the grep prints nothing (hits under `docs/superpowers/plans/` are
-historical records of the *previous* plan and must be left alone — hence the
-exclude); `fmt -check` and `validate` exit 0; tests pass.
+Expected: the grep prints nothing; `fmt -check` and `validate` exit 0; tests
+pass. The grep is scoped to code and config on purpose — `docs/` legitimately
+still names the retired vars, in both specs (which record the retirement) and
+in the previous plan's historical text. Leave every `docs/` hit alone.
 
 If `fmt -check` reports the `common_env` block, run `terraform -chdir=terraform fmt`
 and re-run the check.
@@ -583,10 +584,13 @@ Replace the bullet at lines 105–111 with:
   `curl -s "$BASE/projects" -H "Authorization: Bearer $TOKEN"` lists projects with
   their sections — pick the one the request belongs to. A task tied to 3550
   Carter Dr Unit 126 — the unit itself, its utilities, HOA, maintenance,
-  repairs, furnishing, appliances, or address changes — goes to **Carter
-  Board**; household matters not tied to the place keep their existing homes.
-  The only exception is a subtask, which takes `parent` instead (next bullet).
+  repairs, furnishing, appliances, or address changes — goes to
+  **Carter Board**; household matters not tied to the place keep their
+  existing homes. The only exception is a subtask, which takes `parent`
+  instead (next bullet).
 ```
+
+Keep `**Carter Board**` on a single line — Step 2's grep checks for it.
 
 - [ ] **Step 2: Verify the symlinked copy resolves**
 
