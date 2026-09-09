@@ -47,6 +47,22 @@ def test_project_calendars_sorts_by_order_and_drops_calendarless(monkeypatch):
     assert h._project_calendars() == [("fam", "cal-fam"), ("carter", "cal-shared")]
 
 
+def test_project_calendars_warns_on_dropped_entries(monkeypatch, caplog):
+    monkeypatch.setenv(
+        "ASANA_PROJECT_CALENDARS",
+        json.dumps(
+            {
+                "carter": {"calendar": "cal-shared", "order": 20},
+                "boardless": {"order": 5},
+                "fam": {"calendar": "cal-fam", "order": 10},
+            }
+        ),
+    )
+    with caplog.at_level("WARNING"):
+        h._project_calendars()
+    assert "boardless" in caplog.text
+
+
 def test_project_calendars_defaults_order_and_ties_break_by_gid(monkeypatch):
     monkeypatch.setenv(
         "ASANA_PROJECT_CALENDARS",
@@ -81,20 +97,6 @@ def test_project_calendars_unset_or_malformed_yields_no_rules(monkeypatch, raw):
     assert h._project_calendars() == []
 
 
-def test_routing_returns_routes_kwargs(env):
-    assert h._routing() == {
-        "project_calendars": [("fam", "cal-fam"), ("cheryl", "cal-shared")],
-        "shared_calendar_id": "cal-shared",
-    }
-
-
-def test_routing_without_shared_calendar_keeps_project_rules(env, monkeypatch):
-    monkeypatch.delenv("CALENDAR_SHARED_ID")
-    routing = h._routing()
-    assert routing["shared_calendar_id"] == ""
-    assert routing["project_calendars"] == [("fam", "cal-fam"), ("cheryl", "cal-shared")]
-
-
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("SCHEDULE_API_URL", "https://s")
@@ -112,11 +114,29 @@ def env(monkeypatch):
     monkeypatch.setattr(h, "_now", lambda: NOW)
 
 
+def test_routing_returns_routes_kwargs(env):
+    assert h._routing() == {
+        "project_calendars": [("fam", "cal-fam"), ("cheryl", "cal-shared")],
+        "shared_calendar_id": "cal-shared",
+    }
+
+
+def test_routing_without_shared_calendar_keeps_project_rules(env, monkeypatch):
+    monkeypatch.delenv("CALENDAR_SHARED_ID")
+    routing = h._routing()
+    assert routing["shared_calendar_id"] == ""
+    assert routing["project_calendars"] == [("fam", "cal-fam"), ("cheryl", "cal-shared")]
+
+
 def _asana(monkeypatch, tasks):
     monkeypatch.setattr(
         asana,
         "list_projects",
-        lambda: [{"gid": "p1", "name": "Work"}, {"gid": "fam", "name": "Family Board"}],
+        lambda: [
+            {"gid": "p1", "name": "Work"},
+            {"gid": "fam", "name": "Family Board"},
+            {"gid": "cheryl", "name": "Cheryl's Board"},
+        ],
     )
     monkeypatch.setattr(
         asana,
@@ -288,6 +308,39 @@ def test_rebuild_updates_deletes_and_recreates_on_404(env, monkeypatch):
     assert cal.deleted == ["gone"]
     assert store.rows[("2026-09-10", "primary")]["event_id"] == "new1"
     assert ("2026-09-11", "primary") not in store.rows
+
+
+def test_rebuild_moves_shared_board_task_from_primary_to_shared_calendar(env, monkeypatch):
+    """The branch's headline case: a task on a shared board (routed by project
+    membership, not the `cheryl` tag) reaches the shared calendar end-to-end,
+    and a previously-stored primary event for that day is a move, not a
+    duplicate — the old row is deleted and the new one created in the same
+    rebuild (spec → Rollout)."""
+    _asana(monkeypatch, [_task("1", "[P1] Cheryl board thing", "2026-09-10", project="cheryl")])
+    monkeypatch.setattr(
+        tb, "points_for", lambda gid, name, notes, cache, budget: (["pt"], "cached")
+    )
+    store = Store(
+        rows=[
+            {
+                "day": "2026-09-10",
+                "calendar_id": "primary",
+                "event_id": "old",
+                "content_hash": "stale",
+                "task_gids": ["1"],
+            }
+        ]
+    )
+    store.patch(monkeypatch)
+    cal = Cal()
+    cal.patch(monkeypatch)
+
+    out = h.run()
+    assert out["outcome"] == "ok"
+    assert out["created"] == 1 and out["deleted"] == 1
+    assert cal.deleted == ["old"]
+    assert [c["calendar"] for c in cal.created] == ["cal-shared"]
+    assert set(store.rows) == {("2026-09-10", "cal-shared")}
 
 
 def test_rebuild_updates_changed_event_in_place(env, monkeypatch):

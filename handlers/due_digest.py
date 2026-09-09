@@ -10,6 +10,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
+from typing import TypedDict
 
 import httpx
 
@@ -111,10 +112,23 @@ def _project_calendars() -> list[tuple[str, str]]:
             exc,
         )
         return []
-    return [(gid, calendar) for _, gid, calendar in sorted(entries) if calendar]
+    ordered = sorted(entries)
+    dropped = [gid for _, gid, calendar in ordered if not calendar]
+    if dropped:
+        logger.warning(
+            "Digest routing: %s entries have no calendar, dropped: %s",
+            _PROJECT_CALENDARS_ENV,
+            ", ".join(dropped),
+        )
+    return [(gid, calendar) for _, gid, calendar in ordered if calendar]
 
 
-def _routing() -> dict:
+class _Routing(TypedDict):
+    project_calendars: list[tuple[str, str]]
+    shared_calendar_id: str
+
+
+def _routing() -> _Routing:
     """The keyword arguments dd.route takes."""
     shared = os.environ.get(_SHARED_CALENDAR_ENV, "")
     if not shared:

@@ -624,28 +624,43 @@ Expected: PASS.
 
 - [ ] **Step 2: Open the PR with the `/pr-open` skill**
 
-Body must state that the merge is step 1 of a three-step breaking-config unit
-(spec → Rollout) and that steps 2–3 follow immediately after merge.
+Body must state that the `ASANA_PROJECT_CALENDARS` GitHub repo variable and
+the matching `terraform.tfvars` entry are set *before* this PR merges (spec →
+Rollout step 1), so the merge's own auto-deploy applies code and config
+together in one pass, with no window where Family Board routing is off.
 
 ---
 
 ## Rollout (operator — after merge, not part of the coding tasks)
 
-Spec → Rollout. Steps 1–3 are the breaking-config unit and revert together:
-between merge and apply, Family Board tasks route to primary, so do not leave a
-gap.
+Spec → Rollout. The window between merge and apply is avoidable: the digest
+ticks every 10 minutes, and `.github/workflows/deploy.yml` already runs
+`terraform apply` on every push to `main` with `TF_VAR_asana_project_calendars`
+from the GitHub repo variable. `main` does not yet declare
+`asana_project_calendars`, so setting that repo variable ahead of the merge is
+inert — Terraform ignores an undeclared `TF_VAR_`. Setting it first means the
+merge's own auto-deploy lands code and config in the same apply.
 
-- [ ] **1.** Merge the PR (step 1 of the unit).
-- [ ] **2.** In `terraform/terraform.tfvars`: delete `asana_project_family_gid`
-  and `calendar_family_id`, and add `asana_project_calendars` with all three
+- [ ] **1.** Set the `ASANA_PROJECT_CALENDARS` GitHub repo variable and add
+  `asana_project_calendars` to `terraform/terraform.tfvars`, with all three
   entries — Family `{"calendar": "<family calendar id>", "order": 10}`,
-  Cheryl's Board (`1217168472120921`) and Carter Board (`1218314374339159`)
+  Cheryl's Board (`<cheryl board gid>`) and Carter Board (`<carter board gid>`)
   each `{"calendar": "<shared calendar id>", "order": 20}` — escaped and on one
-  line, per the example file. Set the matching `ASANA_PROJECT_CALENDARS` GitHub
-  **repo variable** (unescaped JSON, since it is not HCL there) and delete the
-  `ASANA_PROJECT_FAMILY_GID` / `CALENDAR_FAMILY_ID` repo variables.
-- [ ] **3.** `/terraform-plan`, then `/terraform-apply` to push the CF env var.
-  The plan should show exactly the env-var swap on both functions.
+  line, per the example file. (The actual gids are personal: look them up in
+  the design spec, `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`,
+  or in each board's Asana project URL — never write them into a committed
+  file.) The GitHub repo variable takes unescaped JSON, since it is not HCL
+  there. Leave the old `ASANA_PROJECT_FAMILY_GID` / `CALENDAR_FAMILY_ID` repo
+  variables and `asana_project_family_gid` / `calendar_family_id` tfvars lines
+  in place for now — both variables are declared and read independently, so
+  having all four present briefly is harmless.
+- [ ] **2.** Merge the PR. The auto-deploy runs `terraform apply` with the new
+  code and the new variable already set, so there is no interval where Family
+  routing is off. A manual `/terraform-plan` + `/terraform-apply` is needed
+  only if the auto-deploy did not run.
+- [ ] **3.** Delete the retired `ASANA_PROJECT_FAMILY_GID` / `CALENDAR_FAMILY_ID`
+  GitHub repo variables and the retired `asana_project_family_gid` /
+  `calendar_family_id` lines from `terraform.tfvars`.
 - [ ] **4.** Wait for the next scheduler tick (≤10 min) and confirm the move:
   `plan()` diffs against `due_day_events` rows keyed by `(day, calendar_id)`, so
   the affected days become a delete on primary and a create on "Ben | Cheryl"
@@ -655,6 +670,15 @@ gap.
 - [ ] **5.** Run `scripts/fetch-env.sh` locally and confirm
   `.env` has a valid one-line `ASANA_PROJECT_CALENDARS='{...}'`, e.g.
   `(set -a; source .env; set +a; python -c "import json,os;print(json.loads(os.environ['ASANA_PROJECT_CALENDARS']))")`.
+
+**Standing note:** after merge, keep `terraform/terraform.tfvars` and the
+`ASANA_PROJECT_CALENDARS` GitHub repo variable in sync. A local
+`/terraform-apply` run with a stale tfvars resets the variable to its `"{}"`
+default and silently disables every project rule.
+
+Nothing here spans a window that needs to revert as a unit: reverting the
+merge alone fully reverts routing behavior, and the repo variable / tfvars
+entries from step 1 are harmless leftovers until code merges again.
 
 ## Known gaps carried forward (spec → Open items)
 

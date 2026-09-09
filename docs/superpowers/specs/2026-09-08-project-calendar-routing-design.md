@@ -270,25 +270,52 @@ than a silent default.
 
 ## Rollout
 
-1. Merge the code change. No behavior change while `ASANA_PROJECT_CALENDARS` is
-   unset — every task routes by tag or to primary, and Family's routing is off
-   until step 2, so steps 1 and 2 must not be separated by long.
-2. Set `asana_project_calendars` in `terraform.tfvars` and as the matching
-   GitHub repo variable, with all three entries, and delete
-   `asana_project_family_gid` / `calendar_family_id` from both. Carter Board's
-   entry is `{"calendar": "<shared>", "order": 20}`.
-3. `terraform apply` to push the CF env var.
+The window between merge and apply is avoidable, and worth avoiding: the
+digest ticks every 10 minutes, so if `ASANA_PROJECT_CALENDARS` is unset for
+longer than that, `route` falls through to primary for Family Board tasks,
+`plan()` sees the primary-calendar rows as no-longer-desired and the
+shared-calendar rows as new, and it tears down and rebuilds the Family
+calendar's day events — twice, once each way. `.github/workflows/deploy.yml`
+already applies Terraform on every push to `main` with
+`TF_VAR_asana_project_calendars` sourced from the GitHub repo variable, and
+`main` today does not declare `asana_project_calendars`, so Terraform ignores
+that `TF_VAR_` until the variable exists in code. Setting the repo variable
+before the merge is therefore inert, not premature — it just means the merge's
+own auto-deploy lands code and config together, in one apply, with no window
+at all.
+
+1. Set the `ASANA_PROJECT_CALENDARS` GitHub repo variable and add
+   `asana_project_calendars` to `terraform.tfvars`, with all three entries —
+   Carter Board's is `{"calendar": "<shared>", "order": 20}`. Leave the old
+   `ASANA_PROJECT_FAMILY_GID` / `CALENDAR_FAMILY_ID` repo variables and
+   `asana_project_family_gid` / `calendar_family_id` tfvars lines in place for
+   now; both variables are declared and read independently, so having all four
+   present briefly is harmless.
+2. Merge the PR. The auto-deploy runs `terraform apply` with the new code and
+   the new variable already set, so there is no interval where Family routing
+   is off. (This also ships the task-builder Carter Board rule, D4 — it merges
+   with the code, not as a separate operator step.) A manual `/terraform-apply`
+   is needed only if the auto-deploy did not run.
+3. Delete the retired `ASANA_PROJECT_FAMILY_GID` / `CALENDAR_FAMILY_ID` GitHub
+   repo variables and the retired `asana_project_family_gid` /
+   `calendar_family_id` lines from `terraform.tfvars`.
 4. The next scheduler tick (≤10 min) rebuilds. Tasks due on either shared board
-   move from the primary calendar to "Ben | Cheryl".
-5. Update `.claude/agents/task-builder.md` per D4.
+   move from the primary calendar to "Ben | Cheryl". This is a move, not a
+   duplication: `plan()` diffs desired events against `due_day_events` rows
+   keyed by `(day, calendar_id)`, so the primary-calendar rows for those days
+   become deletes and the shared-calendar rows become creates in the same
+   pass. Days that also hold unrouted tasks keep a primary event with those
+   tasks only.
+5. Run `scripts/fetch-env.sh` locally and confirm the `.env` round trip.
 
-Step 4 is a move, not a duplication: `plan()` diffs desired events against
-`due_day_events` rows keyed by `(day, calendar_id)`, so the primary-calendar rows
-for those days become deletes and the shared-calendar rows become creates in the
-same pass. Days that also hold unrouted tasks keep a primary event with those
-tasks only.
+**Standing note:** after merge, `terraform/terraform.tfvars` and the
+`ASANA_PROJECT_CALENDARS` GitHub repo variable must be kept in sync. A local
+`/terraform-apply` run with a stale tfvars resets the variable to its `"{}"`
+default and silently disables every project rule.
 
-Steps 1–3 are the breaking-config unit and revert together.
+Nothing here spans a window that needs to revert as a unit: reverting the
+merge alone fully reverts routing behavior, and the repo variable / tfvars
+entries from step 1 are harmless leftovers until code merges again.
 
 ## Open items
 
