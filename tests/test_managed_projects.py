@@ -13,17 +13,24 @@ def test_parses_the_map(monkeypatch):
     assert mp.done_section(None) is None
 
 
-def test_unset_map_is_empty(monkeypatch):
+def test_unset_map_is_empty(monkeypatch, caplog):
     monkeypatch.delenv(mp.ENV_VAR, raising=False)
     assert mp.managed() == {}
     assert mp.gids() == set()
+    assert any(mp.ENV_VAR in record.message and record.levelname == "WARNING" for record in caplog.records)
 
 
-def test_malformed_map_degrades_to_empty(monkeypatch):
+def test_malformed_map_degrades_to_empty(monkeypatch, caplog):
     monkeypatch.setenv(mp.ENV_VAR, "{not json")
+    caplog.clear()
     assert mp.managed() == {}
+    assert any(mp.ENV_VAR in record.message and record.levelname == "WARNING" for record in caplog.records)
+
     monkeypatch.setenv(mp.ENV_VAR, '["p1"]')
+    caplog.clear()
     assert mp.managed() == {}
+    assert any(mp.ENV_VAR in record.message and record.levelname == "WARNING" for record in caplog.records)
+
     monkeypatch.setenv(mp.ENV_VAR, '{"p1": "s1"}')
     assert mp.managed() == {"p1": {"done": None}}
 

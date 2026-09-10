@@ -31,6 +31,7 @@ def managed() -> dict[str, dict]:
     failing — same posture as the digest's project routing."""
     raw = os.environ.get(ENV_VAR, "").strip()
     if not raw:
+        logger.warning("%s unset — treating as empty", ENV_VAR)
         return {}
     try:
         parsed = json.loads(raw)
