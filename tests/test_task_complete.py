@@ -97,13 +97,16 @@ def test_repeat_tag_spawns_the_next_occurrence(monkeypatch):
     monkeypatch.setattr(
         recurrence,
         "spawn_next",
-        lambda t, d, s, rule: spawned.append((t["gid"], s, rule)) or "new-1",
+        lambda t, d, s, rule, project_gid=None: spawned.append(
+            (t["gid"], s, rule, project_gid)
+        )
+        or "new-1",
     )
 
     task_complete.handle("42")
 
     assert spawned == [
-        ("42", {"gid": "s-review", "name": "Review"}, ("t2", relativedelta(months=3)))
+        ("42", {"gid": "s-review", "name": "Review"}, ("t2", relativedelta(months=3)), None)
     ]
     assert moves == [("42", "sec-done")]  # the Done move still happens
 
