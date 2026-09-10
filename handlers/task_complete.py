@@ -36,7 +36,9 @@ def handle(task_gid: str) -> None:
         rule = recurrence.find_rule(task.get("tags") or [])
         if rule:
             detail = asana.get_task_detail(task_gid) or {}
-            recurrence.spawn_next(task, detail, asana.current_section(task), rule)
+            recurrence.spawn_next(
+                task, detail, asana.current_section(task, project_gid), rule, project_gid
+            )
     except Exception:
         logger.exception("Recurrence failed for gid=%s — completion continues", task_gid)
 

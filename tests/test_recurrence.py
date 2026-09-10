@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import pytest
 from dateutil.relativedelta import relativedelta
@@ -273,3 +274,53 @@ def test_spawn_next_copies_no_comments_or_subtasks(asana_stub):
     assert "num_subtasks" not in fields
     assert "due_at" not in fields
     assert "completed" not in fields
+
+
+def test_successor_lands_in_the_source_projects(monkeypatch):
+    monkeypatch.setattr(asana, "find_task_by_external", lambda e: None)
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "p-ben")
+    captured = {}
+
+    def fake_create(fields):
+        captured.update(fields)
+        return SimpleNamespace(gid="new", permalink_url="https://asana/new")
+
+    monkeypatch.setattr(asana, "create_task_from_fields", fake_create)
+    monkeypatch.setattr(asana, "remove_tag", lambda *a: None)
+    monkeypatch.setattr(asana, "create_story", lambda *a, **k: None)
+    monkeypatch.setattr(recurrence.task_index, "refresh", lambda gid: None)
+
+    task = {"gid": "old", "name": "Renew", "completed_at": "2026-09-08T12:00:00.000Z"}
+    detail = {
+        "name": "Renew",
+        "memberships": [{"project": {"gid": "p-family"}}, {"project": {"gid": "p-ben"}}],
+    }
+    recurrence.spawn_next(task, detail, None, ("tag1", relativedelta(months=3)), "p-family")
+    assert captured["projects"] == ["p-family", "p-ben"]
+    assert "parent" not in captured
+
+
+def test_subtask_successor_goes_under_the_same_parent(monkeypatch):
+    monkeypatch.setattr(asana, "find_task_by_external", lambda e: None)
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "p-ben")
+    captured = {}
+    sectioned = []
+
+    def fake_create(fields):
+        captured.update(fields)
+        return SimpleNamespace(gid="new", permalink_url="https://asana/new")
+
+    monkeypatch.setattr(asana, "create_task_from_fields", fake_create)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda *a: sectioned.append(a))
+    monkeypatch.setattr(asana, "remove_tag", lambda *a: None)
+    monkeypatch.setattr(asana, "create_story", lambda *a, **k: None)
+    monkeypatch.setattr(recurrence.task_index, "refresh", lambda gid: None)
+
+    task = {"gid": "old", "name": "Water plants", "completed_at": "2026-09-08T12:00:00.000Z"}
+    detail = {"name": "Water plants", "parent": {"gid": "parent-1"}, "memberships": []}
+    recurrence.spawn_next(
+        task, detail, {"gid": "s-any", "name": "Any"}, ("tag1", relativedelta(weeks=1)), None
+    )
+    assert captured["parent"] == "parent-1"
+    assert "projects" not in captured
+    assert sectioned == []
