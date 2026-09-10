@@ -43,3 +43,38 @@ def test_urgent_still_unsectioned_when_its_gid_is_unset(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
     monkeypatch.delenv("ASANA_SECTION_URGENT_GID", raising=False)
     assert sections.for_category("urgent", default=True) is None
+
+
+import json
+
+from services import managed_projects
+
+
+def test_done_uses_the_managed_project_section(monkeypatch):
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-default-done")
+    monkeypatch.setenv(
+        managed_projects.ENV_VAR,
+        json.dumps({"p-family": {"done": "sec-family-done"}}),
+    )
+    assert sections.done("p-family") == "sec-family-done"
+
+
+def test_done_falls_back_to_the_env_var_for_the_default_project(monkeypatch):
+    monkeypatch.setenv("ASANA_PROJECT_ID", "p-ben")
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-default-done")
+    monkeypatch.setenv(managed_projects.ENV_VAR, "{}")
+    assert sections.done("p-ben") == "sec-default-done"
+    assert sections.done() == "sec-default-done"
+
+
+def test_done_is_none_for_an_unmanaged_non_default_project(monkeypatch):
+    monkeypatch.setenv("ASANA_PROJECT_ID", "p-ben")
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-default-done")
+    monkeypatch.setenv(managed_projects.ENV_VAR, "{}")
+    assert sections.done("p-stranger") is None
+
+
+def test_done_is_none_for_a_managed_project_with_no_done_section(monkeypatch):
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-default-done")
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p-cheryl": {"done": None}}))
+    assert sections.done("p-cheryl") is None

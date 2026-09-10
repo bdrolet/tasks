@@ -195,7 +195,7 @@ def get_task(task_gid: str) -> dict:
         f"/tasks/{task_gid}",
         operation="get_task",
         params={
-            "opt_fields": "completed,completed_at,name,tags.gid,tags.name,"
+            "opt_fields": "completed,completed_at,name,parent.gid,tags.gid,tags.name,"
             "memberships.section.gid,memberships.section.name,memberships.project.gid"
         },
     )
@@ -203,10 +203,12 @@ def get_task(task_gid: str) -> dict:
     return resp.json()["data"]
 
 
-def current_section(task: dict) -> dict | None:
-    """Return this project's {'gid', 'name'} section membership, or None."""
+def current_section(task: dict, project_gid: str | None = None) -> dict | None:
+    """Return the task's {'gid', 'name'} section membership in the given
+    project — the default project when none is named — or None."""
+    target = project_gid or ASANA_PROJECT_ID
     for m in task.get("memberships", []):
-        if (m.get("project") or {}).get("gid") == ASANA_PROJECT_ID:
+        if (m.get("project") or {}).get("gid") == target:
             section = m.get("section") or {}
             if section.get("gid"):
                 return {"gid": section["gid"], "name": section.get("name", "")}

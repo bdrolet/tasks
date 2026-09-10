@@ -483,3 +483,16 @@ def test_list_project_tasks_accepts_opt_fields_override(monkeypatch):
     assert seen["params"]["opt_fields"] == asana.DIGEST_OPT_FIELDS
     assert "tags.name" in asana.DIGEST_OPT_FIELDS and "html_notes" in asana.DIGEST_OPT_FIELDS
     assert seen["params"]["completed_since"] == "now"
+
+
+def test_current_section_reads_the_named_project(monkeypatch):
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "p-ben")
+    task = {
+        "memberships": [
+            {"project": {"gid": "p-ben"}, "section": {"gid": "s-ben", "name": "Review"}},
+            {"project": {"gid": "p-family"}, "section": {"gid": "s-fam", "name": "Chores"}},
+        ]
+    }
+    assert asana.current_section(task) == {"gid": "s-ben", "name": "Review"}
+    assert asana.current_section(task, "p-family") == {"gid": "s-fam", "name": "Chores"}
+    assert asana.current_section(task, "p-stranger") is None

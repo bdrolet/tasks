@@ -5,7 +5,7 @@ import clients.otel as otel
 from clients.db import get_conn
 from repo import task_index as repo_index
 from repo import tasks as repo_tasks
-from services import recurrence, sections
+from services import managed_projects, recurrence, sections
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,8 @@ def handle(task_gid: str) -> None:
             logger.exception("task_index uncomplete update failed for gid=%s", task_gid)
         logger.info("Task %s not completed (uncomplete event) — index flag cleared", task_gid)
         return
+
+    project_gid = managed_projects.project_of(task)
 
     otel.tasks_completed.add(1)
 
@@ -45,12 +47,18 @@ def handle(task_gid: str) -> None:
     except Exception:
         logger.exception("completed_at update failed for gid=%s", task_gid)
 
-    done_gid = sections.done()
-    if not done_gid:
-        logger.warning("ASANA_SECTION_DONE_GID not set — task %s left in place", task_gid)
+    # A subtask has no project membership, so there is no Done section it
+    # could belong to — moving it would add it to a project it is not in.
+    if task.get("parent"):
+        logger.info("Task %s is a subtask — completed, no Done move", task_gid)
         return
 
-    current = asana.current_section(task)
+    done_gid = sections.done(project_gid)
+    if not done_gid:
+        logger.warning("No Done section for project %s — task %s left in place", project_gid, task_gid)
+        return
+
+    current = asana.current_section(task, project_gid)
     if current and current["gid"] == done_gid:
         logger.info("Task %s already in Done — no move needed", task_gid)
         return
