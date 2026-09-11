@@ -44,3 +44,35 @@ resource "google_cloud_scheduler_job" "digest" {
     }
   }
 }
+
+# ---------------------------------------------------------------------------
+# Webhook reconciliation — daily. Asana deletes a webhook after 24 hours of
+# failed delivery, so this is what makes a dropped registration self-healing
+# rather than a silent end to recurrence in that project.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "webhook_sync" {
+  name      = "tasks-webhook-sync"
+  schedule  = "30 5 * * *"
+  time_zone = "America/New_York"
+
+  # Registration blocks on Asana's synchronous handshake round-trip per
+  # project; five projects fit comfortably, a retry buys nothing before the
+  # next daily tick.
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 0
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloudfunctions2_function.tasks_webhook.service_config[0].uri}/webhook-sync"
+    body = base64encode(jsonencode({
+      target = google_cloudfunctions2_function.tasks_webhook.service_config[0].uri
+    }))
+    headers = {
+      "Content-Type"  = "application/json"
+      "Authorization" = "Bearer ${var.tasks_escalate_token}"
+    }
+  }
+}

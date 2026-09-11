@@ -1,5 +1,16 @@
 # Asana Webhook Setup & Re-registration Runbook
 
+**The reconciler is now the primary path.** `POST /webhook-sync` registers
+one webhook per project listed in `ASANA_MANAGED_PROJECTS`, storing each
+project's `X-Hook-Secret` in the `asana_webhooks` table rather than Secret
+Manager — Cloud Scheduler's `tasks-webhook-sync` job calls it daily, so a
+dropped registration (Asana deletes a webhook after 24 hours of failed
+delivery) heals itself without human action. The manual runbook below —
+`scripts/register_webhook.py` and the tfvars/Secret Manager secret it feeds —
+remains for the legacy single-project webhook (`ASANA_PROJECT_ID`, outside
+`ASANA_MANAGED_PROJECTS`) and for recovery if the reconciler itself can't
+reach Asana.
+
 One-time setup after the first terraform apply, and again any time the
 `tasks-webhook` CF URL changes or the webhook goes dead.
 

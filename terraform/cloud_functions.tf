@@ -19,6 +19,7 @@ locals {
     ASANA_PROJECT_CALENDARS   = var.asana_project_calendars
     CALENDAR_SHARED_ID        = var.calendar_shared_id
     CHERYL_EMAILS             = var.cheryl_emails
+    ASANA_MANAGED_PROJECTS    = var.asana_managed_projects
   }
 }
 

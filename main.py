@@ -4,7 +4,9 @@ Cloud Function entry points for the tasks service.
 process — Pub/Sub trigger on the inbox-owned email-events topic; handles
           email_classified (policy → enrich → create task) and label_applied.
 webhook — HTTP trigger (public); Asana webhook handshake + completion events,
-          and POST /escalate for the Cloud Scheduler overdue scan.
+          POST /escalate for the Cloud Scheduler overdue scan, POST /digest
+          for the due-day digest, and POST /webhook-sync for per-project
+          webhook reconciliation.
 
 LAYER RULE: this file is a transport adapter — decode the envelope, route,
 flush telemetry, count errors. All behavior lives in handlers/ and services/;
@@ -15,8 +17,9 @@ inbox's process/sweep). Required env vars:
   ASANA_API_KEY / ASANA_PROJECT_ID           — Asana REST auth + target project
   ANTHROPIC_API_KEY                          — enrichment (summary, deadline)
   ASANA_SECTION_{REVIEW,RESPOND,URGENT,DONE,OVERDUE}_GID — section mapping
-  ASANA_WEBHOOK_SECRET                       — HMAC key for X-Hook-Signature (webhook CF)
-  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate and POST /digest (webhook CF)
+  ASANA_WEBHOOK_SECRET                       — HMAC key for the legacy single-project webhook (webhook CF)
+  ASANA_MANAGED_PROJECTS                     — {project gid: {done: section gid}} — managed set + Done mapping
+  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate, /digest and /webhook-sync (webhook CF)
   WEBHOOK_URL / WEBHOOK_LABEL_TOKEN          — inbox webhook CF, for task action links
   CLOUD_SQL_CONNECTION_NAME / POSTGRES_*     — tasks database
   GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN — OTel export (optional)

@@ -56,3 +56,9 @@ calendar_shared_id      = "c_...@group.calendar.google.com"
 # makes the resulting task carry the `cheryl` tag (→ the "Ben | Cheryl"
 # digest calendar). Also set as the TF_VAR_CHERYL_EMAILS GitHub secret.
 cheryl_emails = "cheryl@example.com"
+
+# Projects this service manages: a webhook is registered for each, and its
+# completions (Done move, recurrence) are handled. "done" is that project's
+# Done section gid, or null for no Done move. Real gids live in
+# terraform.tfvars, never here.
+asana_managed_projects = "{\"1200000000000001\":{\"done\":\"1200000000000002\"},\"1200000000000003\":{\"done\":null}}"

@@ -56,4 +56,5 @@ jobs:
           TF_VAR_tasks_api_token: ${{ secrets.TF_VAR_TASKS_API_TOKEN }}
           TF_VAR_cheryl_emails: ${{ secrets.TF_VAR_CHERYL_EMAILS }}
           TF_VAR_deployer_sa: ${{ secrets.GCP_DEPLOYER_SA }}
+          TF_VAR_asana_managed_projects: ${{ vars.ASANA_MANAGED_PROJECTS }}
         run: terraform apply -auto-approve

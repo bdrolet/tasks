@@ -19,7 +19,8 @@ stays in inbox; task-serving work lives here.
 | **API** | `tasks-api` — Cloud Run FastAPI service (`api/`), search/fetch/add/update for tasks + comments; list/create projects, list tags, subtasks; bearer auth via `tasks-api-token`; image in AR repo `tasks`, deployed by `deploy-api.yml`; `tasks-api.drolet.cloud` |
 | **Escalation** | Cloud Scheduler `tasks-escalation`, `0 6 * * *` America/New_York → `POST <webhook-url>/escalate` |
 | **Digest** | Cloud Scheduler `tasks-digest`, `*/10 * * * *` → `POST <webhook-url>/digest` (same bearer as escalate) — rebuilds the due-day calendar digest when the Asana webhook has set `digest_state.dirty_at` or the last rebuild is > 60 min old; writes through `clients/schedule_api.py` (`SCHEDULE_API_URL`/`SCHEDULE_API_TOKEN`, secret owned by schedule terraform) |
-| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`; schema in `repo/schema.sql` |
+| **Webhook sync** | Cloud Scheduler `tasks-webhook-sync`, `30 5 * * *` America/New_York → `POST <webhook-url>/webhook-sync` (same bearer as escalate) — reconciles per-project Asana webhook registrations against `ASANA_MANAGED_PROJECTS`, self-healing a registration Asana dropped after 24h of failed delivery |
+| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets); schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
 | **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
 
@@ -127,10 +128,13 @@ aliases accepted; bare `m` rejected as ambiguous). Set or clear it with the
 ordinary `tags`/`add_tags`/`remove_tags` fields, or by hand in Asana.
 
 The successor copies name, description, section, tags and assignee — not
-comments, subtasks, attachments or time-of-day — and lands in the service's
-configured project; that's also the only project recurrence works in at all,
-since the Asana webhook is registered on it — a `repeat:` tag on a task in
-another project, or on a subtask, never fires. It carries
+comments, subtasks, attachments or time-of-day — and lands wherever its
+predecessor lived: the same projects for a top-level task, the same parent
+(unsectioned) for a subtask. `repeat:` fires in any project listed in
+`ASANA_MANAGED_PROJECTS`, each of which has its own Asana webhook registered
+and reconciled daily by `POST /webhook-sync` (Cloud Scheduler
+`tasks-webhook-sync`), with its own `X-Hook-Secret` in the `asana_webhooks`
+table. A project outside that map still never fires. It carries
 `external.gid = recur:{completed_gid}`, which
 is the idempotency guard against webhook redelivery and uncomplete/recomplete.
 Completing strips the `repeat:` tag from the finished occurrence, so exactly
@@ -196,7 +200,14 @@ token is the bearer credential Cloud Scheduler sends on `POST /escalate` and
 must stay publicly invokable for Asana's unauthenticated webhook posts); the API token
 is the bearer credential for the tasks-api Cloud Run service — skills read it
 from `terraform.tfvars`. `ASANA_PROJECT_ID` and section GIDs are plain env
-vars, not secrets.
+vars, not secrets. Per-project webhook secrets (one `X-Hook-Secret` per
+`ASANA_MANAGED_PROJECTS` entry, minted by Asana at registration and never
+suppliable by the caller) live in the `asana_webhooks` table, deliberately
+**not** Secret Manager: the webhook CF is public and unauthenticated by
+necessity, and granting that identity `secretmanager.versions.add` is a worse
+trade than another table in a database it already writes to; it also keeps
+every secret's ownership either fully in Terraform (this table) or fully out
+of it, rather than split (design D3).
 
 ## Asana webhook
 
