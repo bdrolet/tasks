@@ -77,7 +77,7 @@ def webhook(request):
         # Asana handshake — any request carrying X-Hook-Secret
         hook_secret = request.headers.get("X-Hook-Secret")
         if hook_secret:
-            return asana_webhook.handshake(hook_secret)
+            return asana_webhook.handshake(hook_secret, request.args.get("project"))
 
         if request.path == "/escalate" and request.method == "POST":
             if not escalation.is_authorized(request.headers.get("Authorization")):
@@ -99,7 +99,9 @@ def webhook(request):
             return "", 405
 
         return asana_webhook.receive(
-            request.get_data(), request.headers.get("X-Hook-Signature", "")
+            request.get_data(),
+            request.headers.get("X-Hook-Signature", ""),
+            request.args.get("project"),
         )
     except Exception:
         otel.errors.add(1, {"handler": "webhook"})

@@ -40,6 +40,7 @@ digest_rebuilds: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noo
 digest_events: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 digest_bullet_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 digest_errors: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+webhook_auth_failures: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -53,6 +54,7 @@ def setup_telemetry(service_name: str) -> None:
     global tasks_suppressed, triage_duration, triage_tool_calls
     global tasks_screened, tasks_related, recurrences
     global digest_rebuilds, digest_events, digest_bullet_calls, digest_errors
+    global webhook_auth_failures
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -136,6 +138,11 @@ def setup_telemetry(service_name: str) -> None:
     )
     digest_errors = meter.create_counter(
         "asana.digest.errors", description="Digest failures by stage (list|bullets|calendar)"
+    )
+    webhook_auth_failures = meter.create_counter(
+        "asana.webhook.auth_failures",
+        description="Rejected webhook deliveries by reason "
+        "(unknown_project|no_secret|bad_signature)",
     )
 
     # --- Logs ---
