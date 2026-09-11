@@ -41,6 +41,9 @@ digest_events: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop"
 digest_bullet_calls: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 digest_errors: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 webhook_auth_failures: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+webhooks_registered: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+webhooks_deleted: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+webhooks_active: metrics._Gauge = metrics.NoOpMeter("noop").create_gauge("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -55,6 +58,7 @@ def setup_telemetry(service_name: str) -> None:
     global tasks_screened, tasks_related, recurrences
     global digest_rebuilds, digest_events, digest_bullet_calls, digest_errors
     global webhook_auth_failures
+    global webhooks_registered, webhooks_deleted, webhooks_active
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -143,6 +147,17 @@ def setup_telemetry(service_name: str) -> None:
         "asana.webhook.auth_failures",
         description="Rejected webhook deliveries by reason "
         "(unknown_project|no_secret|bad_signature)",
+    )
+    webhooks_registered = meter.create_counter(
+        "asana.webhooks.registered", description="Project webhooks registered by the reconciler"
+    )
+    webhooks_deleted = meter.create_counter(
+        "asana.webhooks.deleted", description="Project webhooks deleted by the reconciler"
+    )
+    webhooks_active = meter.create_gauge(
+        "asana.webhooks.active",
+        description="Managed projects with a live webhook — below the managed count means "
+        "deliveries are being dropped",
     )
 
     # --- Logs ---

@@ -41,7 +41,7 @@ import functions_framework
 from cloudevents.http import CloudEvent
 
 import clients.otel as otel
-from handlers import asana_webhook, due_digest, label_applied, task_create
+from handlers import asana_webhook, due_digest, label_applied, task_create, webhook_sync
 from services import escalation
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,27 @@ def webhook(request):
             if not isinstance(body, dict):
                 body = {}
             return due_digest.run(force=bool(body.get("force"))), 200
+
+        if request.path == "/webhook-sync" and request.method == "POST":
+            if not escalation.is_authorized(request.headers.get("Authorization")):
+                return "", 401
+            try:
+                body = json.loads(request.get_data() or b"{}")
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            # The scheduler passes the function's own URI; putting it in this
+            # function's own env would be a Terraform cycle. It is required
+            # rather than derived: `request.url_root` drops the function-name
+            # path segment, so a derived base would disagree with the targets
+            # the reconciler registers and it would stop recognizing its own
+            # webhooks.
+            target = str(body.get("target") or "").strip()
+            if not target:
+                logger.warning("POST /webhook-sync called without a target URL")
+                return "", 400
+            return webhook_sync.run(target), 200
 
         if request.method != "POST":
             return "", 405
