@@ -59,6 +59,7 @@ cheryl_emails = "cheryl@example.com"
 
 # Projects this service manages: a webhook is registered for each, and its
 # completions (Done move, recurrence) are handled. "done" is that project's
-# Done section gid, or null for no Done move. Real gids live in
-# terraform.tfvars, never here.
+# Done section gid, or null for no Done move. Key order decides which project
+# a task belonging to several managed ones resolves to — asana_project_id
+# first, then declaration order. Real gids live in terraform.tfvars, never here.
 asana_managed_projects = "{\"1200000000000001\":{\"done\":\"1200000000000002\"},\"1200000000000003\":{\"done\":null}}"

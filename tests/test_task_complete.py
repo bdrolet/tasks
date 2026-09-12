@@ -222,3 +222,38 @@ def test_completed_subtask_is_never_moved(monkeypatch):
 
     task_complete.handle("42")
     assert moves == []
+
+
+def test_a_multi_homed_task_under_an_empty_map_still_moves_to_the_default_done(monkeypatch):
+    """The empty-map revert property, end to end. Before this feature the Done
+    move was unconditional; a task in the default project AND another one must
+    still reach ASANA_SECTION_DONE_GID whatever order Asana lists its
+    memberships in, and current_section must be read against the default
+    project so the successor inherits the right section."""
+    monkeypatch.setenv("ASANA_PROJECT_ID", "p-ben")
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
+    monkeypatch.setenv(managed_projects.ENV_VAR, "{}")
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(
+        asana,
+        "get_task",
+        # Asana listing the other project first is the case that used to break.
+        lambda gid: {
+            "gid": gid,
+            "completed": True,
+            "memberships": [{"project": {"gid": "p-family"}}, {"project": {"gid": "p-ben"}}],
+        },
+    )
+    sectioned_against = []
+
+    def current_section(task, project_gid=None):
+        sectioned_against.append(project_gid)
+        return {"gid": "s-review", "name": "Review"}
+
+    monkeypatch.setattr(asana, "current_section", current_section)
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+
+    task_complete.handle("42")
+    assert moves == [("42", "sec-done")]
+    assert sectioned_against == ["p-ben"]

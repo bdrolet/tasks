@@ -8,6 +8,10 @@ Membership *is* the definition of "managed": a webhook is registered for the
 project, its completions are handled, and its Done move happens when `done`
 is non-null. One place to add a project.
 
+Key order is significant — see project_of(). The variable is a raw JSON
+string passed through Terraform verbatim, never jsonencode()d from an HCL
+map, so the order written in terraform.tfvars is the order seen here.
+
 Project and section gids are personal — terraform.tfvars and the GitHub repo
 variable only, never committed here.
 
@@ -59,14 +63,37 @@ def done_section(project_gid: str | None) -> str | None:
 
 
 def project_of(task: dict) -> str | None:
-    """The project a task lives in: its first managed membership, else its
-    first membership at all, else None. A subtask has no memberships, so it
-    yields None — callers treat that as "no project to act in"."""
+    """The project a task lives in, resolved deterministically. A subtask has
+    no memberships, so it yields None — callers treat that as "no project to
+    act in".
+
+    Order matters because a task can be in several projects at once, and
+    Asana returns memberships in no guaranteed order:
+
+    1. ASANA_PROJECT_ID, whenever the task is in it. With an empty map this
+       makes the feature a true no-op — a multi-homed task still resolves to
+       the default project, so sections.done() still returns
+       ASANA_SECTION_DONE_GID and current_section() still reads the section
+       the successor should inherit, exactly as before this feature.
+    2. The first managed project in the map's own declaration order — JSON
+       key order, which managed() preserves. The map is the place where the
+       precedence between two managed projects is declared, the same job
+       ASANA_PROJECT_CALENDARS gives its `order` field; resolving by the
+       task's membership order instead would hand that decision to Asana and
+       make the Done section non-deterministic for a multi-homed task.
+    3. Otherwise the first membership, arbitrary but harmless: a task in no
+       managed project and not in the default one has no Done section
+       configured either way."""
     project_gids = [
         gid for m in task.get("memberships") or [] if (gid := (m.get("project") or {}).get("gid"))
     ]
-    known = managed()
-    for gid in project_gids:
-        if gid in known:
+    if not project_gids:
+        return None
+    default = os.environ.get("ASANA_PROJECT_ID")
+    if default and default in project_gids:
+        return default
+    present = set(project_gids)
+    for gid in managed():
+        if gid in present:
             return gid
-    return project_gids[0] if project_gids else None
+    return project_gids[0]
