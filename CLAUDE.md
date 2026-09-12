@@ -117,6 +117,17 @@ enrichment yields no title; the manual/API path builds titles in
 vars → CF env). `services/sections.py` maps category/label → GID. Optional
 `ASANA_OVERDUE_TAG_GID` also tags escalated tasks.
 
+Review/Respond/Urgent are default-project concepts — the pipeline only ever
+creates there — but **Done is project-aware**: `sections.done(project_gid)`
+returns the `done` entry from `ASANA_MANAGED_PROJECTS` for a managed project
+(which may be `null`, meaning "no Done section, leave the task in place"),
+`ASANA_SECTION_DONE_GID` for the default project or when no project is known,
+and `None` — skip the move and log — for an unmanaged non-default project. The
+project comes from `services/managed_projects.py::project_of`, which resolves
+a task in several projects at once by preferring `ASANA_PROJECT_ID`, then the
+managed map's declaration order; a subtask has no memberships and gets no Done
+move at all.
+
 ## Recurring tasks
 
 A task tagged `repeat:3mo` creates its next occurrence when it is completed,
@@ -179,10 +190,17 @@ routing: `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`.
 
 DB usage in handlers is **best-effort**: Asana is the source of truth; a DB
 outage degrades lookups to the `external:{message_id}` fallback and must never
-crash an event. The due-day digest is the documented exception —
+crash an event. Three handlers depart from that deliberately, each because
+failing is cheaper than acting on a state it cannot read:
 `handlers/due_digest.py` skips a rebuild outright when the DB is unavailable,
 since without `due_day_events` it cannot address its own calendar events and
-would risk duplicating them (spec D7).
+would risk duplicating them (due-day digest spec D7);
+`handlers/asana_webhook.py::_secret_for` returns 401 on a cold secret cache
+plus a DB outage rather than validating a delivery it cannot authenticate —
+safe only because Asana redelivers for 24 hours (cross-project recurrence spec
+D6); and `handlers/webhook_sync.py` lets a DB failure raise, because a
+reconciler that cannot read its own secret rows would compute a diff that
+deletes and re-registers every webhook (see its module docstring).
 
 ## Secrets
 
