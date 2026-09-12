@@ -10,8 +10,8 @@ import logging
 import os
 import time
 
-from clients.db import get_conn
 import clients.otel as otel
+from clients.db import get_conn
 from handlers import task_complete
 from repo import asana_webhooks as repo_webhooks
 from repo import due_digest as repo_due_digest

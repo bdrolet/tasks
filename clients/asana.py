@@ -40,7 +40,9 @@ DIGEST_OPT_FIELDS = (
 _workspace_gid: str | None = None
 
 
-def _request(method: str, path: str, *, operation: str, timeout: float = 10, **kwargs) -> httpx.Response:
+def _request(
+    method: str, path: str, *, operation: str, timeout: float = 10, **kwargs
+) -> httpx.Response:
     """Single choke point for Asana calls — records asana.api.duration per operation."""
     t0 = time.monotonic()
     try:

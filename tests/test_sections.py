@@ -1,4 +1,6 @@
-from services import sections
+import json
+
+from services import managed_projects, sections
 
 
 def test_for_category(monkeypatch):
@@ -43,11 +45,6 @@ def test_urgent_still_unsectioned_when_its_gid_is_unset(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
     monkeypatch.delenv("ASANA_SECTION_URGENT_GID", raising=False)
     assert sections.for_category("urgent", default=True) is None
-
-
-import json
-
-from services import managed_projects
 
 
 def test_done_uses_the_managed_project_section(monkeypatch):

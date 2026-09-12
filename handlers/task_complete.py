@@ -57,7 +57,9 @@ def handle(task_gid: str) -> None:
 
     done_gid = sections.done(project_gid)
     if not done_gid:
-        logger.warning("No Done section for project %s — task %s left in place", project_gid, task_gid)
+        logger.warning(
+            "No Done section for project %s — task %s left in place", project_gid, task_gid
+        )
         return
 
     current = asana.current_section(task, project_gid)

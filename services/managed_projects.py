@@ -63,9 +63,7 @@ def project_of(task: dict) -> str | None:
     first membership at all, else None. A subtask has no memberships, so it
     yields None — callers treat that as "no project to act in"."""
     project_gids = [
-        gid
-        for m in task.get("memberships") or []
-        if (gid := (m.get("project") or {}).get("gid"))
+        gid for m in task.get("memberships") or [] if (gid := (m.get("project") or {}).get("gid"))
     ]
     known = managed()
     for gid in project_gids:

@@ -223,9 +223,7 @@ def _signed_with(secret, events):
 
 def test_per_project_secret_validates(monkeypatch):
     _capture(monkeypatch)
-    monkeypatch.setattr(
-        asana_webhook, "get_conn", lambda: FakeConn(row={"secret": PROJECT_SECRET})
-    )
+    monkeypatch.setattr(asana_webhook, "get_conn", lambda: FakeConn(row={"secret": PROJECT_SECRET}))
     body, sig = _signed_with(
         PROJECT_SECRET, [{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}]
     )
@@ -234,9 +232,7 @@ def test_per_project_secret_validates(monkeypatch):
 
 def test_another_projects_secret_is_rejected(monkeypatch):
     _capture(monkeypatch)
-    monkeypatch.setattr(
-        asana_webhook, "get_conn", lambda: FakeConn(row={"secret": PROJECT_SECRET})
-    )
+    monkeypatch.setattr(asana_webhook, "get_conn", lambda: FakeConn(row={"secret": PROJECT_SECRET}))
     body, sig = _signed_with(
         "wrong-secret", [{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}]
     )
