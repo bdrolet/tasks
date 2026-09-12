@@ -269,3 +269,112 @@ def test_a_populated_map_still_deletes_an_unmanaged_projects_webhook(monkeypatch
     result = webhook_sync.run(BASE)
     assert deleted == ["w9"]
     assert "refused_deletes" not in result
+
+
+def test_an_inactive_webhook_is_replaced_and_does_not_count_as_live(monkeypatch):
+    """asana.webhooks.active must measure delivery health, not "the target
+    string parses" — an inactive webhook is delivering nothing."""
+    _managed(monkeypatch, "p1")
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [
+            {
+                "gid": "w1",
+                "target": f"{BASE}?project=p1",
+                "active": False,
+                "resource": {"gid": "p1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
+
+    calls = []
+    monkeypatch.setattr(asana, "delete_webhook", lambda gid: calls.append(("delete", gid)))
+    monkeypatch.setattr(
+        asana,
+        "create_webhook",
+        lambda resource, target: calls.append(("create", resource, target)) or {"gid": "w2"},
+    )
+
+    gauges = []
+    monkeypatch.setattr(webhook_sync.otel.webhooks_active, "set", gauges.append)
+
+    result = webhook_sync.run(BASE)
+    assert calls == [("delete", "w1"), ("create", "p1", _target("p1"))]
+    assert result == {"managed": 1, "registered": 1, "deleted": 1, "active": 1}
+    assert gauges == [1]  # healthy again only because it was replaced
+
+
+def test_an_inactive_webhook_that_cannot_be_replaced_is_not_counted_live(monkeypatch):
+    """The gauge has to fall when the repair itself fails — that is the alert."""
+    _managed(monkeypatch, "p1")
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [{"gid": "w1", "target": f"{BASE}?project=p1", "active": False}],
+    )
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
+    monkeypatch.setattr(asana, "delete_webhook", lambda gid: None)
+
+    def flaky(resource, target):
+        raise RuntimeError("asana 500")
+
+    monkeypatch.setattr(asana, "create_webhook", flaky)
+
+    result = webhook_sync.run(BASE)
+    assert result == {"managed": 1, "registered": 0, "deleted": 1, "active": 0}
+
+
+def test_an_active_webhook_is_left_alone(monkeypatch):
+    """active: true, and the missing-field case, are both healthy."""
+    _managed(monkeypatch, "p1")
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [
+            {"gid": "w1", "target": f"{BASE}?project=p1", "active": True, "resource": {"gid": "p1"}}
+        ],
+    )
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
+    monkeypatch.setattr(
+        asana, "delete_webhook", lambda *a: (_ for _ in ()).throw(AssertionError("no delete"))
+    )
+    monkeypatch.setattr(
+        asana, "create_webhook", lambda *a: (_ for _ in ()).throw(AssertionError("no create"))
+    )
+
+    assert webhook_sync.run(BASE)["active"] == 1
+
+
+def test_a_resource_target_mismatch_is_skipped_with_a_log(monkeypatch, caplog):
+    """A webhook whose target names one project while Asana has it registered
+    on another resource is an inconsistency we must not act on."""
+    _managed(monkeypatch, "p1")
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [
+            {"gid": "w1", "target": f"{BASE}?project=p1", "resource": {"gid": "p-somewhere-else"}}
+        ],
+    )
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
+    monkeypatch.setattr(
+        asana, "delete_webhook", lambda *a: (_ for _ in ()).throw(AssertionError("no delete"))
+    )
+    created = []
+    monkeypatch.setattr(
+        asana,
+        "create_webhook",
+        lambda resource, target: created.append((resource, target)) or {"gid": "w2"},
+    )
+
+    result = webhook_sync.run(BASE)
+    # The mismatched webhook is invisible to the diff, so p1 simply looks
+    # unregistered and gets a fresh, correct one. The stray is never deleted.
+    assert created == [("p1", _target("p1"))]
+    assert result == {"managed": 1, "registered": 1, "deleted": 0, "active": 1}
+    assert any(
+        record.levelname == "ERROR" and "registered on resource" in record.getMessage()
+        for record in caplog.records
+    )

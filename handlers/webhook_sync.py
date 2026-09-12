@@ -32,16 +32,42 @@ def run(target_url: str) -> dict:
     managed = managed_projects.gids()
 
     registered: dict[str, str] = {}
+    inactive: set[str] = set()
     for hook in asana.list_webhooks():
         project_gid = webhook_registry.target_project(hook.get("target") or "", target_url)
-        if project_gid:
-            registered[project_gid] = hook["gid"]
+        if not project_gid:
+            continue
+        # A target claiming one project while the webhook is registered on
+        # another resource is a real inconsistency, and acting on it would
+        # mean deleting or counting the wrong thing. Skip and say so.
+        resource_gid = (hook.get("resource") or {}).get("gid")
+        if resource_gid and resource_gid != project_gid:
+            logger.error(
+                "Webhook sync: webhook %s targets project %s but is registered on resource %s "
+                "— skipping, resolve by hand",
+                hook["gid"],
+                project_gid,
+                resource_gid,
+            )
+            continue
+        registered[project_gid] = hook["gid"]
+        # Asana sets active: false on a webhook whose deliveries keep failing.
+        # It still exists and its target still parses, so counting it live
+        # would let asana.webhooks.active read healthy while nothing is being
+        # delivered — and that gauge is the alert that matters.
+        if hook.get("active") is False:
+            inactive.add(project_gid)
+            logger.warning(
+                "Webhook sync: webhook %s for project %s is inactive — replacing",
+                hook["gid"],
+                project_gid,
+            )
 
     with get_conn() as conn:
         with_secrets = {row["project_gid"] for row in repo_webhooks.list_all(conn)}
 
-    plan = webhook_registry.plan(managed, registered, with_secrets)
-    live = {gid for gid in registered if gid in managed}
+    plan = webhook_registry.plan(managed, registered, with_secrets, inactive)
+    live = {gid for gid in registered if gid in managed and gid not in inactive}
 
     # Safety valve. managed_projects.managed() degrades an unset, blank or
     # malformed map to {} — right for sections.done(), wrong for a destructive

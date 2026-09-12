@@ -35,19 +35,30 @@ def main() -> None:
     print(f"Managed projects ({len(managed)}): {', '.join(sorted(managed)) or '(none)'}")
 
     registered = {}
+    inactive = set()
     for hook in list_webhooks():
         project_gid = webhook_registry.target_project(hook.get("target") or "", args.target)
-        if project_gid:
-            registered[project_gid] = hook["gid"]
-        else:
+        if not project_gid:
             print(f"  ignoring webhook {hook['gid']} — target {hook.get('target')!r}")
+            continue
+        resource_gid = (hook.get("resource") or {}).get("gid")
+        if resource_gid and resource_gid != project_gid:
+            print(
+                f"  SKIPPING webhook {hook['gid']} — target says project {project_gid}, "
+                f"resource says {resource_gid}"
+            )
+            continue
+        registered[project_gid] = hook["gid"]
+        if hook.get("active") is False:
+            inactive.add(project_gid)
+            print(f"  webhook {hook['gid']} for project {project_gid} is INACTIVE")
     print(f"Registered for us ({len(registered)}): {registered or '(none)'}")
 
     with get_conn() as conn:
         with_secrets = {row["project_gid"] for row in list_all(conn)}
     print(f"Secret rows ({len(with_secrets)}): {', '.join(sorted(with_secrets)) or '(none)'}")
 
-    plan = webhook_registry.plan(managed, registered, with_secrets)
+    plan = webhook_registry.plan(managed, registered, with_secrets, inactive)
     if not managed and plan.to_delete:
         print(
             f"\nWould REFUSE to delete {len(plan.to_delete)} webhook(s): "

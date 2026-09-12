@@ -121,3 +121,29 @@ def test_a_webhook_with_no_secret_row_is_replaced():
     p = reg.plan({"p1"}, {"p1": "w1"}, set())
     assert p.to_delete == [("p1", "w1")]
     assert p.to_register == ["p1"]
+
+
+def test_an_inactive_webhook_is_replaced():
+    """Asana marks a webhook active: false once deliveries keep failing. It
+    still exists and its target still parses, but it delivers nothing."""
+    p = reg.plan({"p1"}, {"p1": "w1"}, {"p1"}, inactive={"p1"})
+    assert p.to_delete == [("p1", "w1")]
+    assert p.to_register == ["p1"]
+
+
+def test_an_inactive_webhook_is_replaced_exactly_once():
+    """Inactive AND missing its secret row is still one delete, one register."""
+    p = reg.plan({"p1"}, {"p1": "w1"}, set(), inactive={"p1"})
+    assert p.to_delete == [("p1", "w1")]
+    assert p.to_register == ["p1"]
+
+
+def test_an_inactive_webhook_for_an_unmanaged_project_is_simply_deleted():
+    p = reg.plan({"p1"}, {"p1": "w1", "p9": "w9"}, {"p1", "p9"}, inactive={"p9"})
+    assert p.to_delete == [("p9", "w9")]
+    assert p.to_register == []
+
+
+def test_inactive_defaults_to_empty():
+    """The parameter is additive: existing three-argument callers are steady."""
+    assert reg.plan({"p1"}, {"p1": "w1"}, {"p1"}) == reg.Plan([], [])

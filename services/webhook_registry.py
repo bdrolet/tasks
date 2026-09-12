@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import logging
 import os
+from collections.abc import Collection
 from typing import NamedTuple
 from urllib.parse import parse_qs, urlparse
 
@@ -97,16 +98,24 @@ def target_for(base_url: str, project_gid: str) -> str:
     return f"{base_url}?project={project_gid}&{TOKEN_PARAM}={project_token(project_gid)}"
 
 
-def plan(managed: set[str], registered: dict[str, str], with_secrets: set[str]) -> Plan:
-    """What to change so every managed project has exactly one live webhook
-    whose secret we hold.
+def plan(
+    managed: set[str],
+    registered: dict[str, str],
+    with_secrets: set[str],
+    inactive: Collection[str] = (),
+) -> Plan:
+    """What to change so every managed project has exactly one live, healthy
+    webhook whose secret we hold.
 
     `registered` is {project gid: webhook gid} for our own project-scoped
-    webhooks; `with_secrets` is the set of projects with an asana_webhooks row.
+    webhooks; `with_secrets` is the set of projects with an asana_webhooks row;
+    `inactive` is the set of projects whose webhook Asana has marked
+    `active: false` — it still exists and still parses, but it is delivering
+    nothing.
 
-    Deletes must be applied before registrations: a project whose webhook has
-    no secret row appears in both lists, and the replacement only works in
-    that order."""
+    Deletes must be applied before registrations: a project whose webhook is
+    unusable appears in both lists, and the replacement only works in that
+    order."""
     to_register: list[str] = []
     to_delete: list[tuple[str, str]] = []
 
@@ -114,9 +123,11 @@ def plan(managed: set[str], registered: dict[str, str], with_secrets: set[str]) 
         webhook_gid = registered.get(gid)
         if webhook_gid is None:
             to_register.append(gid)
-        elif gid not in with_secrets:
-            # Half-finished registration: the webhook exists but we cannot
-            # validate anything it delivers. Replace it rather than leave a
+        elif gid not in with_secrets or gid in inactive:
+            # Unusable, two ways. No secret row: a half-finished registration
+            # whose deliveries we could never validate. active: false: Asana
+            # disabled it after repeated delivery failures and will drop it
+            # entirely at 24 hours. Either way, replace rather than leave the
             # project silently dead — the failure this whole spec is about.
             to_delete.append((gid, webhook_gid))
             to_register.append(gid)
