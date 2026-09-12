@@ -175,3 +175,97 @@ def test_a_failed_registration_does_not_stop_the_others(monkeypatch):
     result = webhook_sync.run(BASE)
     assert result["registered"] == 1
     assert result["active"] == 1
+
+
+def test_an_empty_managed_map_deletes_nothing_and_reports_the_refusal(monkeypatch, caplog):
+    """An unset or blank ASANA_MANAGED_PROJECTS degrades to {}, which would
+    otherwise put every project webhook into to_delete and end recurrence
+    everywhere — reachable by a missing GitHub repo variable, not only by
+    intent."""
+    monkeypatch.delenv(managed_projects.ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [
+            {"gid": "w1", "target": f"{BASE}?project=p1"},
+            {"gid": "w2", "target": f"{BASE}?project=p2"},
+        ],
+    )
+    monkeypatch.setattr(
+        webhook_sync,
+        "get_conn",
+        lambda: RowsConn(rows=[{"project_gid": "p1"}, {"project_gid": "p2"}]),
+    )
+    monkeypatch.setattr(
+        asana, "delete_webhook", lambda *a: (_ for _ in ()).throw(AssertionError("no delete"))
+    )
+    monkeypatch.setattr(
+        asana, "create_webhook", lambda *a: (_ for _ in ()).throw(AssertionError("no create"))
+    )
+
+    result = webhook_sync.run(BASE)
+    assert result == {
+        "managed": 0,
+        "registered": 0,
+        "deleted": 0,
+        "active": 0,
+        "refused_deletes": 2,
+    }
+    assert any(
+        record.levelname == "ERROR" and "refusing to delete" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_a_blank_managed_map_also_refuses(monkeypatch):
+    """TF_VAR_asana_managed_projects renders an undefined repo variable as ""."""
+    monkeypatch.setenv(managed_projects.ENV_VAR, "")
+    monkeypatch.setattr(
+        asana, "list_webhooks", lambda: [{"gid": "w1", "target": f"{BASE}?project=p1"}]
+    )
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
+    monkeypatch.setattr(
+        asana, "delete_webhook", lambda *a: (_ for _ in ()).throw(AssertionError("no delete"))
+    )
+
+    assert webhook_sync.run(BASE)["refused_deletes"] == 1
+
+
+def test_an_empty_managed_map_with_nothing_registered_is_a_plain_no_op(monkeypatch):
+    """Nothing to refuse — the ordinary result shape, no refused_deletes key."""
+    monkeypatch.setenv(managed_projects.ENV_VAR, "{}")
+    monkeypatch.setattr(asana, "list_webhooks", lambda: [{"gid": "legacy", "target": BASE}])
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[]))
+
+    assert webhook_sync.run(BASE) == {
+        "managed": 0,
+        "registered": 0,
+        "deleted": 0,
+        "active": 0,
+    }
+
+
+def test_a_populated_map_still_deletes_an_unmanaged_projects_webhook(monkeypatch):
+    """The safety valve is scoped to the empty map; deliberate deregistration
+    of one project among several is unaffected."""
+    _managed(monkeypatch, "p1")
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [
+            {"gid": "w1", "target": f"{BASE}?project=p1"},
+            {"gid": "w9", "target": f"{BASE}?project=p9"},
+        ],
+    )
+    monkeypatch.setattr(
+        webhook_sync,
+        "get_conn",
+        lambda: RowsConn(rows=[{"project_gid": "p1"}, {"project_gid": "p9"}]),
+    )
+    deleted = []
+    monkeypatch.setattr(asana, "delete_webhook", lambda gid: deleted.append(gid))
+    monkeypatch.setattr(asana, "create_webhook", lambda resource, target: {"gid": "new"})
+
+    result = webhook_sync.run(BASE)
+    assert deleted == ["w9"]
+    assert "refused_deletes" not in result

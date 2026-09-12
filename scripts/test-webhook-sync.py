@@ -48,6 +48,12 @@ def main() -> None:
     print(f"Secret rows ({len(with_secrets)}): {', '.join(sorted(with_secrets)) or '(none)'}")
 
     plan = webhook_registry.plan(managed, registered, with_secrets)
+    if not managed and plan.to_delete:
+        print(
+            f"\nWould REFUSE to delete {len(plan.to_delete)} webhook(s): "
+            f"{managed_projects.ENV_VAR} is empty (safety valve in handlers/webhook_sync.py)"
+        )
+        return
     print(f"\nWould delete: {plan.to_delete or '(nothing)'}")
     print(f"Would register: {plan.to_register or '(nothing)'}")
 

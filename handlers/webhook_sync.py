@@ -9,6 +9,10 @@ Unlike the delivery path, this handler lets a database failure raise: a run
 that cannot read its own secret rows would compute a diff that deletes and
 re-registers everything. Failing is correct here — the next tick retries.
 
+For the same reason an empty managed map never deletes anything: see the
+safety valve in run(). A destructive diff must not be driven by an absent
+config value.
+
 Design: docs/superpowers/specs/2026-09-08-cross-project-recurrence-design.md (D5)
 """
 
@@ -38,6 +42,35 @@ def run(target_url: str) -> dict:
 
     plan = webhook_registry.plan(managed, registered, with_secrets)
     live = {gid for gid in registered if gid in managed}
+
+    # Safety valve. managed_projects.managed() degrades an unset, blank or
+    # malformed map to {} — right for sections.done(), wrong for a destructive
+    # diff, where it puts every project-scoped webhook into to_delete and ends
+    # recurrence everywhere. It is reachable by config slip, not only by
+    # intent: .github/workflows/deploy.yml passes an undefined repo variable
+    # through as "", which sets the Terraform variable to empty and overrides
+    # variables.tf's default. Deregistering the last managed project should
+    # take one deliberate act — empty the map AND delete the webhooks by hand
+    # — rather than a missing variable. Not an exception: the scheduler tick
+    # should not look like an outage. The gauge still goes out, and reads 0,
+    # which is exactly the alert the spec's Observability section wants.
+    if not managed and plan.to_delete:
+        otel.webhooks_active.set(len(live))
+        logger.error(
+            "Webhook sync: %s is empty but %d project webhook(s) are registered (%s) — "
+            "refusing to delete them. Set %s, or deregister deliberately.",
+            managed_projects.ENV_VAR,
+            len(plan.to_delete),
+            ", ".join(gid for gid, _ in plan.to_delete),
+            managed_projects.ENV_VAR,
+        )
+        return {
+            "managed": 0,
+            "registered": 0,
+            "deleted": 0,
+            "active": len(live),
+            "refused_deletes": len(plan.to_delete),
+        }
 
     # Deletes first: a project being replaced (webhook with no secret row)
     # appears in both lists and only reconciles in that order.
