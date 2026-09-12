@@ -483,3 +483,67 @@ def test_list_project_tasks_accepts_opt_fields_override(monkeypatch):
     assert seen["params"]["opt_fields"] == asana.DIGEST_OPT_FIELDS
     assert "tags.name" in asana.DIGEST_OPT_FIELDS and "html_notes" in asana.DIGEST_OPT_FIELDS
     assert seen["params"]["completed_since"] == "now"
+
+
+def test_current_section_reads_the_named_project(monkeypatch):
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "p-ben")
+    task = {
+        "memberships": [
+            {"project": {"gid": "p-ben"}, "section": {"gid": "s-ben", "name": "Review"}},
+            {"project": {"gid": "p-family"}, "section": {"gid": "s-fam", "name": "Chores"}},
+        ]
+    }
+    assert asana.current_section(task) == {"gid": "s-ben", "name": "Review"}
+    assert asana.current_section(task, "p-family") == {"gid": "s-fam", "name": "Chores"}
+    assert asana.current_section(task, "p-stranger") is None
+
+
+def test_create_webhook_posts_the_shared_filters(monkeypatch):
+    sent = {}
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"gid": "w1", "active": True, "target": sent["json"]["data"]["target"]}}
+
+    def fake_request(method, path, *, operation, timeout=10, **kwargs):
+        sent.update({"method": method, "path": path, "timeout": timeout, **kwargs})
+        return Resp()
+
+    monkeypatch.setattr(asana, "_request", fake_request)
+    hook = asana.create_webhook("p-family", "https://cf/?project=p-family")
+    assert sent["method"] == "POST"
+    assert sent["path"] == "/webhooks"
+    assert sent["timeout"] > 10
+    assert sent["json"]["data"]["resource"] == "p-family"
+    assert sent["json"]["data"]["filters"] == asana.WEBHOOK_FILTERS
+    assert hook["gid"] == "w1"
+
+
+def test_delete_webhook_tolerates_a_missing_webhook(monkeypatch):
+    class Resp:
+        status_code = 404
+
+        def raise_for_status(self):
+            raise AssertionError("must not raise on 404")
+
+    monkeypatch.setattr(asana, "_request", lambda *a, **k: Resp())
+    asana.delete_webhook("gone")
+
+
+def test_list_webhooks_paginates_by_workspace(monkeypatch):
+    monkeypatch.setattr(asana, "get_workspace_gid", lambda: "ws1")
+    captured = {}
+
+    def fake_paginate(path, params, *, operation):
+        captured.update({"path": path, "params": params, "operation": operation})
+        return [{"gid": "w1", "target": "https://cf/?project=p1"}]
+
+    monkeypatch.setattr(asana, "_paginate", fake_paginate)
+    assert asana.list_webhooks() == [{"gid": "w1", "target": "https://cf/?project=p1"}]
+    assert captured["params"]["workspace"] == "ws1"
+    assert "target" in captured["params"]["opt_fields"]

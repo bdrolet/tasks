@@ -4,7 +4,9 @@ Cloud Function entry points for the tasks service.
 process — Pub/Sub trigger on the inbox-owned email-events topic; handles
           email_classified (policy → enrich → create task) and label_applied.
 webhook — HTTP trigger (public); Asana webhook handshake + completion events,
-          and POST /escalate for the Cloud Scheduler overdue scan.
+          POST /escalate for the Cloud Scheduler overdue scan, POST /digest
+          for the due-day digest, and POST /webhook-sync for per-project
+          webhook reconciliation.
 
 LAYER RULE: this file is a transport adapter — decode the envelope, route,
 flush telemetry, count errors. All behavior lives in handlers/ and services/;
@@ -15,8 +17,9 @@ inbox's process/sweep). Required env vars:
   ASANA_API_KEY / ASANA_PROJECT_ID           — Asana REST auth + target project
   ANTHROPIC_API_KEY                          — enrichment (summary, deadline)
   ASANA_SECTION_{REVIEW,RESPOND,URGENT,DONE,OVERDUE}_GID — section mapping
-  ASANA_WEBHOOK_SECRET                       — HMAC key for X-Hook-Signature (webhook CF)
-  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate and POST /digest (webhook CF)
+  ASANA_WEBHOOK_SECRET                       — HMAC key for the legacy single-project webhook (webhook CF)
+  ASANA_MANAGED_PROJECTS                     — {project gid: {done: section gid}} — managed set + Done mapping
+  ASANA_ESCALATE_TOKEN                       — bearer token for POST /escalate, /digest and /webhook-sync (webhook CF)
   WEBHOOK_URL / WEBHOOK_LABEL_TOKEN          — inbox webhook CF, for task action links
   CLOUD_SQL_CONNECTION_NAME / POSTGRES_*     — tasks database
   GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN — OTel export (optional)
@@ -41,7 +44,7 @@ import functions_framework
 from cloudevents.http import CloudEvent
 
 import clients.otel as otel
-from handlers import asana_webhook, due_digest, label_applied, task_create
+from handlers import asana_webhook, due_digest, label_applied, task_create, webhook_sync
 from services import escalation
 
 logger = logging.getLogger(__name__)
@@ -74,10 +77,14 @@ def process(cloud_event: CloudEvent) -> None:
 def webhook(request):
     otel.flush()
     try:
-        # Asana handshake — any request carrying X-Hook-Secret
+        # Asana handshake — any request carrying X-Hook-Secret. `t` is the
+        # target URL's HMAC over the project gid; handshake() authenticates
+        # with it, since this route is necessarily open to the internet.
         hook_secret = request.headers.get("X-Hook-Secret")
         if hook_secret:
-            return asana_webhook.handshake(hook_secret)
+            return asana_webhook.handshake(
+                hook_secret, request.args.get("project"), request.args.get("t")
+            )
 
         if request.path == "/escalate" and request.method == "POST":
             if not escalation.is_authorized(request.headers.get("Authorization")):
@@ -95,11 +102,34 @@ def webhook(request):
                 body = {}
             return due_digest.run(force=bool(body.get("force"))), 200
 
+        if request.path == "/webhook-sync" and request.method == "POST":
+            if not escalation.is_authorized(request.headers.get("Authorization")):
+                return "", 401
+            try:
+                body = json.loads(request.get_data() or b"{}")
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            # The scheduler passes the function's own URI; putting it in this
+            # function's own env would be a Terraform cycle. It is required
+            # rather than derived: `request.url_root` drops the function-name
+            # path segment, so a derived base would disagree with the targets
+            # the reconciler registers and it would stop recognizing its own
+            # webhooks.
+            target = str(body.get("target") or "").strip()
+            if not target:
+                logger.warning("POST /webhook-sync called without a target URL")
+                return "", 400
+            return webhook_sync.run(target), 200
+
         if request.method != "POST":
             return "", 405
 
         return asana_webhook.receive(
-            request.get_data(), request.headers.get("X-Hook-Signature", "")
+            request.get_data(),
+            request.headers.get("X-Hook-Signature", ""),
+            request.args.get("project"),
         )
     except Exception:
         otel.errors.add(1, {"handler": "webhook"})

@@ -8,10 +8,11 @@ from handlers import label_applied, task_complete, task_create
 
 
 class Req:
-    def __init__(self, *, path="/", method="POST", headers=None, body=b""):
+    def __init__(self, *, path="/", method="POST", headers=None, body=b"", args=None):
         self.path = path
         self.method = method
         self.headers = headers or {}
+        self.args = args or {}
         self._body = body
 
     def get_data(self):
@@ -142,3 +143,80 @@ def test_webhook_digest_rejects_bad_auth(monkeypatch):
     monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
     _, status = main.webhook(Req(path="/digest", headers={"Authorization": "Bearer wrong"}))
     assert status == 401
+
+
+def test_webhook_sync_route(monkeypatch):
+    from handlers import webhook_sync
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    seen = {}
+    monkeypatch.setattr(
+        webhook_sync,
+        "run",
+        lambda target: (
+            seen.update(target=target) or {"managed": 1, "registered": 0, "deleted": 0, "active": 1}
+        ),
+    )
+    result, status = main.webhook(
+        Req(
+            path="/webhook-sync",
+            headers={"Authorization": "Bearer tok"},
+            body=json.dumps({"target": "https://cf.example/tasks-webhook"}).encode(),
+        )
+    )
+    assert status == 200
+    assert result == {"managed": 1, "registered": 0, "deleted": 0, "active": 1}
+    assert seen["target"] == "https://cf.example/tasks-webhook"
+
+
+def test_webhook_sync_rejects_bad_auth(monkeypatch):
+    from handlers import webhook_sync
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    ran = []
+    monkeypatch.setattr(webhook_sync, "run", lambda target: ran.append(target))
+    _, status = main.webhook(Req(path="/webhook-sync", headers={"Authorization": "Bearer wrong"}))
+    assert status == 401
+    assert ran == []
+
+
+def test_webhook_sync_requires_target(monkeypatch):
+    from handlers import webhook_sync
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    ran = []
+    monkeypatch.setattr(webhook_sync, "run", lambda target: ran.append(target))
+    _, status = main.webhook(
+        Req(path="/webhook-sync", headers={"Authorization": "Bearer tok"}, body=b"{}")
+    )
+    assert status == 400
+    assert ran == []
+
+
+def test_webhook_sync_rejects_blank_target(monkeypatch):
+    from handlers import webhook_sync
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    ran = []
+    monkeypatch.setattr(webhook_sync, "run", lambda target: ran.append(target))
+    _, status = main.webhook(
+        Req(
+            path="/webhook-sync",
+            headers={"Authorization": "Bearer tok"},
+            body=json.dumps({"target": "   "}).encode(),
+        )
+    )
+    assert status == 400
+    assert ran == []
+
+
+def test_webhook_passes_the_project_query_parameter(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        main.asana_webhook,
+        "receive",
+        lambda body, sig, project=None: seen.update({"project": project}) or ("", 200),
+    )
+    request = Req(path="/", method="POST", args={"project": "p-family"})
+    main.webhook(request)
+    assert seen["project"] == "p-family"

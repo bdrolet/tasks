@@ -6,6 +6,8 @@ section GID: open the section in Asana — the numeric ID at the end of the URL.
 
 import os
 
+from services import managed_projects
+
 _BY_CATEGORY = {
     "review": "ASANA_SECTION_REVIEW_GID",
     "respond": "ASANA_SECTION_RESPOND_GID",
@@ -25,7 +27,20 @@ def for_category(category: str, *, default: bool = False) -> str | None:
     return os.environ.get(var) or None if var else None
 
 
-def done() -> str | None:
+def done(project_gid: str | None = None) -> str | None:
+    """The Done section for the project a completed task lives in (D8).
+
+    - a managed project → its configured `done`, which may be None, meaning
+      "this project has no Done section; skip the move"
+    - an unmanaged project that is not the default one → None, same skip
+    - the default project, or an unknown project (no membership information)
+      → ASANA_SECTION_DONE_GID, preserving pre-D8 behavior exactly
+    """
+    known = managed_projects.managed()
+    if project_gid and project_gid in known:
+        return known[project_gid]["done"]
+    if project_gid and project_gid != os.environ.get("ASANA_PROJECT_ID"):
+        return None
     return os.environ.get("ASANA_SECTION_DONE_GID") or None
 
 

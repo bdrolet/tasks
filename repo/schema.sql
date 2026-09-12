@@ -76,3 +76,14 @@ CREATE TABLE IF NOT EXISTS digest_state (
     dirty_at        TIMESTAMPTZ,
     last_rebuilt_at TIMESTAMPTZ
 );
+
+-- One Asana webhook per managed project, each with its own X-Hook-Secret
+-- (docs/superpowers/specs/2026-09-08-cross-project-recurrence-design.md, D3).
+-- Written at handshake time keyed on project_gid, because the webhook gid
+-- does not exist until the registering POST returns.
+CREATE TABLE IF NOT EXISTS asana_webhooks (
+    project_gid   TEXT PRIMARY KEY,
+    webhook_gid   TEXT,
+    secret        TEXT NOT NULL,
+    registered_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

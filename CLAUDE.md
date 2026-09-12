@@ -19,7 +19,8 @@ stays in inbox; task-serving work lives here.
 | **API** | `tasks-api` — Cloud Run FastAPI service (`api/`), search/fetch/add/update for tasks + comments; list/create projects, list tags, subtasks; bearer auth via `tasks-api-token`; image in AR repo `tasks`, deployed by `deploy-api.yml`; `tasks-api.drolet.cloud` |
 | **Escalation** | Cloud Scheduler `tasks-escalation`, `0 6 * * *` America/New_York → `POST <webhook-url>/escalate` |
 | **Digest** | Cloud Scheduler `tasks-digest`, `*/10 * * * *` → `POST <webhook-url>/digest` (same bearer as escalate) — rebuilds the due-day calendar digest when the Asana webhook has set `digest_state.dirty_at` or the last rebuild is > 60 min old; writes through `clients/schedule_api.py` (`SCHEDULE_API_URL`/`SCHEDULE_API_TOKEN`, secret owned by schedule terraform) |
-| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`; schema in `repo/schema.sql` |
+| **Webhook sync** | Cloud Scheduler `tasks-webhook-sync`, `30 5 * * *` America/New_York → `POST <webhook-url>/webhook-sync` (same bearer as escalate) — reconciles per-project Asana webhook registrations against `ASANA_MANAGED_PROJECTS`, self-healing a registration Asana dropped after 24h of failed delivery |
+| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets); schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
 | **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
 
@@ -116,6 +117,17 @@ enrichment yields no title; the manual/API path builds titles in
 vars → CF env). `services/sections.py` maps category/label → GID. Optional
 `ASANA_OVERDUE_TAG_GID` also tags escalated tasks.
 
+Review/Respond/Urgent are default-project concepts — the pipeline only ever
+creates there — but **Done is project-aware**: `sections.done(project_gid)`
+returns the `done` entry from `ASANA_MANAGED_PROJECTS` for a managed project
+(which may be `null`, meaning "no Done section, leave the task in place"),
+`ASANA_SECTION_DONE_GID` for the default project or when no project is known,
+and `None` — skip the move and log — for an unmanaged non-default project. The
+project comes from `services/managed_projects.py::project_of`, which resolves
+a task in several projects at once by preferring `ASANA_PROJECT_ID`, then the
+managed map's declaration order; a subtask has no memberships and gets no Done
+move at all.
+
 ## Recurring tasks
 
 A task tagged `repeat:3mo` creates its next occurrence when it is completed,
@@ -127,10 +139,13 @@ aliases accepted; bare `m` rejected as ambiguous). Set or clear it with the
 ordinary `tags`/`add_tags`/`remove_tags` fields, or by hand in Asana.
 
 The successor copies name, description, section, tags and assignee — not
-comments, subtasks, attachments or time-of-day — and lands in the service's
-configured project; that's also the only project recurrence works in at all,
-since the Asana webhook is registered on it — a `repeat:` tag on a task in
-another project, or on a subtask, never fires. It carries
+comments, subtasks, attachments or time-of-day — and lands wherever its
+predecessor lived: the same projects for a top-level task, the same parent
+(unsectioned) for a subtask. `repeat:` fires in any project listed in
+`ASANA_MANAGED_PROJECTS`, each of which has its own Asana webhook registered
+and reconciled daily by `POST /webhook-sync` (Cloud Scheduler
+`tasks-webhook-sync`), with its own `X-Hook-Secret` in the `asana_webhooks`
+table. A project outside that map still never fires. It carries
 `external.gid = recur:{completed_gid}`, which
 is the idempotency guard against webhook redelivery and uncomplete/recomplete.
 Completing strips the `repeat:` tag from the finished occurrence, so exactly
@@ -175,10 +190,17 @@ routing: `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`.
 
 DB usage in handlers is **best-effort**: Asana is the source of truth; a DB
 outage degrades lookups to the `external:{message_id}` fallback and must never
-crash an event. The due-day digest is the documented exception —
+crash an event. Three handlers depart from that deliberately, each because
+failing is cheaper than acting on a state it cannot read:
 `handlers/due_digest.py` skips a rebuild outright when the DB is unavailable,
 since without `due_day_events` it cannot address its own calendar events and
-would risk duplicating them (spec D7).
+would risk duplicating them (due-day digest spec D7);
+`handlers/asana_webhook.py::_secret_for` returns 401 on a cold secret cache
+plus a DB outage rather than validating a delivery it cannot authenticate —
+safe only because Asana redelivers for 24 hours (cross-project recurrence spec
+D6); and `handlers/webhook_sync.py` lets a DB failure raise, because a
+reconciler that cannot read its own secret rows would compute a diff that
+deletes and re-registers every webhook (see its module docstring).
 
 ## Secrets
 
@@ -196,7 +218,14 @@ token is the bearer credential Cloud Scheduler sends on `POST /escalate` and
 must stay publicly invokable for Asana's unauthenticated webhook posts); the API token
 is the bearer credential for the tasks-api Cloud Run service — skills read it
 from `terraform.tfvars`. `ASANA_PROJECT_ID` and section GIDs are plain env
-vars, not secrets.
+vars, not secrets. Per-project webhook secrets (one `X-Hook-Secret` per
+`ASANA_MANAGED_PROJECTS` entry, minted by Asana at registration and never
+suppliable by the caller) live in the `asana_webhooks` table, deliberately
+**not** Secret Manager: the webhook CF is public and unauthenticated by
+necessity, and granting that identity `secretmanager.versions.add` is a worse
+trade than another table in a database it already writes to; it also keeps
+every secret's ownership either fully in Terraform (this table) or fully out
+of it, rather than split (design D3).
 
 ## Asana webhook
 

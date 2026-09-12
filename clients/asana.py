@@ -40,7 +40,9 @@ DIGEST_OPT_FIELDS = (
 _workspace_gid: str | None = None
 
 
-def _request(method: str, path: str, *, operation: str, **kwargs) -> httpx.Response:
+def _request(
+    method: str, path: str, *, operation: str, timeout: float = 10, **kwargs
+) -> httpx.Response:
     """Single choke point for Asana calls — records asana.api.duration per operation."""
     t0 = time.monotonic()
     try:
@@ -48,7 +50,7 @@ def _request(method: str, path: str, *, operation: str, **kwargs) -> httpx.Respo
             method,
             f"{_BASE}{path}",
             headers={"Authorization": f"Bearer {ASANA_API_KEY}"},
-            timeout=10,
+            timeout=timeout,
             **kwargs,
         )
     finally:
@@ -195,7 +197,7 @@ def get_task(task_gid: str) -> dict:
         f"/tasks/{task_gid}",
         operation="get_task",
         params={
-            "opt_fields": "completed,completed_at,name,tags.gid,tags.name,"
+            "opt_fields": "completed,completed_at,name,parent.gid,tags.gid,tags.name,"
             "memberships.section.gid,memberships.section.name,memberships.project.gid"
         },
     )
@@ -203,10 +205,12 @@ def get_task(task_gid: str) -> dict:
     return resp.json()["data"]
 
 
-def current_section(task: dict) -> dict | None:
-    """Return this project's {'gid', 'name'} section membership, or None."""
+def current_section(task: dict, project_gid: str | None = None) -> dict | None:
+    """Return the task's {'gid', 'name'} section membership in the given
+    project — the default project when none is named — or None."""
+    target = project_gid or ASANA_PROJECT_ID
     for m in task.get("memberships", []):
-        if (m.get("project") or {}).get("gid") == ASANA_PROJECT_ID:
+        if (m.get("project") or {}).get("gid") == target:
             section = m.get("section") or {}
             if section.get("gid"):
                 return {"gid": section["gid"], "name": section.get("name", "")}
@@ -454,4 +458,54 @@ def update_story(story_gid: str, *, text: str | None = None, html_text: str | No
 
 def delete_story(story_gid: str) -> None:
     resp = _request("DELETE", f"/stories/{story_gid}", operation="delete_story")
+    resp.raise_for_status()
+
+
+# Registered filters are the delivery gate: an event type missing here never
+# reaches the CF, no matter what handlers/asana_webhook.py::receive supports.
+# Keep in sync with that function.
+WEBHOOK_FILTERS = [
+    {
+        "resource_type": "task",
+        "action": "changed",
+        "fields": ["completed", "name", "notes", "due_on"],
+    },
+    {"resource_type": "task", "action": "added"},
+    {"resource_type": "task", "action": "deleted"},
+    {"resource_type": "task", "action": "removed"},
+]
+
+
+def list_webhooks() -> list[dict]:
+    """Every webhook in the workspace: [{gid, target, active, resource}]."""
+    return _paginate(
+        "/webhooks",
+        {"workspace": get_workspace_gid(), "opt_fields": "target,active,resource.gid"},
+        operation="list_webhooks",
+    )
+
+
+def create_webhook(resource_gid: str, target: str) -> dict:
+    """Register a webhook and return {gid, active, target}.
+
+    Asana calls `target` with X-Hook-Secret and waits for the echo before
+    this POST returns, so the round trip includes a possibly cold CF start —
+    hence the long timeout."""
+    resp = _request(
+        "POST",
+        "/webhooks",
+        operation="create_webhook",
+        json={"data": {"resource": resource_gid, "target": target, "filters": WEBHOOK_FILTERS}},
+        params={"opt_fields": "gid,active,target"},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
+def delete_webhook(webhook_gid: str) -> None:
+    """Delete a webhook. A 404 is success — Asana already removed it."""
+    resp = _request("DELETE", f"/webhooks/{webhook_gid}", operation="delete_webhook")
+    if resp.status_code == 404:
+        return
     resp.raise_for_status()

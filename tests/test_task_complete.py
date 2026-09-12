@@ -1,8 +1,10 @@
+import json
+
 from dateutil.relativedelta import relativedelta
 
 import clients.asana as asana
 from handlers import task_complete
-from services import recurrence
+from services import managed_projects, recurrence
 from tests.test_repo import FakeConn
 
 
@@ -12,7 +14,9 @@ def test_completed_task_moves_to_done(monkeypatch):
     monkeypatch.setattr(task_complete, "get_conn", lambda: db)
     monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": True})
     monkeypatch.setattr(
-        asana, "current_section", lambda task: {"gid": "s-review", "name": "Review"}
+        asana,
+        "current_section",
+        lambda task, project_gid=None: {"gid": "s-review", "name": "Review"},
     )
     moves = []
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
@@ -36,7 +40,7 @@ def test_complete_updates_index(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
     monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": True})
-    monkeypatch.setattr(asana, "current_section", lambda task: None)
+    monkeypatch.setattr(asana, "current_section", lambda task, project_gid=None: None)
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
     calls = []
     monkeypatch.setattr(
@@ -65,7 +69,9 @@ def test_already_in_done_is_a_noop(monkeypatch):
     monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
     monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(asana, "get_task", lambda gid: {"gid": gid, "completed": True})
-    monkeypatch.setattr(asana, "current_section", lambda task: {"gid": "sec-done", "name": "Done"})
+    monkeypatch.setattr(
+        asana, "current_section", lambda task, project_gid=None: {"gid": "sec-done", "name": "Done"}
+    )
     moves = []
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
 
@@ -78,7 +84,9 @@ def _wire_completion(monkeypatch, task):
     monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
     monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(asana, "get_task", lambda gid: task)
-    monkeypatch.setattr(asana, "current_section", lambda t: {"gid": "s-review", "name": "Review"})
+    monkeypatch.setattr(
+        asana, "current_section", lambda t, project_gid=None: {"gid": "s-review", "name": "Review"}
+    )
     moves = []
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
     return moves
@@ -97,13 +105,15 @@ def test_repeat_tag_spawns_the_next_occurrence(monkeypatch):
     monkeypatch.setattr(
         recurrence,
         "spawn_next",
-        lambda t, d, s, rule: spawned.append((t["gid"], s, rule)) or "new-1",
+        lambda t, d, s, rule, project_gid=None: (
+            spawned.append((t["gid"], s, rule, project_gid)) or "new-1"
+        ),
     )
 
     task_complete.handle("42")
 
     assert spawned == [
-        ("42", {"gid": "s-review", "name": "Review"}, ("t2", relativedelta(months=3)))
+        ("42", {"gid": "s-review", "name": "Review"}, ("t2", relativedelta(months=3)), None)
     ]
     assert moves == [("42", "sec-done")]  # the Done move still happens
 
@@ -136,7 +146,9 @@ def test_a_failing_find_rule_still_completes_and_moves_the_task(monkeypatch):
         "tags": [{"gid": "t2", "name": "repeat:3mo"}],
     }
     monkeypatch.setattr(asana, "get_task", lambda gid: task)
-    monkeypatch.setattr(asana, "current_section", lambda t: {"gid": "s-review", "name": "Review"})
+    monkeypatch.setattr(
+        asana, "current_section", lambda t, project_gid=None: {"gid": "s-review", "name": "Review"}
+    )
     moves = []
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
 
@@ -168,3 +180,80 @@ def test_a_failing_recurrence_still_completes_and_moves_the_task(monkeypatch):
 
     task_complete.handle("42")
     assert moves == [("42", "sec-done")]
+
+
+def test_completed_task_moves_to_its_own_projects_done(monkeypatch):
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-default-done")
+    monkeypatch.setenv(
+        managed_projects.ENV_VAR, json.dumps({"p-family": {"done": "sec-family-done"}})
+    )
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(
+        asana,
+        "get_task",
+        lambda gid: {
+            "gid": gid,
+            "completed": True,
+            "memberships": [{"project": {"gid": "p-family"}}],
+        },
+    )
+    monkeypatch.setattr(
+        asana, "current_section", lambda task, project_gid=None: {"gid": "s1", "name": "Doing"}
+    )
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+
+    task_complete.handle("42")
+    assert moves == [("42", "sec-family-done")]
+
+
+def test_completed_subtask_is_never_moved(monkeypatch):
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-default-done")
+    monkeypatch.setenv(managed_projects.ENV_VAR, "{}")
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(
+        asana,
+        "get_task",
+        lambda gid: {"gid": gid, "completed": True, "parent": {"gid": "p1"}, "memberships": []},
+    )
+    monkeypatch.setattr(asana, "current_section", lambda task, project_gid=None: None)
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+
+    task_complete.handle("42")
+    assert moves == []
+
+
+def test_a_multi_homed_task_under_an_empty_map_still_moves_to_the_default_done(monkeypatch):
+    """The empty-map revert property, end to end. Before this feature the Done
+    move was unconditional; a task in the default project AND another one must
+    still reach ASANA_SECTION_DONE_GID whatever order Asana lists its
+    memberships in, and current_section must be read against the default
+    project so the successor inherits the right section."""
+    monkeypatch.setenv("ASANA_PROJECT_ID", "p-ben")
+    monkeypatch.setenv("ASANA_SECTION_DONE_GID", "sec-done")
+    monkeypatch.setenv(managed_projects.ENV_VAR, "{}")
+    monkeypatch.setattr(task_complete, "get_conn", lambda: FakeConn())
+    monkeypatch.setattr(
+        asana,
+        "get_task",
+        # Asana listing the other project first is the case that used to break.
+        lambda gid: {
+            "gid": gid,
+            "completed": True,
+            "memberships": [{"project": {"gid": "p-family"}}, {"project": {"gid": "p-ben"}}],
+        },
+    )
+    sectioned_against = []
+
+    def current_section(task, project_gid=None):
+        sectioned_against.append(project_gid)
+        return {"gid": "s-review", "name": "Review"}
+
+    monkeypatch.setattr(asana, "current_section", current_section)
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+
+    task_complete.handle("42")
+    assert moves == [("42", "sec-done")]
+    assert sectioned_against == ["p-ben"]

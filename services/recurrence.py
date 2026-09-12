@@ -124,6 +124,7 @@ def spawn_next(
     detail: dict,
     section: dict | None,
     rule: tuple[str, relativedelta],
+    project_gid: str | None = None,
 ) -> str | None:
     """Create the successor to a just-completed recurring task.
 
@@ -154,8 +155,22 @@ def spawn_next(
     assignee_gid = (detail.get("assignee") or {}).get("gid")
     if assignee_gid:
         fields["assignee"] = assignee_gid
-    if asana.ASANA_PROJECT_ID:
-        fields["projects"] = [asana.ASANA_PROJECT_ID]
+    # A subtask carries its parent instead of project membership; a top-level
+    # task carries the source's own memberships, so a repeat: tag on Ben's
+    # Board spawns onto Ben's Board rather than the service default (D9).
+    parent_gid = (detail.get("parent") or task.get("parent") or {}).get("gid")
+    if parent_gid:
+        fields["parent"] = parent_gid
+    else:
+        source_projects = [
+            gid
+            for m in (detail.get("memberships") or task.get("memberships") or [])
+            if (gid := (m.get("project") or {}).get("gid"))
+        ]
+        if source_projects:
+            fields["projects"] = source_projects
+        elif asana.ASANA_PROJECT_ID:
+            fields["projects"] = [asana.ASANA_PROJECT_ID]
 
     created = asana.create_task_from_fields(fields)
     otel.recurrences.add(1)
@@ -164,7 +179,7 @@ def spawn_next(
     # The successor belongs where the last occurrence lived. If that was Done
     # (dragged there by hand), leave it unsectioned rather than filing a chore
     # under a mail-routing default.
-    if section and section["gid"] != sections.done():
+    if not parent_gid and section and section["gid"] != sections.done(project_gid):
         _try(
             "place the successor in a section",
             asana.add_task_to_section,

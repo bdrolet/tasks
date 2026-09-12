@@ -104,6 +104,12 @@ variable "asana_project_calendars" {
   default     = "{}"
 }
 
+variable "asana_managed_projects" {
+  description = "Projects this service manages, as a JSON object: {\"<project gid>\": {\"done\": \"<done section gid>\"}}. Membership means a webhook is registered for the project and its completions are handled; \"done\": null means the project has no Done section and completed tasks are left in place. Key order is significant: a task in two managed projects resolves to whichever is declared first (the default asana_project_id always wins if the task is in it). Personal gids: terraform.tfvars + GitHub repo variable only. \"{}\" leaves only the legacy single-project webhook in play."
+  type        = string
+  default     = "{}"
+}
+
 variable "calendar_shared_id" {
   description = "Google Calendar id of the 'Ben | Cheryl' calendar — digest target for tasks tagged cheryl. Empty disables the rule."
   type        = string
