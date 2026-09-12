@@ -1,11 +1,23 @@
 import json
 
+import pytest
+
 import clients.asana as asana
 from handlers import webhook_sync
-from services import managed_projects
+from services import managed_projects, webhook_registry
 from tests.test_repo_due_digest import RowsConn
 
 BASE = "https://cf.example/tasks-webhook"
+
+
+@pytest.fixture(autouse=True)
+def _signing_key(monkeypatch):
+    """The reconciler signs every target it registers (see Finding 1)."""
+    monkeypatch.setenv(webhook_registry._SIGNING_KEY_ENV, "escalate-bearer")
+
+
+def _target(gid):
+    return webhook_registry.target_for(BASE, gid)
 
 
 def _managed(monkeypatch, *gids):
@@ -25,7 +37,7 @@ def test_registers_a_missing_project(monkeypatch):
     monkeypatch.setattr(asana, "delete_webhook", lambda gid: None)
 
     result = webhook_sync.run(BASE)
-    assert created == [("p1", f"{BASE}?project=p1")]
+    assert created == [("p1", _target("p1"))]
     assert result == {"managed": 1, "registered": 1, "deleted": 0, "active": 1}
 
 
@@ -108,7 +120,7 @@ def test_replaces_a_live_webhook_with_no_secret_row(monkeypatch):
 
     result = webhook_sync.run(BASE)
     assert result == {"managed": 1, "registered": 1, "deleted": 1, "active": 1}
-    assert calls == [("delete", "w1"), ("create", "p1", f"{BASE}?project=p1")]
+    assert calls == [("delete", "w1"), ("create", "p1", _target("p1"))]
 
 
 def test_a_failed_delete_still_proceeds_to_register(monkeypatch):
@@ -140,7 +152,7 @@ def test_a_failed_delete_still_proceeds_to_register(monkeypatch):
     # both p1 (the replace) and p2 (a plain missing registration).
     assert result["deleted"] == 0
     assert result["registered"] == 2
-    assert created == [("p1", f"{BASE}?project=p1"), ("p2", f"{BASE}?project=p2")]
+    assert created == [("p1", _target("p1")), ("p2", _target("p2"))]
     # p1 was already counted live (its old, undeleted webhook) and stays live
     # after re-registration; p2 becomes live. Both managed projects report
     # active despite the stray duplicate webhook on Asana's side.

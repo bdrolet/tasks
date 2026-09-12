@@ -145,8 +145,8 @@ def setup_telemetry(service_name: str) -> None:
     )
     webhook_auth_failures = meter.create_counter(
         "asana.webhook.auth_failures",
-        description="Rejected webhook deliveries by reason "
-        "(unknown_project|no_secret|bad_signature)",
+        description="Rejected webhook deliveries and handshakes by reason "
+        "(unknown_project|bad_target_token|no_secret|bad_signature)",
     )
     webhooks_registered = meter.create_counter(
         "asana.webhooks.registered", description="Project webhooks registered by the reconciler"

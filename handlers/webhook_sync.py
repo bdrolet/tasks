@@ -61,7 +61,9 @@ def run(target_url: str) -> dict:
         try:
             # Asana calls back into handshake() during this POST; that is what
             # writes the secret row keyed on the ?project= parameter (D4).
-            hook = asana.create_webhook(project_gid, f"{target_url}?project={project_gid}")
+            hook = asana.create_webhook(
+                project_gid, webhook_registry.target_for(target_url, project_gid)
+            )
             with get_conn() as conn:
                 repo_webhooks.set_webhook_gid(conn, project_gid, hook["gid"])
         except Exception:

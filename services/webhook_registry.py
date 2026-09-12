@@ -1,12 +1,29 @@
-"""Pure reconciliation diff: managed projects vs. registered webhooks.
+"""Pure reconciliation diff: managed projects vs. registered webhooks, and
+the shape of the target URL we register.
 
 No Asana, no database — handlers/webhook_sync.py does the I/O against this.
 
 Design: docs/superpowers/specs/2026-09-08-cross-project-recurrence-design.md (D5)
 """
 
+import hashlib
+import hmac
+import logging
+import os
 from typing import NamedTuple
 from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger(__name__)
+
+# The target URL is the only thing that tells the handshake which project is
+# registering, and the webhook CF is publicly invokable — so the target has to
+# be unforgeable or anyone could mint a secret row for any project gid (and
+# project gids leak through every app.asana.com/0/<project>/<task> permalink).
+# We key the token off ASANA_ESCALATE_TOKEN, the bearer the webhook function
+# already holds for /escalate, /digest and /webhook-sync; only Asana — which
+# receives the target from us — and the reconciler ever see it.
+_SIGNING_KEY_ENV = "ASANA_ESCALATE_TOKEN"
+TOKEN_PARAM = "t"
 
 
 class Plan(NamedTuple):
@@ -42,7 +59,42 @@ def target_project(target: str, base_url: str) -> str | None:
         return None
     if _normalized_path(parsed.path) != _normalized_path(base.path):
         return None
-    return (parse_qs(parsed.query).get("project") or [None])[0]
+    projects = parse_qs(parsed.query).get("project") or []
+    return projects[0] if projects else None
+
+
+def _signing_key() -> str:
+    key = os.environ.get(_SIGNING_KEY_ENV, "")
+    if not key:
+        raise RuntimeError(f"{_SIGNING_KEY_ENV} is not set — project targets cannot be signed")
+    return key
+
+
+def project_token(project_gid: str) -> str:
+    """The `t` parameter for a project's target URL.
+
+    One function, used by both the reconciler that builds the target and the
+    handshake that verifies it, so the two cannot drift. Raises when the
+    signing key is unset: registering a target we could never verify would
+    leave the project permanently un-handshakeable."""
+    return hmac.new(_signing_key().encode(), project_gid.encode(), hashlib.sha256).hexdigest()
+
+
+def token_valid(project_gid: str, token: str | None) -> bool:
+    """Constant-time check of a handshake's `t` against project_token()."""
+    if not token:
+        return False
+    try:
+        expected = project_token(project_gid)
+    except RuntimeError:
+        logger.error("%s is not set — cannot verify a project handshake token", _SIGNING_KEY_ENV)
+        return False
+    return hmac.compare_digest(expected, token)
+
+
+def target_for(base_url: str, project_gid: str) -> str:
+    """The target we register with Asana: the project gid plus its token."""
+    return f"{base_url}?project={project_gid}&{TOKEN_PARAM}={project_token(project_gid)}"
 
 
 def plan(managed: set[str], registered: dict[str, str], with_secrets: set[str]) -> Plan:

@@ -1,6 +1,14 @@
+import pytest
+
 from services import webhook_registry as reg
 
 BASE = "https://us-central1-x.cloudfunctions.net/tasks-webhook"
+KEY = "escalate-bearer"
+
+
+@pytest.fixture(autouse=True)
+def _signing_key(monkeypatch):
+    monkeypatch.setenv(reg._SIGNING_KEY_ENV, KEY)
 
 
 def test_target_project_reads_the_query_parameter():
@@ -45,6 +53,45 @@ def test_a_differing_port_is_left_alone():
 
 def test_extra_query_parameters_alongside_project_are_ignored():
     assert reg.target_project(f"{BASE}?foo=bar&project=p1&baz=qux", BASE) == "p1"
+
+
+def test_the_target_token_does_not_disturb_project_extraction():
+    """target_project reads only `project`; the `t` parameter is the
+    handshake's concern and must not change what reconciliation sees."""
+    assert reg.target_project(reg.target_for(BASE, "p1"), BASE) == "p1"
+    assert reg.target_project(f"{BASE}?t=abc&project=p1", BASE) == "p1"
+    # And the legacy no-parameter target still reads as "not ours to manage".
+    assert reg.target_project(BASE, BASE) is None
+
+
+def test_target_for_carries_the_project_and_its_token():
+    target = reg.target_for(BASE, "p1")
+    assert target == f"{BASE}?project=p1&t={reg.project_token('p1')}"
+    assert reg.token_valid("p1", reg.project_token("p1"))
+
+
+def test_a_token_is_bound_to_one_project():
+    assert not reg.token_valid("p2", reg.project_token("p1"))
+
+
+def test_an_absent_or_wrong_token_is_invalid():
+    assert not reg.token_valid("p1", None)
+    assert not reg.token_valid("p1", "")
+    assert not reg.token_valid("p1", "deadbeef")
+
+
+def test_a_token_signed_with_another_key_is_invalid(monkeypatch):
+    monkeypatch.setenv(reg._SIGNING_KEY_ENV, "other-key")
+    forged = reg.project_token("p1")
+    monkeypatch.setenv(reg._SIGNING_KEY_ENV, KEY)
+    assert not reg.token_valid("p1", forged)
+
+
+def test_without_a_signing_key_nothing_can_be_signed_or_verified(monkeypatch):
+    monkeypatch.delenv(reg._SIGNING_KEY_ENV, raising=False)
+    assert not reg.token_valid("p1", "anything")
+    with pytest.raises(RuntimeError):
+        reg.target_for(BASE, "p1")
 
 
 def test_empty_state_registers_everything():

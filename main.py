@@ -77,10 +77,14 @@ def process(cloud_event: CloudEvent) -> None:
 def webhook(request):
     otel.flush()
     try:
-        # Asana handshake — any request carrying X-Hook-Secret
+        # Asana handshake — any request carrying X-Hook-Secret. `t` is the
+        # target URL's HMAC over the project gid; handshake() authenticates
+        # with it, since this route is necessarily open to the internet.
         hook_secret = request.headers.get("X-Hook-Secret")
         if hook_secret:
-            return asana_webhook.handshake(hook_secret, request.args.get("project"))
+            return asana_webhook.handshake(
+                hook_secret, request.args.get("project"), request.args.get("t")
+            )
 
         if request.path == "/escalate" and request.method == "POST":
             if not escalation.is_authorized(request.headers.get("Authorization")):

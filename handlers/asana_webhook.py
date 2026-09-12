@@ -15,7 +15,7 @@ import clients.otel as otel
 from handlers import task_complete
 from repo import asana_webhooks as repo_webhooks
 from repo import due_digest as repo_due_digest
-from services import managed_projects, task_index
+from services import managed_projects, task_index, webhook_registry
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +53,43 @@ def _secret_for(project_gid: str) -> str | None:
     return secret
 
 
-def handshake(hook_secret: str, project_gid: str | None = None) -> tuple:
+def handshake(hook_secret: str, project_gid: str | None = None, token: str | None = None) -> tuple:
     """Echo X-Hook-Secret, storing it against the project that is registering.
 
     Without a project this is the legacy single-webhook path (D7): the secret
-    is logged so the runbook can put it in Secret Manager by hand."""
+    is logged so the runbook can put it in Secret Manager by hand.
+
+    With a project, the request is authenticated before anything is written.
+    The CF is publicly invokable, so an unauthenticated handshake would let
+    anyone POST a chosen X-Hook-Secret for any project gid and then sign their
+    own forged deliveries with it. Two independent checks, both before the
+    database:
+
+    1. `token` — the `t` parameter of the target URL, an HMAC of the project
+       gid that only we and Asana (which got the target from us) can produce.
+    2. The project must be in ASANA_MANAGED_PROJECTS. We never register a
+       target for anything else, so a handshake for an unmanaged project is
+       not ours whatever its token says.
+
+    Both reject with 401 rather than 400: the request is well-formed, it
+    simply fails to prove it came from a registration we initiated — an
+    authentication failure, not a malformed one."""
     if not project_gid:
         logger.info("Asana webhook handshake — X-Hook-Secret: %s", hook_secret)
         return "", 200, {"X-Hook-Secret": hook_secret}
+    if not webhook_registry.token_valid(project_gid, token):
+        otel.webhook_auth_failures.add(1, {"reason": "bad_target_token"})
+        logger.warning(
+            "Webhook handshake for project %s carried no valid target token — rejecting",
+            project_gid,
+        )
+        return "", 401
+    if project_gid not in managed_projects.gids():
+        otel.webhook_auth_failures.add(1, {"reason": "unknown_project"})
+        logger.warning(
+            "Webhook handshake for unmanaged project %s — rejecting, nothing stored", project_gid
+        )
+        return "", 401
     try:
         with get_conn() as conn:
             repo_webhooks.upsert_secret(conn, project_gid, hook_secret)
@@ -76,11 +105,17 @@ def handshake(hook_secret: str, project_gid: str | None = None) -> tuple:
 
 def signature_valid(body: bytes, signature: str, project_gid: str | None = None) -> bool:
     if project_gid:
+        # Short-circuit before the database: an unmanaged project has no
+        # webhook of ours, so there is nothing to look up and no reason to let
+        # an arbitrary gid drive a query.
+        if project_gid not in managed_projects.gids():
+            otel.webhook_auth_failures.add(1, {"reason": "unknown_project"})
+            logger.warning("Webhook delivery for unmanaged project %s — rejecting", project_gid)
+            return False
         secret = _secret_for(project_gid)
         if not secret:
-            reason = "no_secret" if project_gid in managed_projects.gids() else "unknown_project"
-            otel.webhook_auth_failures.add(1, {"reason": reason})
-            logger.warning("No webhook secret for project %s (%s)", project_gid, reason)
+            otel.webhook_auth_failures.add(1, {"reason": "no_secret"})
+            logger.warning("No webhook secret for project %s (no_secret)", project_gid)
             return False
     else:
         secret = os.environ.get("ASANA_WEBHOOK_SECRET", "")

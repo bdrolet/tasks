@@ -5,14 +5,22 @@ import json
 import pytest
 
 from handlers import asana_webhook
+from services import managed_projects, webhook_registry
 from tests.test_repo import FakeConn
 
 SECRET = "whsec"
+ESCALATE_TOKEN = "escalate-bearer"
+MANAGED_PROJECT = "p-family"
 
 
 @pytest.fixture(autouse=True)
 def secret_env(monkeypatch):
     monkeypatch.setenv("ASANA_WEBHOOK_SECRET", SECRET)
+    # The key behind the target URL's `t` token (services/webhook_registry).
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", ESCALATE_TOKEN)
+    monkeypatch.setenv(
+        managed_projects.ENV_VAR, json.dumps({MANAGED_PROJECT: {"done": "sec-done"}})
+    )
 
 
 def _signed(events):
@@ -303,7 +311,8 @@ def test_db_outage_with_a_cold_cache_rejects_rather_than_raises(monkeypatch):
 def test_handshake_stores_the_secret_for_a_project(monkeypatch):
     conn = FakeConn()
     monkeypatch.setattr(asana_webhook, "get_conn", lambda: conn)
-    body, status, headers = asana_webhook.handshake("shh", "p-family")
+    token = webhook_registry.project_token(MANAGED_PROJECT)
+    body, status, headers = asana_webhook.handshake("shh", MANAGED_PROJECT, token)
     assert status == 200
     assert headers["X-Hook-Secret"] == "shh"
     assert any("INSERT INTO asana_webhooks" in q for q, _ in conn.executed)
@@ -319,4 +328,56 @@ def test_handshake_fails_closed_when_the_secret_cannot_be_stored(monkeypatch):
         raise RuntimeError("cloud sql unreachable")
 
     monkeypatch.setattr(asana_webhook, "get_conn", boom)
-    assert asana_webhook.handshake("shh", "p-family") == ("", 500)
+    token = webhook_registry.project_token(MANAGED_PROJECT)
+    assert asana_webhook.handshake("shh", MANAGED_PROJECT, token) == ("", 500)
+
+
+def test_handshake_without_a_target_token_is_rejected_and_writes_nothing(monkeypatch):
+    """The attack: POST /?project=<real gid> with an X-Hook-Secret of the
+    attacker's choosing. Without the target's `t` it never reaches the DB."""
+    conn = FakeConn()
+    monkeypatch.setattr(asana_webhook, "get_conn", lambda: conn)
+    assert asana_webhook.handshake("attacker-chosen", MANAGED_PROJECT) == ("", 401)
+    assert conn.executed == []
+
+
+def test_handshake_with_a_forged_target_token_is_rejected_and_writes_nothing(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(asana_webhook, "get_conn", lambda: conn)
+    assert asana_webhook.handshake("attacker-chosen", MANAGED_PROJECT, "deadbeef") == ("", 401)
+    assert conn.executed == []
+
+
+def test_a_token_minted_with_another_key_is_rejected(monkeypatch):
+    """The token is only as good as ASANA_ESCALATE_TOKEN, which the attacker
+    does not have."""
+    conn = FakeConn()
+    monkeypatch.setattr(asana_webhook, "get_conn", lambda: conn)
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "some-other-key")
+    forged = webhook_registry.project_token(MANAGED_PROJECT)
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", ESCALATE_TOKEN)
+    assert asana_webhook.handshake("attacker-chosen", MANAGED_PROJECT, forged) == ("", 401)
+    assert conn.executed == []
+
+
+def test_handshake_for_an_unmanaged_project_is_rejected_and_writes_nothing(monkeypatch):
+    """Even with a valid token: we never register a target for a project that
+    is not in the managed map."""
+    conn = FakeConn()
+    monkeypatch.setattr(asana_webhook, "get_conn", lambda: conn)
+    token = webhook_registry.project_token("p-stranger")
+    assert asana_webhook.handshake("shh", "p-stranger", token) == ("", 401)
+    assert conn.executed == []
+
+
+def test_a_delivery_for_an_unmanaged_project_never_reaches_the_database(monkeypatch):
+    _capture(monkeypatch)
+
+    def no_db():
+        raise AssertionError("unmanaged project must not open a connection")
+
+    monkeypatch.setattr(asana_webhook, "get_conn", no_db)
+    body, sig = _signed_with(
+        PROJECT_SECRET, [{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}]
+    )
+    assert asana_webhook.receive(body, sig, "p-stranger") == ("", 401)
