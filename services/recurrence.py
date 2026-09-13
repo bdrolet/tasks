@@ -162,10 +162,13 @@ def spawn_next(
     if parent_gid:
         fields["parent"] = parent_gid
     else:
+        # The walrus target must not be `gid`: PEP 572 binds it in the
+        # enclosing function scope, which would clobber the task gid this
+        # function still needs for the tag strip and the forward link below.
         source_projects = [
-            gid
+            project
             for m in (detail.get("memberships") or task.get("memberships") or [])
-            if (gid := (m.get("project") or {}).get("gid"))
+            if (project := (m.get("project") or {}).get("gid"))
         ]
         if source_projects:
             fields["projects"] = source_projects
