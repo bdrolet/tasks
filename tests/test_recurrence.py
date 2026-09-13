@@ -324,3 +324,36 @@ def test_subtask_successor_goes_under_the_same_parent(monkeypatch):
     assert captured["parent"] == "parent-1"
     assert "projects" not in captured
     assert sectioned == []
+
+
+def test_follow_ups_target_the_task_not_one_of_its_projects(monkeypatch):
+    """Regression: the memberships comprehension used a walrus named `gid`, and
+    PEP 572 binds that in the enclosing function scope — clobbering the task gid
+    `spawn_next` still needed. The tag strip and forward link were POSTed against
+    the last project gid instead of the completed task; Asana answered 400 and
+    `_try` swallowed both. Stubs here must capture their arguments: stubbing with
+    `lambda *a: None` is what let this reach production."""
+    monkeypatch.setattr(asana, "find_task_by_external", lambda e: None)
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "p-ben")
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: SimpleNamespace(gid="new", permalink_url="https://asana/new"),
+    )
+    removed: list[tuple] = []
+    story_targets: list[str] = []
+    monkeypatch.setattr(asana, "remove_tag", lambda t, g: removed.append((t, g)))
+    monkeypatch.setattr(asana, "create_story", lambda gid, **kw: story_targets.append(gid) or {})
+    monkeypatch.setattr(recurrence.task_index, "refresh", lambda gid: None)
+
+    task = {"gid": "task-old", "name": "Renew", "completed_at": "2026-09-08T12:00:00.000Z"}
+    detail = {
+        "name": "Renew",
+        # More than one membership is what made the rebind visible.
+        "memberships": [{"project": {"gid": "p-family"}}, {"project": {"gid": "p-ben"}}],
+    }
+
+    recurrence.spawn_next(task, detail, None, ("tag1", relativedelta(months=3)), "p-family")
+
+    assert removed == [("task-old", "tag1")]
+    assert story_targets == ["task-old"]

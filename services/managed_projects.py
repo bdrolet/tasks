@@ -85,7 +85,9 @@ def project_of(task: dict) -> str | None:
        managed project and not in the default one has no Done section
        configured either way."""
     project_gids = [
-        gid for m in task.get("memberships") or [] if (gid := (m.get("project") or {}).get("gid"))
+        project
+        for m in task.get("memberships") or []
+        if (project := (m.get("project") or {}).get("gid"))
     ]
     if not project_gids:
         return None
