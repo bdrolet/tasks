@@ -244,6 +244,16 @@ resource "google_cloudfunctions2_function" "tasks_webhook" {
       version    = "latest"
     }
 
+    # The due-day digest runs here and condenses each task into 2-3 bullets with
+    # Haiku (services/task_bullets.py). Without this the condensing raises and
+    # falls back to unsummarized text on every rebuild.
+    secret_environment_variables {
+      key        = "ANTHROPIC_API_KEY"
+      project_id = var.project_id
+      secret     = google_secret_manager_secret.tasks_anthropic_api_key.secret_id
+      version    = "latest"
+    }
+
     # Injected only after the second-pass apply (webhook registration done,
     # var.asana_webhook_secret set in tfvars / GH secret).
     dynamic "secret_environment_variables" {

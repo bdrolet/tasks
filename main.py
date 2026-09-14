@@ -15,7 +15,7 @@ main.py grows only when a new trigger is added.
 Both deploy from this repo root with different entry points (same pattern as
 inbox's process/sweep). Required env vars:
   ASANA_API_KEY / ASANA_PROJECT_ID           — Asana REST auth + target project
-  ANTHROPIC_API_KEY                          — enrichment (summary, deadline)
+  ANTHROPIC_API_KEY                          — enrichment (events CF) + digest bullets (webhook CF)
   ASANA_SECTION_{REVIEW,RESPOND,URGENT,DONE,OVERDUE}_GID — section mapping
   ASANA_WEBHOOK_SECRET                       — HMAC key for the legacy single-project webhook (webhook CF)
   ASANA_MANAGED_PROJECTS                     — {project gid: {done: section gid}} — managed set + Done mapping
