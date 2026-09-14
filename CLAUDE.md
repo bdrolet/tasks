@@ -13,7 +13,7 @@ stays in inbox; task-serving work lives here.
 |---|---|
 | **GCP project** | `bens-project-462804`, `us-central1` |
 | **Events CF** | `tasks-events` — Pub/Sub trigger on the inbox-owned `email-events` topic, entry point `process` in `main.py` |
-| **Enrichment** | Claude via `clients/claude.py` (Haiku summary, Sonnet deadline extraction) — `ANTHROPIC_API_KEY` |
+| **Enrichment** | Claude via `clients/claude.py` (Haiku summary, Sonnet deadline extraction) — `ANTHROPIC_API_KEY`, mounted on **both** CFs: the events CF enriches, the webhook CF condenses digest bullets |
 | **Embeddings** | Vertex AI `gemini-embedding-001` via `clients/vertex.py` (IAM auth — no key/secret; `VERTEX_*` env vars with in-code defaults). Corpus in `task_index`, maintained by `services/task_index.py::refresh` from pipeline/API/webhook write paths; seed/heal with `scripts/backfill_embeddings.py`. `POST /search` `semantic: true` ranks by cosine nearest-neighbor, falls back to substring on Vertex outage |
 | **Webhook CF** | `tasks-webhook` — HTTP public, entry point `webhook` in `main.py` (same source zip) |
 | **API** | `tasks-api` — Cloud Run FastAPI service (`api/`), search/fetch/add/update for tasks + comments; list/create projects, list tags, subtasks; bearer auth via `tasks-api-token`; image in AR repo `tasks`, deployed by `deploy-api.yml`; `tasks-api.drolet.cloud` |

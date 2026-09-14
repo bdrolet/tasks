@@ -24,11 +24,21 @@ resource "google_secret_manager_secret_iam_member" "events_cf_db_password" {
   member    = "serviceAccount:${google_service_account.tasks_events_cf.email}"
 }
 
-# Enrichment runs only in the events CF — the webhook CF gets no Anthropic access.
+# Both CFs call Claude: the events CF for enrichment (summary, deadline), the
+# webhook CF for the due-day digest's Haiku-condensed bullets. The digest moved
+# onto the webhook CF after this grant was first written, and without the key
+# every rebuild fell back to unsummarized bullets — silently, because
+# services/task_bullets.py treats a Claude failure as a fallback, not an error.
 resource "google_secret_manager_secret_iam_member" "events_cf_anthropic" {
   secret_id = google_secret_manager_secret.tasks_anthropic_api_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.tasks_events_cf.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "webhook_cf_anthropic" {
+  secret_id = google_secret_manager_secret.tasks_anthropic_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_webhook_cf.email}"
 }
 
 resource "google_project_iam_member" "events_cf_cloudsql" {
