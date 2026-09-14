@@ -547,3 +547,17 @@ def test_list_webhooks_paginates_by_workspace(monkeypatch):
     assert asana.list_webhooks() == [{"gid": "w1", "target": "https://cf/?project=p1"}]
     assert captured["params"]["workspace"] == "ws1"
     assert "target" in captured["params"]["opt_fields"]
+
+
+def test_get_task_returns_none_for_a_deleted_task(monkeypatch):
+    """A 404 must not raise: webhook deliveries retry for 24h, so a completion
+    event routinely arrives after its task was deleted. Mirrors get_task_detail."""
+
+    class Resp:
+        status_code = 404
+
+        def raise_for_status(self):
+            raise AssertionError("must not raise on 404")
+
+    monkeypatch.setattr(asana, "_request", lambda *a, **k: Resp())
+    assert asana.get_task("gone") is None

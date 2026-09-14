@@ -257,3 +257,23 @@ def test_a_multi_homed_task_under_an_empty_map_still_moves_to_the_default_done(m
     task_complete.handle("42")
     assert moves == [("42", "sec-done")]
     assert sectioned_against == ["p-ben"]
+
+
+def test_a_deleted_task_does_not_wedge_the_webhook(monkeypatch):
+    """Regression: `get_task` raised on 404, so a completion event for a task
+    that had since been deleted propagated out of `receive`, 500'd the delivery,
+    and Asana redelivered the same batch hourly — wedging that project's entire
+    event stream until Asana deleted the webhook at 24h. Observed in production:
+    one deleted task blocked the Family webhook for over a day."""
+    monkeypatch.setattr(asana, "get_task", lambda gid: None)
+    moves = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moves.append((t, s)))
+
+    def unexpected(*a, **k):
+        raise AssertionError("must not touch the DB or Asana for a task that is gone")
+
+    monkeypatch.setattr(task_complete, "get_conn", unexpected)
+
+    task_complete.handle("gone")  # must not raise
+
+    assert moves == []

@@ -36,6 +36,9 @@ def handle(event: LabelAppliedEvent) -> None:
         return
 
     task = asana.get_task(task_gid)
+    if task is None:
+        logger.info("Task %s no longer exists — label event has nothing to act on", task_gid)
+        return
     current = asana.current_section(task)
     if current and current["gid"] == section_gid:
         logger.info("Task %s already in %s — no move needed", task_gid, current["name"])

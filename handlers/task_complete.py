@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 def handle(task_gid: str) -> None:
     # Asana fires "changed/completed" on both complete AND un-complete — verify.
     task = asana.get_task(task_gid)
+    if task is None:
+        logger.info("Task %s no longer exists — completion event has nothing to act on", task_gid)
+        return
     if not task.get("completed"):
         try:
             with get_conn() as conn:
