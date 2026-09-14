@@ -79,3 +79,19 @@ def test_unmapped_label_is_a_noop(monkeypatch):
 
     label_applied.handle(make_event(label="ignore"))
     assert moves == []
+
+
+def test_a_deleted_task_does_not_wedge_the_webhook(monkeypatch):
+    """Same 404 hazard as the completion path: a label event for a task Asana no
+    longer has must not raise out of the handler."""
+    monkeypatch.setattr(asana, "get_task", lambda gid: None)
+    moved = []
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: moved.append((t, s)))
+    monkeypatch.setattr(label_applied, "_resolve_task_gid", lambda event: "gone")
+    monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
+
+    label_applied.handle(
+        {"event": "label_applied", "message_id": "m1", "label": "review", "task_gid": "gone"}
+    )
+
+    assert moved == []

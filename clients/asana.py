@@ -191,7 +191,13 @@ def get_sections(project_gid: str | None = None) -> list[dict]:
     return [{"gid": s["gid"], "name": s["name"]} for s in resp.json()["data"]]
 
 
-def get_task(task_gid: str) -> dict:
+def get_task(task_gid: str) -> dict | None:
+    """The task, or None when Asana no longer has it.
+
+    A 404 is not an error here: webhook deliveries are retried for 24 hours, so
+    a completion event routinely arrives after the task was deleted. Raising
+    would 500 the delivery, and Asana would redeliver the same batch forever —
+    wedging that project's whole event stream behind one dead task."""
     resp = _request(
         "GET",
         f"/tasks/{task_gid}",
@@ -201,6 +207,8 @@ def get_task(task_gid: str) -> dict:
             "memberships.section.gid,memberships.section.name,memberships.project.gid"
         },
     )
+    if resp.status_code == 404:
+        return None
     resp.raise_for_status()
     return resp.json()["data"]
 
