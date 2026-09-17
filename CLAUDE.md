@@ -236,12 +236,12 @@ CF URL changes): `docs/asana-webhook-setup.md`.
 
 The Asana consumer skills (`searching-tasks`, `fetching-task`,
 `editing-tasks`, `creating-tasks`, `planning-project-tasks`) and the
-`task-builder` / `task-lister` / `task-commenter` agents live in
-`.claude/skills/` / `.claude/agents/` and are symlinked into `~/.claude/`
-by `scripts/link-skills.sh` (per-skill
+`task-builder` / `task-lister` / `task-commenter` / `task-launcher` agents
+live in `.claude/skills/` / `.claude/agents/` and are symlinked into
+`~/.claude/` by `scripts/link-skills.sh` (per-skill
 symlinks — never the parent directory; run once per machine). That script
 also puts `scripts/task_ref.py` on PATH as `task-ref`, which every task
-listing pipes through.
+listing pipes through, and `scripts/task_sessions.py` as `task-sessions`.
 
 **Standing dispatch request** — treat this as the user asking for these
 agents by name, so the Opus 5 default of not dispatching agents unprompted
@@ -253,10 +253,29 @@ does not apply here:
   goes to the `task-builder` agent.
 - A request to **comment** on an existing task ("note on that task that X")
   goes to the `task-commenter` agent.
+- A request to **open a session** on a task ("give me a session for that",
+  "open sessions for everything due today") goes to the `task-launcher`
+  agent.
 
 Use the underlying skills directly when agent dispatch is unavailable, or for
 a single trivial lookup. Both paths must produce the same ref-first listing
 format — that's the point of keeping them in sync.
+
+## Per-task sessions
+
+`scripts/task_sessions.py` (on PATH as `task-sessions`) gives each task its own
+background Claude Code session, preloaded with that task's notes, subtasks and
+comments via `claude --bg --append-system-prompt`. No prompt is passed, so a
+spawned session idles at zero token cost until someone runs `claude attach <id>`
+— which needs a real terminal, being a full-screen TUI. Dry-run by default;
+`--spawn` launches. `--print-context <gid>` shows what a session would boot with.
+
+`claude --bg` assigns the session id itself (it warns and ignores
+`--session-id`), so the id is parsed back out of its output. `~/.claude/task-sessions.json`
+maps GID → session id and is reconciled against `claude agents --json --all` on
+every run: a task whose session is still listed is skipped as `already open`, and
+`claude rm` is what frees it — `stop` leaves the session listed. The map only
+knows sessions the script spawned, so a hand-made one doesn't prevent a duplicate.
 
 **Task refs** — listings label each row with a three-character base36 ref
 hashed from the GID (`scripts/task_ref.py`), stable across listings with

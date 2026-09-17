@@ -22,7 +22,7 @@ for skill in searching-tasks fetching-task editing-tasks creating-tasks planning
 done
 
 mkdir -p "$HOME/.claude/agents"
-for agent in task-builder task-lister task-commenter; do
+for agent in task-builder task-lister task-commenter task-launcher; do
   AGENT_DEST="$HOME/.claude/agents/$agent.md"
   if [[ -e "$AGENT_DEST" && ! -L "$AGENT_DEST" ]]; then
     echo "error: $AGENT_DEST exists and is not a symlink — remove the old copy first" >&2
@@ -43,6 +43,16 @@ if [[ -e "$BIN_DEST/task-ref" && ! -L "$BIN_DEST/task-ref" ]]; then
 fi
 ln -sfn "$REPO_ROOT/scripts/task_ref.py" "$BIN_DEST/task-ref"
 echo "linked $BIN_DEST/task-ref -> $(readlink "$BIN_DEST/task-ref")"
+
+# task_sessions.py onto PATH as `task-sessions` — one background Claude
+# session per task. Imports task_ref from its own directory, so it has to be
+# symlinked (not copied) to keep that sibling resolvable.
+if [[ -e "$BIN_DEST/task-sessions" && ! -L "$BIN_DEST/task-sessions" ]]; then
+  echo "error: $BIN_DEST/task-sessions exists and is not a symlink — remove the old copy first" >&2
+  exit 1
+fi
+ln -sfn "$REPO_ROOT/scripts/task_sessions.py" "$BIN_DEST/task-sessions"
+echo "linked $BIN_DEST/task-sessions -> $(readlink "$BIN_DEST/task-sessions")"
 case ":$PATH:" in
   *":$BIN_DEST:"*) ;;
   *) echo "warning: $BIN_DEST is not on PATH — task listings will fail to find task-ref" >&2 ;;
