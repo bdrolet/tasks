@@ -129,11 +129,12 @@ Group by date bucket when the request is date-shaped (**Overdue** / **Due today*
 **Due later** / **No due date**); otherwise a flat list, in the order the API returned —
 for semantic searches that order is relevance, so keep it.
 
-One line per task, ref first, with the summary under it:
+Three lines per task — ref and GID first, then the task, then the summary:
 
 ```
-<ref> · <due_on or "—"> · [<name>](<permalink_url>) · <project>/<section>
-      <summary>
+<ref> · <gid> · <due_on or "—">
+  [<name>](<permalink_url>) · <project>/<section>
+  <summary>
 ```
 
 - **Summary line** — the result's `summary` (the `task-ref` TSV's last column), verbatim.
@@ -145,7 +146,10 @@ One line per task, ref first, with the summary under it:
   in the project slot.
 - Completed hits (only when `completed` was `true` or `null`): mark `✓`.
 - Surface `score` only if the dispatch asked why something matched.
-- No GIDs in the list itself — they go in the map below.
+- **GID** — on the ref line, verbatim from the `task-ref` TSV's `gid` column. Never
+  retype one from a permalink or from memory; a wrong digit points a write at the
+  wrong task. The closing map repeats them — that is deliberate, since
+  `fetching-task` and `editing-tasks` both resolve refs through it.
 
 Then one line: the count, the filters behind it, and any assumption you made —
 `7 open tasks due on or before 2026-08-12 (all projects); "this week" read as through Sunday 08-16.`
