@@ -90,6 +90,9 @@ resource "google_cloud_run_v2_service" "api" {
   name     = "tasks-api"
   location = var.region
 
+  # Service-to-service callers mint ID tokens for the hostname they call.
+  custom_audiences = ["https://tasks-api.drolet.cloud"]
+
   template {
     service_account = google_service_account.tasks_api.email
     timeout         = "60s"
@@ -141,15 +144,6 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
       env {
-        name = "TASKS_API_TOKEN"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.tasks_api_token.secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
         name = "POSTGRES_PASSWORD"
         value_source {
           secret_key_ref {
@@ -187,13 +181,24 @@ resource "google_cloud_run_v2_service" "api" {
   depends_on = [google_artifact_registry_repository.tasks]
 }
 
-# Public — bearer-token auth enforced in app code (api/auth.py)
-resource "google_cloud_run_v2_service_iam_member" "api_public" {
+# Callers of tasks-api. Cloud Run IAM is the only authentication: there is no
+# app-level token. Only the laptop and the deploy smoke test call it.
+resource "google_cloud_run_v2_service_iam_member" "api_invoker_users" {
+  for_each = toset(var.api_invoker_users)
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.api.name
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = "user:${each.value}"
+}
+
+# deploy-api.yml's smoke test calls the deployed service as the deployer SA.
+resource "google_cloud_run_v2_service_iam_member" "api_invoker_deployer" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.api.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.deployer_sa}"
 }
 
 resource "google_artifact_registry_repository_iam_member" "deployer_ar_writer" {
