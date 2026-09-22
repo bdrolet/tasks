@@ -237,13 +237,6 @@ resource "google_cloudfunctions2_function" "tasks_webhook" {
       version    = "latest"
     }
 
-    secret_environment_variables {
-      key        = "SCHEDULE_API_TOKEN"
-      project_id = var.project_id
-      secret     = data.google_secret_manager_secret.shared["schedule-api-token"].secret_id
-      version    = "latest"
-    }
-
     # The due-day digest runs here and condenses each task into 2-3 bullets with
     # Haiku (services/task_bullets.py). Without this the condensing raises and
     # falls back to unsummarized text on every rebuild.

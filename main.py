@@ -23,7 +23,7 @@ inbox's process/sweep). Required env vars:
   WEBHOOK_URL / WEBHOOK_LABEL_TOKEN          — inbox webhook CF, for task action links
   CLOUD_SQL_CONNECTION_NAME / POSTGRES_*     — tasks database
   GRAFANA_OTLP_ENDPOINT / GRAFANA_OTLP_TOKEN — OTel export (optional)
-  SCHEDULE_API_URL / SCHEDULE_API_TOKEN      — schedule-api, for the due-day digest
+  SCHEDULE_API_URL                           — schedule-api, for the due-day digest (Google ID token via clients/gcp_auth.py)
   ASANA_PROJECT_CALENDARS / CALENDAR_SHARED_ID — digest routing (project map, cheryl tag)
 """
 

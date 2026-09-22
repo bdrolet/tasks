@@ -9,7 +9,7 @@ import clients.schedule_api as sapi
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     monkeypatch.setenv("SCHEDULE_API_URL", "https://sched.example")
-    monkeypatch.setenv("SCHEDULE_API_TOKEN", "tok")
+    monkeypatch.setattr(sapi.gcp_auth, "id_token_for", lambda aud: f"tok-for-{aud}")
 
 
 def _mock(monkeypatch, handler):
@@ -33,7 +33,10 @@ def test_create_event_posts_all_day_transparent(monkeypatch):
         calendar="primary", day="2026-09-10", title="1 task due", sections=[{"title": "T"}]
     )
     assert out["event_id"] == "e1"
-    assert seen["url"] == "https://sched.example/events" and seen["auth"] == "Bearer tok"
+    assert (
+        seen["url"] == "https://sched.example/events"
+        and seen["auth"] == "Bearer tok-for-https://sched.example"
+    )
     payload = json.loads(seen["json"])
     assert payload == {
         "calendar": "primary",
