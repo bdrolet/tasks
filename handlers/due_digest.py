@@ -267,8 +267,8 @@ def run(*, force: bool = False) -> dict:
     if not should_rebuild(state, now, force):
         otel.digest_rebuilds.add(1, {"outcome": "skipped"})
         return {"outcome": "skipped"}
-    if not (os.environ.get("SCHEDULE_API_URL") and os.environ.get("SCHEDULE_API_TOKEN")):
-        logger.error("SCHEDULE_API_URL / SCHEDULE_API_TOKEN unset — digest cannot run")
+    if not os.environ.get("SCHEDULE_API_URL"):
+        logger.error("SCHEDULE_API_URL unset — digest cannot run")
         otel.digest_rebuilds.add(1, {"outcome": "error"})
         return {"outcome": "error"}
 

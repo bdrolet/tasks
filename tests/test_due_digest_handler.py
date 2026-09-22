@@ -100,7 +100,6 @@ def test_project_calendars_unset_or_malformed_yields_no_rules(monkeypatch, raw):
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("SCHEDULE_API_URL", "https://s")
-    monkeypatch.setenv("SCHEDULE_API_TOKEN", "t")
     monkeypatch.setenv(
         "ASANA_PROJECT_CALENDARS",
         json.dumps(

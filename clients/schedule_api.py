@@ -10,6 +10,8 @@ from datetime import date, timedelta
 
 import httpx
 
+from clients import gcp_auth
+
 TIMEOUT = 30
 
 
@@ -26,7 +28,10 @@ def _url(path: str) -> str:
 
 
 def _headers() -> dict:
-    return {"Authorization": f"Bearer {os.environ.get('SCHEDULE_API_TOKEN', '')}"}
+    # schedule-api is behind Cloud Run IAM; the audience is the base URL we call.
+    return {
+        "Authorization": f"Bearer {gcp_auth.id_token_for(os.environ.get('SCHEDULE_API_URL', ''))}"
+    }
 
 
 def create_event(*, calendar: str, day: str, title: str, sections: list[dict]) -> dict:
