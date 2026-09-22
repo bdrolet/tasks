@@ -76,7 +76,7 @@ variable "inbox_webhook_url" {
 }
 
 variable "inbox_api_url" {
-  description = "inbox-api Cloud Run URL (mailbox gateway) — gcloud run services describe inbox-api --region us-central1 --format='value(status.url)'"
+  description = "inbox-api base URL and ID-token audience (clients/inbox_api.py) — must be https://inbox-api.drolet.cloud, one of inbox-api's custom_audiences"
   type        = string
   default     = ""
 }
@@ -121,4 +121,10 @@ variable "cheryl_emails" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "api_invoker_users" {
+  description = "Google accounts granted roles/run.invoker on tasks-api (laptop skills, scripts)"
+  type        = list(string)
+  default     = ["ben@drolet.cloud"]
 }
