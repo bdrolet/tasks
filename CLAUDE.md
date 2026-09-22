@@ -205,19 +205,18 @@ deletes and re-registers every webhook (see its module docstring).
 ## Secrets
 
 Shared secrets (`asana-api-key`, `grafana-otlp-endpoint`,
-`grafana-otlp-token`, `webhook-label-token`, `search-token`) are **owned by inbox terraform**
+`grafana-otlp-token`, `webhook-label-token`) are **owned by inbox terraform**
 — referenced as data sources in `terraform/secrets.tf`; never create them
 here. (Ownership moves to a platform state in `~/src/infra` eventually — see
 `/Users/ben/.claude/plans/infra-platform-migration.md`.) `asana-webhook-secret`,
-`tasks-db-password`, `tasks-anthropic-api-key`, `tasks-escalate-token`, and
-`tasks-api-token` are owned here — the Anthropic key is **dedicated to this
+`tasks-db-password`, `tasks-anthropic-api-key`, and `tasks-escalate-token`
+are owned here — the Anthropic key is **dedicated to this
 service** (Console key name `tasks-cf`), deliberately separate from inbox's
 `anthropic-api-key` for independent spend tracking and rotation; the escalate
 token is the bearer credential Cloud Scheduler sends on `POST /escalate` and
 `POST /digest` (webhook CF only — IAM can't restrict that route since the CF
-must stay publicly invokable for Asana's unauthenticated webhook posts); the API token
-is the bearer credential for the tasks-api Cloud Run service — skills read it
-from `terraform.tfvars`. `ASANA_PROJECT_ID` and section GIDs are plain env
+must stay publicly invokable for Asana's unauthenticated webhook posts).
+`ASANA_PROJECT_ID` and section GIDs are plain env
 vars, not secrets. Per-project webhook secrets (one `X-Hook-Secret` per
 `ASANA_MANAGED_PROJECTS` entry, minted by Asana at registration and never
 suppliable by the caller) live in the `asana_webhooks` table, deliberately

@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # tasks-api — Cloud Run FastAPI service (search / fetch / add / update tasks)
 # Mirrors inbox-api (inbox repo terraform/api.tf). Public with app-level
-# bearer auth; the token lives in the tasks-api-token secret owned here.
+# Cloud Run IAM authenticates callers; there is no app-level token.
 # ---------------------------------------------------------------------------
 
 resource "google_artifact_registry_repository" "tasks" {
@@ -36,19 +36,6 @@ locals {
   api_image = "${var.region}-docker.pkg.dev/${var.project_id}/tasks/tasks-api:latest"
 }
 
-resource "google_secret_manager_secret" "tasks_api_token" {
-  secret_id = "tasks-api-token"
-
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "tasks_api_token" {
-  secret      = google_secret_manager_secret.tasks_api_token.id
-  secret_data = var.tasks_api_token
-}
-
 resource "google_service_account" "tasks_api" {
   account_id   = "tasks-api"
   display_name = "Tasks API Cloud Run"
@@ -63,12 +50,6 @@ resource "google_secret_manager_secret_iam_member" "api_shared" {
 
 resource "google_secret_manager_secret_iam_member" "api_db_password" {
   secret_id = google_secret_manager_secret.tasks_db_password.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.tasks_api.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "api_token" {
-  secret_id = google_secret_manager_secret.tasks_api_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.tasks_api.email}"
 }
