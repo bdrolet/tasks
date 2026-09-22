@@ -10,10 +10,12 @@ import os
 from fastapi import FastAPI, Request
 
 import clients.otel as otel
+from api import caller
 
 otel.setup_telemetry(os.environ.get("K_SERVICE", "tasks-api-local"))
 
 app = FastAPI(title="tasks-api")
+caller.install(app)
 
 
 @app.middleware("http")

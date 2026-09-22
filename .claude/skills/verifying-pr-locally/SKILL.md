@@ -75,10 +75,9 @@ export DYLD_LIBRARY_PATH=/opt/homebrew/opt/libpq/lib
 - A created task's title should read as an action, e.g. `[P1] Review Q3 board
   deck` — the `[PX] {verb} {object}` standard in the "Title" section of
   `docs/task-content-standard.md`, not a raw email subject.
-- **Auth is a no-op locally** — the `.env` from `fetch-env.sh` has no
-  `TASKS_API_TOKEN`, and off Cloud Run `verify_token` allows all. So local calls
-  need no bearer. To probe auth, restart with `TASKS_API_TOKEN=probe` set and expect
-  401/401/200 for missing/wrong/correct bearer.
+- **No auth locally** — authentication is Cloud Run IAM, which is not in the
+  container, so a local server has no auth at all and requests need no header.
+  Against the deployed service, send `Authorization: Bearer $(gcloud auth print-identity-token)`.
 - Health path is `/health` (**not** `/healthz` — GFE reserves that on Cloud Run).
 - Live API for comparison: `https://tasks-api.drolet.cloud`.
 

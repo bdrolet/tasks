@@ -143,9 +143,10 @@ Cloud Functions.
 | `DELETE` | `/comments/{story_gid}` | delete a comment |
 | `GET` | `/health` | health check (no auth) |
 
-Auth: bearer token (`Authorization: Bearer <token>`) checked against the
-`tasks-api-token` secret (`terraform.tfvars` var `tasks_api_token`); unset
-`TASKS_API_TOKEN` disables the check for local dev.
+Auth: Cloud Run IAM. `roles/run.invoker` is granted to Ben's account and the
+deployer SA in `terraform/api.tf`; send
+`Authorization: Bearer $(gcloud auth print-identity-token)`. A local server
+has no auth.
 
 Search is project-enumeration based, not full-text: Asana's free tier has no
 search API (returns HTTP 402 on that plan), so `/search` lists tasks across

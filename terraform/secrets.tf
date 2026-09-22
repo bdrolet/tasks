@@ -14,7 +14,6 @@ data "google_secret_manager_secret" "shared" {
     "grafana-otlp-endpoint",
     "grafana-otlp-token",
     "webhook-label-token",
-    "search-token",     # inbox-api bearer auth (clients/inbox_api.py)
     "standing-context", # declared facts — github.com/bdrolet/context (private)
   ])
   secret_id = each.key

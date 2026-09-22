@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 import clients.asana as asana
-from api.auth import verify_token
 from api.errors import translate_asana_errors
 
 router = APIRouter()
@@ -44,7 +43,7 @@ class CreatedProjectResponse(BaseModel):
 
 
 @router.get("/projects", response_model=ProjectsResponse)
-def get_projects(_: None = Depends(verify_token)) -> ProjectsResponse:
+def get_projects() -> ProjectsResponse:
     with translate_asana_errors():
         projects = asana.list_projects()
         out = [
@@ -61,16 +60,14 @@ def get_projects(_: None = Depends(verify_token)) -> ProjectsResponse:
 
 
 @router.get("/tags", response_model=TagsResponse)
-def get_tags(_: None = Depends(verify_token)) -> TagsResponse:
+def get_tags() -> TagsResponse:
     with translate_asana_errors():
         tags = asana.list_tags()
     return TagsResponse(tags=[TagInfo(gid=t["gid"], name=t["name"]) for t in tags])
 
 
 @router.post("/projects", response_model=CreatedProjectResponse, status_code=201)
-def create_project(
-    body: CreateProjectRequest, _: None = Depends(verify_token)
-) -> CreatedProjectResponse:
+def create_project(body: CreateProjectRequest) -> CreatedProjectResponse:
     with translate_asana_errors():
         result = asana.create_project(body.name, body.sections)
     return CreatedProjectResponse(

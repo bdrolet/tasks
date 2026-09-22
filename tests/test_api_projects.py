@@ -1,4 +1,3 @@
-import pytest
 from fastapi.testclient import TestClient
 
 import clients.asana as asana
@@ -6,11 +5,6 @@ from api.main import app
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer sekrit"}
-
-
-@pytest.fixture(autouse=True)
-def token(monkeypatch):
-    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
 
 
 def test_get_projects_includes_sections(monkeypatch):
@@ -47,7 +41,3 @@ def test_create_project(monkeypatch):
     assert body["project_gid"] == "p-new"
     assert body["permalink_url"] == "https://app.asana.com/x/p-new"
     assert body["sections"] == {"Planning": "s1"}
-
-
-def test_projects_requires_auth():
-    assert client.get("/projects").status_code in (401, 403)

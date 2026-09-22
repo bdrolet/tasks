@@ -10,11 +10,6 @@ AUTH = {"Authorization": "Bearer sekrit"}
 
 
 @pytest.fixture(autouse=True)
-def token(monkeypatch):
-    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
-
-
-@pytest.fixture(autouse=True)
 def no_db(monkeypatch):
     # email_context degrades to {} when the DB is unreachable; simulate that
     # default so tests don't need Postgres. Individual tests override.
@@ -50,10 +45,6 @@ def _subtask(gid, name, parent=None, **kw):
     if parent is not None:
         task["parent"] = parent
     return task
-
-
-def test_search_requires_token():
-    assert client.post("/search", json={"query": "x"}).status_code == 401
 
 
 def test_search_workspace_wide(monkeypatch):
