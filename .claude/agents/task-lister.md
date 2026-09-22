@@ -28,7 +28,7 @@ your environment — use it. Resolve every relative date ("today", "this week", 
 ## Setup
 
 ```bash
-TOKEN=$(grep 'tasks_api_token' ~/src/tasks/terraform/terraform.tfvars | grep -o '"[^"]*"' | tr -d '"')
+TOKEN=$(gcloud auth print-identity-token)   # Cloud Run IAM; your gcloud login is the credential
 BASE=https://tasks-api.drolet.cloud
 ```
 
