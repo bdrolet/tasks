@@ -2,16 +2,23 @@
 
 This repo never talks to Microsoft Graph directly (no MSAL here, by design:
 a second writer to the shared MSAL token cache risks refresh-token
-clobbering). Anything mailbox-shaped goes through inbox-api's bearer-authed
-HTTP interface. First pipeline consumer: the triage agent's `search_emails` /
+clobbering). Anything mailbox-shaped goes through inbox-api's IAM-authenticated
+HTTP interface (Google ID token, clients/gcp_auth.py). First pipeline consumer: the triage agent's `search_emails` /
 `get_email` tools (services/triage.py)."""
 
 import os
 
 import httpx
 
+from clients import gcp_auth
+
 INBOX_API_URL = os.environ.get("INBOX_API_URL", "")
-INBOX_API_TOKEN = os.environ.get("INBOX_API_TOKEN", "")
+
+
+def _headers() -> dict:
+    # inbox-api is behind Cloud Run IAM; the audience is the base URL we call.
+    return {"Authorization": f"Bearer {gcp_auth.id_token_for(INBOX_API_URL)}"}
+
 
 # Graph search fans out across the primary mailbox plus several shared
 # mailboxes and M365 groups; 10s was observed to time out against real mail,
@@ -22,7 +29,7 @@ SEARCH_TIMEOUT = 20
 def _get(path: str) -> dict:
     resp = httpx.get(
         f"{INBOX_API_URL}{path}",
-        headers={"Authorization": f"Bearer {INBOX_API_TOKEN}"},
+        headers=_headers(),
         timeout=SEARCH_TIMEOUT,
     )
     resp.raise_for_status()
@@ -51,7 +58,7 @@ def search(
     resp = httpx.post(
         f"{INBOX_API_URL}/search",
         json=payload,
-        headers={"Authorization": f"Bearer {INBOX_API_TOKEN}"},
+        headers=_headers(),
         timeout=SEARCH_TIMEOUT,
     )
     resp.raise_for_status()

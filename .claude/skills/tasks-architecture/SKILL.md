@@ -33,7 +33,7 @@ Cloud Scheduler (6 AM ET) ──POST /escalate──▶ tasks-webhook CF ──�
 | Cloud SQL | database `tasks`, user `tasks` on instance `inbox` | instance owned by inbox terraform (platform migration pending) |
 | GCS | `bens-project-462804-tasks-cf-source` | CF source zips |
 
-Shared Secret Manager secrets (`asana-api-key`, `grafana-otlp-endpoint`, `grafana-otlp-token`, `webhook-label-token`, `search-token`) are **owned by inbox terraform** — data sources here. `asana-webhook-secret`, `tasks-db-password`, and `tasks-anthropic-api-key` (dedicated enrichment key — not inbox's) are owned here.
+Shared Secret Manager secrets (`asana-api-key`, `grafana-otlp-endpoint`, `grafana-otlp-token`, `webhook-label-token`) are **owned by inbox terraform** — data sources here. `asana-webhook-secret`, `tasks-db-password`, and `tasks-anthropic-api-key` (dedicated enrichment key — not inbox's) are owned here.
 
 ## Database
 

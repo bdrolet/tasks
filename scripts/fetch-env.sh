@@ -21,7 +21,6 @@ WEBHOOK_LABEL_TOKEN=$(secret webhook-label-token)
 GRAFANA_OTLP_ENDPOINT=$(secret grafana-otlp-endpoint)
 GRAFANA_OTLP_TOKEN=$(secret grafana-otlp-token)
 INBOX_API_URL=$(tfvar inbox_api_url)
-INBOX_API_TOKEN=$(secret search-token)
 SCHEDULE_API_URL=https://schedule-api.drolet.cloud
 ASANA_PROJECT_CALENDARS='$(tfvar_json asana_project_calendars)'
 CALENDAR_SHARED_ID=$(tfvar calendar_shared_id)

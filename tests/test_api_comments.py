@@ -1,5 +1,4 @@
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 import clients.asana as asana
@@ -7,11 +6,6 @@ from api.main import app
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer sekrit"}
-
-
-@pytest.fixture(autouse=True)
-def token(monkeypatch):
-    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
 
 
 def test_add_comment_text(monkeypatch):

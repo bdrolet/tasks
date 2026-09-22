@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import os
+import subprocess
 import sys
 
 import httpx
@@ -26,9 +27,17 @@ def main() -> int:
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
 
+    # Local server: no auth. Deployed service: Cloud Run IAM wants a Google ID
+    # token — CI passes one in API_ID_TOKEN (minted by google-github-actions/auth
+    # as the deployer SA); a laptop mints its own via gcloud.
     headers = {}
-    token = os.environ.get("TASKS_API_TOKEN")
-    if token:
+    if not args.base.startswith(("http://localhost", "http://127.0.0.1")):
+        token = (
+            os.environ.get("API_ID_TOKEN")
+            or subprocess.check_output(
+                ["gcloud", "auth", "print-identity-token"], text=True
+            ).strip()
+        )
         headers["Authorization"] = f"Bearer {token}"
     client = httpx.Client(base_url=args.base, headers=headers, timeout=60)
 

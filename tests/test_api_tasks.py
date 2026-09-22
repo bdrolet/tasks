@@ -11,7 +11,6 @@ AUTH = {"Authorization": "Bearer sekrit"}
 
 @pytest.fixture(autouse=True)
 def token(monkeypatch):
-    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
     monkeypatch.setenv("ASANA_PROJECT_ID", "p-email")
 
 

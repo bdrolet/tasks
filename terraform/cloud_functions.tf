@@ -158,12 +158,6 @@ resource "google_cloudfunctions2_function" "tasks_events" {
       secret     = google_secret_manager_secret.tasks_anthropic_api_key.secret_id
       version    = "latest"
     }
-    secret_environment_variables {
-      key        = "INBOX_API_TOKEN"
-      project_id = var.project_id
-      secret     = data.google_secret_manager_secret.shared["search-token"].secret_id
-      version    = "latest"
-    }
   }
 
   event_trigger {

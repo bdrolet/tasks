@@ -22,7 +22,7 @@ hosts fetch and edit endpoints — see [[fetching-task]] and [[editing-tasks]].
 ## Auth token
 
 ```bash
-TOKEN=$(grep 'tasks_api_token' ~/src/tasks/terraform/terraform.tfvars | grep -o '"[^"]*"' | tr -d '"')
+TOKEN=$(gcloud auth print-identity-token)   # Cloud Run IAM; your gcloud login is the credential
 ```
 
 ## Request

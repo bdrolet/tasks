@@ -13,52 +13,6 @@ def test_health_returns_ok():
     assert resp.json() == {"status": "ok"}
 
 
-def test_verify_token_noop_when_env_unset(monkeypatch):
-    from api.auth import verify_token
-
-    monkeypatch.delenv("K_SERVICE", raising=False)
-    monkeypatch.delenv("TASKS_API_TOKEN", raising=False)
-    assert verify_token(None) is None  # no exception
-
-
-def test_verify_token_rejects_missing_and_wrong(monkeypatch):
-    from api.auth import verify_token
-
-    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
-    with pytest.raises(HTTPException) as exc:
-        verify_token(None)
-    assert exc.value.status_code == 401
-
-
-def test_verify_token_fails_closed_when_k_service_set_and_token_unset(monkeypatch):
-    from api.auth import verify_token
-
-    monkeypatch.setenv("K_SERVICE", "tasks-api")
-    monkeypatch.delenv("TASKS_API_TOKEN", raising=False)
-    with pytest.raises(HTTPException) as exc:
-        verify_token(None)
-    assert exc.value.status_code == 503
-
-
-def test_verify_token_noop_when_k_service_unset_and_token_unset(monkeypatch):
-    from api.auth import verify_token
-
-    monkeypatch.delenv("K_SERVICE", raising=False)
-    monkeypatch.delenv("TASKS_API_TOKEN", raising=False)
-    assert verify_token(None) is None
-
-
-def test_verify_token_allows_correct_token_when_k_service_set(monkeypatch):
-    from fastapi.security import HTTPAuthorizationCredentials
-
-    from api.auth import verify_token
-
-    monkeypatch.setenv("K_SERVICE", "tasks-api")
-    monkeypatch.setenv("TASKS_API_TOKEN", "sekrit")
-    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="sekrit")
-    assert verify_token(creds) is None
-
-
 def test_unmatched_route_metric_uses_bounded_label(monkeypatch):
     import api.main as main_mod
 

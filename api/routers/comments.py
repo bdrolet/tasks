@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import clients.asana as asana
-from api.auth import verify_token
 from api.errors import translate_asana_errors
 from api.routers.tasks import wrap_html_body
 
@@ -23,7 +22,7 @@ def _validated(body: CommentBody) -> CommentBody:
 
 
 @router.post("/tasks/{gid}/comments", status_code=201)
-def add_comment(gid: str, body: CommentBody, _: None = Depends(verify_token)) -> dict:
+def add_comment(gid: str, body: CommentBody) -> dict:
     body = _validated(body)
     with translate_asana_errors():
         story = asana.create_story(gid, text=body.text, html_text=body.html_text)
@@ -31,7 +30,7 @@ def add_comment(gid: str, body: CommentBody, _: None = Depends(verify_token)) ->
 
 
 @router.put("/comments/{story_gid}")
-def edit_comment(story_gid: str, body: CommentBody, _: None = Depends(verify_token)) -> dict:
+def edit_comment(story_gid: str, body: CommentBody) -> dict:
     body = _validated(body)
     with translate_asana_errors():
         asana.update_story(story_gid, text=body.text, html_text=body.html_text)
@@ -39,7 +38,7 @@ def edit_comment(story_gid: str, body: CommentBody, _: None = Depends(verify_tok
 
 
 @router.delete("/comments/{story_gid}")
-def delete_comment(story_gid: str, _: None = Depends(verify_token)) -> dict:
+def delete_comment(story_gid: str) -> dict:
     with translate_asana_errors():
         asana.delete_story(story_gid)
     return {"status": "deleted"}

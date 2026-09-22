@@ -1,10 +1,9 @@
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 import clients.asana as asana
-from api.auth import verify_token
 from api.errors import translate_asana_errors
 from api.routers.search import email_context, membership
 from models.task_content import TaskContent
@@ -195,7 +194,7 @@ def _resolve_project_gid(ref: str | None) -> str:
 
 
 @router.get("/tasks/{gid}", response_model=TaskDetail)
-def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
+def get_task(gid: str) -> TaskDetail:
     with translate_asana_errors():
         task = asana.get_task_detail(gid)
         if task is None:
@@ -254,7 +253,7 @@ def get_task(gid: str, _: None = Depends(verify_token)) -> TaskDetail:
 
 
 @router.post("/tasks", response_model=CreatedTaskResponse, status_code=201)
-def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> CreatedTaskResponse:
+def create_task(body: CreateTaskRequest) -> CreatedTaskResponse:
     title = _title(body.name, body.priority)  # validates priority before any Asana I/O
     _validate_repeat_tags(body.tags)
     with translate_asana_errors():
@@ -291,7 +290,7 @@ def create_task(body: CreateTaskRequest, _: None = Depends(verify_token)) -> Cre
 
 
 @router.patch("/tasks/{gid}")
-def patch_task(gid: str, body: UpdateTaskRequest, _: None = Depends(verify_token)) -> dict:
+def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
     if body.priority is not None and body.name is None:
         raise HTTPException(status_code=400, detail="priority requires name in the same request")
     _validate_repeat_tags(body.add_tags)

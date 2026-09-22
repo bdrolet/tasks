@@ -1,12 +1,11 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 import clients.asana as asana
 import clients.vertex as vertex
-from api.auth import verify_token
 from api.errors import translate_asana_errors
 from clients.db import get_conn
 from repo import task_index as repo_index
@@ -150,7 +149,7 @@ def _semantic_search(body: SearchRequest) -> SearchResponse | None:
 
 
 @router.post("/search", response_model=SearchResponse)
-def search(body: SearchRequest, _: None = Depends(verify_token)) -> SearchResponse:
+def search(body: SearchRequest) -> SearchResponse:
     if body.semantic:
         if not body.query.strip():
             raise HTTPException(status_code=400, detail="semantic search requires a query")
