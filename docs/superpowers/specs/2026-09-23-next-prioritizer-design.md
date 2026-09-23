@@ -501,7 +501,7 @@ when either knob is given. Pins are never displaced by the knobs.
 
 ```json
 {"today": "…", "scored_at": "…", "total": 94,
- "tasks": [{position, rank, task_gid, ref, name, project, permalink_url, bucket,
+ "tasks": [{position, rank, task_gid, name, project, permalink_url, bucket,
             score, points, points_source, due_on, effective_due, soft,
             overcommitted, stale, stale_reason, waiting_on,
             override: {pinned_rank?, snooze_until?, fields?},
@@ -522,7 +522,7 @@ side lists.
 
 ```json
 {"today": "…", "scored_at": "…", "run_id": 123,
- "next": [{task_gid, ref, name, project, permalink_url, points, points_source,
+ "next": [{task_gid, name, project, permalink_url, points, points_source,
            due_on, effective_due, soft, score, rank, components?, reason?}],
  "overcommitted": [...], "stale": [{…, "stale_reason"}], "nudge": [{…, "waiting_on", "days_stale"}],
  "unenriched": <count>}
@@ -561,9 +561,10 @@ task-next override <ref|gid> field=value [field=…]      # field= clears
 task-next calibrate
 ```
 
-Refs are `scripts/task_ref.py` refs over the scored set; every write
-subcommand resolves a ref against the current `/ranking` response and sends
-the GID. Output is the same ref-first TSV shape `task-ref` produces, one
+Refs are `scripts/task_ref.py` refs over the scored set, computed by the
+CLI and the agent (the API never returns a ref — `task_ref.py` stays the one
+implementation); every write subcommand resolves a ref against the current
+`/ranking` response and sends the GID. Output is the same ref-first TSV shape `task-ref` produces, one
 block per list.
 
 **`task-next` agent** (`.claude/agents/task-next.md`, D12) and the
