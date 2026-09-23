@@ -88,6 +88,42 @@ def classify(*, system: str, user: str, schema: dict) -> str:
     ).strip()
 
 
+def extract_structured(
+    *,
+    model: str,
+    system: str,
+    user: str,
+    schema: dict,
+    effort: str = "low",
+    max_tokens: int = 2048,
+) -> str:
+    """Single-turn structured extraction on a current-generation model.
+    Adaptive thinking (Opus 5 runs it by default; stated explicitly so the
+    request reads the same on any 4.6+ model), effort as given, JSON schema
+    output. No `temperature`: Opus 5 / Sonnet 5 reject it.
+
+    Returns the text blocks joined (thinking blocks skipped). Raises
+    RuntimeError on `refusal` or any stop reason other than `end_turn`, so a
+    truncated or declined response never reaches json.loads as if it were
+    complete. Callers own fail-open."""
+    response = _get_client().messages.create(  # type: ignore[call-overload]
+        model=model,
+        max_tokens=max_tokens,
+        thinking={"type": "adaptive"},
+        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user}],
+    )
+    _record_usage(response)
+    if response.stop_reason != "end_turn":
+        raise RuntimeError(f"extract_structured stopped with {response.stop_reason!r}")
+    return "".join(
+        b.text  # type: ignore[union-attr]
+        for b in response.content
+        if getattr(b, "type", None) == "text"
+    ).strip()
+
+
 AGENT_MODEL = "claude-sonnet-5"
 
 
