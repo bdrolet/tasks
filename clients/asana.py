@@ -42,6 +42,8 @@ PRIORITIZE_OPT_FIELDS = (
     "custom_fields.number_value,custom_fields.date_value,"
     "dependencies.gid,dependents.gid"
 )
+# Daily heal listing (handlers/prioritize.py::heal): enough to compare against task_facts.
+HEAL_OPT_FIELDS = "modified_at,num_subtasks,completed"
 
 _workspace_gid: str | None = None
 

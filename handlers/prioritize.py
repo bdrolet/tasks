@@ -12,13 +12,14 @@ from datetime import date, datetime, timezone
 
 import clients.asana as asana
 import clients.otel as otel
+import clients.pubsub as pubsub
 from clients.db import get_conn
 from models.prioritize import Enrichment, ScoredSet, TaskFacts
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
+from services import managed_projects, prioritize_config
 from services import prioritize as pz
-from services import prioritize_config
 from services.due_digest import today_local
 
 logger = logging.getLogger(__name__)
@@ -269,5 +270,70 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
         rescore(conn, kind="event", trigger_gid=gid, today=today)
 
 
-def handle_day_changed() -> None:  # Task 9
-    raise NotImplementedError
+def settle_deferrals(conn, today: date) -> tuple[int, int]:
+    """Spec D8 step 1: yesterday's canonical offers, started or deferred.
+    Returns (deferred, started)."""
+    run = repo.last_daily_run(conn)
+    if not run or not run["top"] or run["today"] >= today:
+        return 0, 0
+    offered_day: date = run["today"]
+    facts = {f.gid: f for f in repo.list_facts(conn)}
+    deferred: list[str] = []
+    started = 0
+    for entry in run["top"]:
+        f = facts.get(entry["gid"])
+        began = f is not None and (
+            (f.started_at is not None and f.started_at >= offered_day)
+            or (f.completed_at is not None and f.completed_at.date() >= offered_day)
+        )
+        entry["started"] = bool(began)
+        if began:
+            started += 1
+        else:
+            deferred.append(entry["gid"])
+    repo.set_run_top(conn, run["run_id"], run["top"])
+    if deferred:
+        repo.bump_deferred(conn, deferred, offered_day)
+    return len(deferred), started
+
+
+def heal(conn) -> int:
+    """Spec D8 step 2: republish anything Asana knows that we do not."""
+    index = repo.list_facts_index(conn)
+    enrichment = repo.list_enrichment(conn)
+
+    def needs(gid: str, modified_at: str | None) -> bool:
+        if gid not in index:
+            return True
+        fetched_at, content_hash = index[gid]
+        modified = _ts(modified_at)
+        if modified and modified > fetched_at:
+            return True
+        stored = enrichment.get(gid)
+        return stored is None or stored[0] != content_hash
+
+    republished = 0
+    for project_gid in sorted(managed_projects.gids()):
+        for task in asana.list_project_tasks(
+            project_gid, only_open=True, opt_fields=asana.HEAL_OPT_FIELDS
+        ):
+            candidates = [task]
+            if task.get("num_subtasks"):
+                candidates += [s for s in asana.get_subtasks(task["gid"]) if not s.get("completed")]
+            for t in candidates:
+                if needs(t["gid"], t.get("modified_at")):
+                    pubsub.publish_task_changed(t["gid"], "heal")
+                    republished += 1
+    return republished
+
+
+def handle_day_changed(*, today: date | None = None) -> dict:
+    today = today or today_local()
+    with get_conn() as conn:
+        deferred, started = settle_deferrals(conn, today)
+        healed = heal(conn)
+        rescore(conn, kind="daily", trigger_gid=None, today=today)
+    logger.info(
+        "day_changed %s: %d deferred, %d started, %d republished", today, deferred, started, healed
+    )
+    return {"deferred": deferred, "started": started, "healed": healed}

@@ -1,13 +1,15 @@
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 import clients.asana as asana
+import clients.pubsub as ps
 from handlers import prioritize as h
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
+from services import managed_projects
 
 TODAY = date(2026, 9, 23)
 TASK = {
@@ -236,3 +238,93 @@ def test_handle_dispatches_on_kind(monkeypatch):
     h.handle({"kind": "day_changed"})
     h.handle({"kind": "mystery"})
     assert seen == [("task", "t9"), ("day", None)]
+
+
+def _facts(gid, **kw):
+    f, _ = h.facts_from(dict(TASK, gid=gid, **kw), [])
+    return f
+
+
+def test_day_changed_first_run_has_nothing_to_defer(db, monkeypatch):
+    monkeypatch.setattr(repo, "last_daily_run", lambda c: None)
+    monkeypatch.setattr(h, "heal", lambda c: 0)
+    bumped = []
+    monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
+    out = h.handle_day_changed(today=TODAY)
+    assert bumped == [] and out["deferred"] == 0 and db.runs[-1]["kind"] == "daily"
+
+
+def test_day_changed_bumps_unstarted_offers_and_marks_started(db, monkeypatch):
+    yesterday = TODAY - timedelta(days=1)
+    db.facts["a"] = _facts("a")
+    db.facts["b"] = _facts(
+        "b", custom_fields=[{"name": "Started at", "date_value": {"date": yesterday.isoformat()}}]
+    )
+    db.facts["c"] = _facts(
+        "c", completed=True, completed_at=f"{yesterday.isoformat()}T18:00:00.000Z"
+    )
+    run = {
+        "run_id": 3,
+        "today": yesterday,
+        "top": [{"gid": g, "rank": i, "started": None} for i, g in enumerate("abc", 1)],
+    }
+    monkeypatch.setattr(repo, "last_daily_run", lambda c: run)
+    tops = []
+    monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: tops.append((rid, top)))
+    bumped = []
+    monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
+    monkeypatch.setattr(h, "heal", lambda c: 0)
+    out = h.handle_day_changed(today=TODAY)
+    assert bumped == ["a"] and out == {"deferred": 1, "started": 2, "healed": 0}
+    assert [t["started"] for t in tops[0][1]] == [False, True, True]
+
+
+def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    listing = [
+        {"gid": "fresh", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0},
+        {"gid": "newer", "modified_at": "2026-09-21T00:00:00.000Z", "num_subtasks": 0},
+        {"gid": "missing", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0},
+        {"gid": "stale-enrich", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0},
+        {"gid": "parent", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 1},
+    ]
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing
+    )
+    monkeypatch.setattr(
+        asana,
+        "get_subtasks",
+        lambda gid: [
+            {"gid": "child", "modified_at": "2026-09-21T00:00:00.000Z", "completed": False}
+        ],
+    )
+    monkeypatch.setattr(
+        repo,
+        "list_facts_index",
+        lambda c: {
+            "fresh": (old, "h1"),
+            "newer": (old, "h2"),
+            "stale-enrich": (old, "h3"),
+            "parent": (old, "h4"),
+            "child": (old, "h5"),
+        },
+    )
+    monkeypatch.setattr(
+        repo,
+        "list_enrichment",
+        lambda c: {
+            "fresh": ("h1", {}),
+            "newer": ("h2", {}),
+            "stale-enrich": ("OLD", {}),
+            "parent": ("h4", {}),
+            "child": ("h5", {}),
+        },
+    )
+    published = []
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
+    )
+    assert h.heal(db) == 4
+    assert {g for g, _ in published} == {"newer", "missing", "stale-enrich", "child"}
+    assert all(s == "heal" for _, s in published)
