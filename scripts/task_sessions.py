@@ -25,6 +25,7 @@ under the repo's venv.
 """
 
 import argparse
+import functools
 import json
 import subprocess
 import sys
@@ -36,7 +37,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import task_ref
 
 REPO = Path(__file__).resolve().parent.parent
-TFVARS = REPO / "terraform" / "terraform.tfvars"
 STATE_PATH = Path.home() / ".claude" / "task-sessions.json"
 API_BASE = "https://tasks-api.drolet.cloud"
 NAME_MAX = 60
@@ -49,11 +49,16 @@ ref_for = task_ref.ref
 # --- tasks-api -----------------------------------------------------------
 
 
+@functools.cache
 def token() -> str:
-    for line in TFVARS.read_text().splitlines():
-        if line.strip().startswith("tasks_api_token"):
-            return line.split('"')[1]
-    raise SystemExit(f"task-sessions: no tasks_api_token in {TFVARS}")
+    """A Google ID token from the caller's gcloud login — tasks-api is behind Cloud Run IAM."""
+    try:
+        out = subprocess.run(
+            ["gcloud", "auth", "print-identity-token"], capture_output=True, text=True, check=True
+        )
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise SystemExit(f"task-sessions: gcloud auth print-identity-token failed: {e}")
+    return out.stdout.strip()
 
 
 def _call(path: str, payload: dict | None = None) -> dict:
