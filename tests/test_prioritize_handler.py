@@ -6,6 +6,7 @@ import pytest
 import clients.asana as asana
 import clients.pubsub as ps
 from handlers import prioritize as h
+from models.prioritize import TaskFacts
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
@@ -79,11 +80,20 @@ class MemConn:
         return None
 
 
+def _upsert_facts(c, f):
+    # Mirrors the real SQL: points_estimated is excluded from the UPDATE SET,
+    # so it survives across deliveries — only claim_estimate ever writes it.
+    prev = c.facts.get(f.gid)
+    if prev is not None and f.points_estimated is None:
+        f = TaskFacts(**(f.__dict__ | {"points_estimated": prev.points_estimated}))
+    c.facts[f.gid] = f
+
+
 @pytest.fixture
 def db(monkeypatch):
     conn = MemConn()
     monkeypatch.setattr(h, "get_conn", lambda: conn)
-    monkeypatch.setattr(repo, "upsert_facts", lambda c, f: c.facts.__setitem__(f.gid, f))
+    monkeypatch.setattr(repo, "upsert_facts", _upsert_facts)
     monkeypatch.setattr(repo, "get_facts", lambda c, gid: c.facts.get(gid))
     monkeypatch.setattr(repo, "list_facts", lambda c: list(c.facts.values()))
     monkeypatch.setattr(repo, "delete_task", lambda c, gid: c.deleted.append(gid))
@@ -228,6 +238,21 @@ def test_subtasks_are_gathered_with_parent_project(db, asana_fake, model, monkey
     assert db.facts["t1-sub"].project_name == "Inbox" and db.facts["t1-sub"].parent_gid == "t1"
 
 
+def test_gather_subtask_gid_directly_keeps_its_project(db, asana_fake, model, monkeypatch):
+    """A task_changed for a subtask's own gid (e.g. republished by heal) must
+    still resolve project_name from the parent — not overwrite it with None."""
+    parent = dict(TASK, num_subtasks=1)
+    sub = dict(
+        TASK, gid="t1-sub", name="child", parent={"gid": "t1"}, memberships=[], num_subtasks=0
+    )
+    monkeypatch.setattr(
+        asana, "get_task_detail", lambda gid, opt_fields=None: sub if gid == "t1-sub" else parent
+    )
+    monkeypatch.setattr(asana, "get_subtasks", lambda gid: [])
+    h.handle_task_changed("t1-sub", today=TODAY)
+    assert db.facts["t1-sub"].project_name == "Inbox"
+
+
 def test_handle_dispatches_on_kind(monkeypatch):
     seen = []
     monkeypatch.setattr(
@@ -238,6 +263,100 @@ def test_handle_dispatches_on_kind(monkeypatch):
     h.handle({"kind": "day_changed"})
     h.handle({"kind": "mystery"})
     assert seen == [("task", "t9"), ("day", None)]
+
+
+# ---- D6/D7 write-back and rescore-shape coverage ---------------------------
+
+
+def test_write_back_failure_keeps_the_claim_and_skips_retry(db, asana_fake, model, monkeypatch):
+    calls = []
+
+    def boom(gid, pts):
+        calls.append((gid, pts))
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(cf, "set_story_points", boom)
+    h.handle_task_changed("t1", today=TODAY)
+    assert "t1" in db.estimated
+    assert len(calls) == 1
+    assert len(model) == 1
+
+    h.handle_task_changed("t1", today=TODAY)
+    assert len(calls) == 1  # content hash cached — no retry, no exception
+    assert len(model) == 1
+
+
+def test_points_estimated_persists_and_feeds_scoring(db, asana_fake, model):
+    seeded, _ = h.facts_from(TASK, [])
+    db.facts["t1"] = TaskFacts(**(seeded.__dict__ | {"points_estimated": 5}))
+    db.estimated.add("t1")  # already claimed by a prior delivery
+
+    h.handle_task_changed("t1", today=TODAY)
+
+    assert db.facts["t1"].points_estimated == 5
+    assert asana_fake["points"] == []  # already claimed — no new Asana write
+    t = db.scores[-1].by_gid()["t1"]
+    assert t.components["points"] == 5
+    assert t.components["points_source"] == "estimate"
+
+
+def test_completed_task_snapshot_happens_once_across_deliveries(db, asana_fake, monkeypatch):
+    calls = []
+    monkeypatch.setattr(repo, "snapshot_completion", lambda c, f: calls.append(f.gid))
+    done = dict(TASK, completed=True, completed_at="2026-09-22T10:00:00.000Z")
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(done))
+
+    h.handle_task_changed("t1", today=TODAY)
+    h.handle_task_changed("t1", today=TODAY)
+
+    assert calls == ["t1"]
+
+
+def test_db_error_raises_for_redelivery(db, asana_fake, model, monkeypatch):
+    def boom(c, f):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(repo, "upsert_facts", boom)
+    with pytest.raises(RuntimeError):
+        h.handle_task_changed("t1", today=TODAY)
+
+
+def test_event_run_is_capped_while_daily_keeps_full_selection(db, monkeypatch):
+    import dataclasses
+
+    from services import prioritize_config as pc
+
+    bumped = dataclasses.replace(pc.load(), default_n=12, points_per_day=12)
+    monkeypatch.setattr(pc, "load", lambda path=None: bumped)
+
+    near_due = (TODAY + timedelta(days=5)).isoformat()
+    for i in range(12):
+        gid = f"g{i}"
+        f, _ = h.facts_from(dict(TASK, gid=gid, due_on=near_due, tags=[]), [])
+        db.facts[gid] = TaskFacts(**(f.__dict__ | {"story_points": 1}))
+
+    h.rescore(db, kind="event", trigger_gid=None, today=TODAY)
+    daily_scored = h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
+
+    ranked = [t for t in daily_scored.next() if t.rank is not None]
+    assert len(ranked) > h.TOP_N_LOGGED
+    assert len(db.runs[-2]["top"]) == min(len(ranked), h.TOP_N_LOGGED)
+    assert len(db.runs[-1]["top"]) == len(ranked)
+
+
+def test_changed_hash_with_empty_field_does_not_write_back_twice(
+    db, asana_fake, model, monkeypatch
+):
+    h.handle_task_changed("t1", today=TODAY)
+    assert asana_fake["points"] == [("t1", 3)]
+    assert len(model) == 1
+
+    changed = dict(TASK, notes="body v2")
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(changed))
+    h.handle_task_changed("t1", today=TODAY)
+
+    assert len(model) == 2  # content hash moved — model runs again
+    assert asana_fake["points"] == [("t1", 3)]  # already claimed — no second write
 
 
 def _facts(gid, **kw):
@@ -292,13 +411,12 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
     monkeypatch.setattr(
         asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing
     )
-    monkeypatch.setattr(
-        asana,
-        "get_subtasks",
-        lambda gid: [
-            {"gid": "child", "modified_at": "2026-09-21T00:00:00.000Z", "completed": False}
-        ],
-    )
+
+    def fake_get_subtasks(gid, opt_fields=None):
+        assert "modified_at" in (opt_fields or "")
+        return [{"gid": "child", "modified_at": "2026-09-21T00:00:00.000Z", "completed": False}]
+
+    monkeypatch.setattr(asana, "get_subtasks", fake_get_subtasks)
     monkeypatch.setattr(
         repo,
         "list_facts_index",
@@ -308,6 +426,7 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
             "stale-enrich": (old, "h3"),
             "parent": (old, "h4"),
             "child": (old, "h5"),
+            "vanished": (old, "h6"),
         },
     )
     monkeypatch.setattr(
@@ -319,12 +438,18 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
             "stale-enrich": ("OLD", {}),
             "parent": ("h4", {}),
             "child": ("h5", {}),
+            "vanished": ("h6", {}),
         },
+    )
+    monkeypatch.setattr(
+        repo,
+        "list_open_gids",
+        lambda c: {"fresh", "newer", "stale-enrich", "parent", "child", "vanished"},
     )
     published = []
     monkeypatch.setattr(
         ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
     )
-    assert h.heal(db) == 4
-    assert {g for g, _ in published} == {"newer", "missing", "stale-enrich", "child"}
+    assert h.heal(db) == 5
+    assert {g for g, _ in published} == {"newer", "missing", "stale-enrich", "child", "vanished"}
     assert all(s == "heal" for _, s in published)

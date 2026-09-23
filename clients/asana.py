@@ -434,11 +434,11 @@ def task_exists(task_gid: str) -> bool:
         return False
 
 
-def get_subtasks(task_gid: str) -> list[dict]:
+def get_subtasks(task_gid: str, *, opt_fields: str = SEARCH_OPT_FIELDS) -> list[dict]:
     """Compact subtasks of a task — one level only, sub-subtasks not fetched."""
     return _paginate(
         f"/tasks/{task_gid}/subtasks",
-        {"opt_fields": SEARCH_OPT_FIELDS},
+        {"opt_fields": opt_fields},
         operation="get_subtasks",
     )
 

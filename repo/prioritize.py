@@ -120,6 +120,11 @@ def list_facts_index(conn: Any) -> dict[str, tuple[datetime, str]]:
     return {r["task_gid"]: (r["fetched_at"], r["content_hash"]) for r in rows}
 
 
+def list_open_gids(conn: Any) -> set[str]:
+    rows = conn.execute("SELECT task_gid FROM task_facts WHERE NOT completed").fetchall()
+    return {r["task_gid"] for r in rows}
+
+
 def delete_task(conn: Any, gid: str) -> None:
     for table in ("task_scores", "task_enrichment", "task_overrides", "task_facts"):
         conn.execute(f"DELETE FROM {table} WHERE task_gid = %s", (gid,))

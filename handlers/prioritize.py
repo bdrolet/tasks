@@ -105,7 +105,15 @@ def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
     if task is None:
         return None
     stories = asana.get_stories(gid)
-    facts, comments = facts_from(task, stories)
+    parent = None
+    if task.get("parent") and not task.get("memberships"):
+        # gid is itself a subtask (e.g. republished directly by heal) — a
+        # subtask carries no memberships, so its project comes from its
+        # parent, fetched here rather than assumed None.
+        parent = asana.get_task_detail(
+            task["parent"]["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS
+        )
+    facts, comments = facts_from(task, stories, parent=parent)
     out: list[tuple[TaskFacts, dict, list[dict]]] = []
     open_subs = 0
     if task.get("num_subtasks"):
@@ -298,7 +306,9 @@ def settle_deferrals(conn, today: date) -> tuple[int, int]:
 
 
 def heal(conn) -> int:
-    """Spec D8 step 2: republish anything Asana knows that we do not."""
+    """Spec D8 step 2: republish anything Asana knows that we do not, and
+    anything we still hold open that Asana's open-task listing no longer
+    mentions — a completion or deletion whose event was lost."""
     index = repo.list_facts_index(conn)
     enrichment = repo.list_enrichment(conn)
 
@@ -313,17 +323,26 @@ def heal(conn) -> int:
         return stored is None or stored[0] != content_hash
 
     republished = 0
+    seen: set[str] = set()
     for project_gid in sorted(managed_projects.gids()):
         for task in asana.list_project_tasks(
             project_gid, only_open=True, opt_fields=asana.HEAL_OPT_FIELDS
         ):
             candidates = [task]
             if task.get("num_subtasks"):
-                candidates += [s for s in asana.get_subtasks(task["gid"]) if not s.get("completed")]
+                candidates += [
+                    s
+                    for s in asana.get_subtasks(task["gid"], opt_fields=asana.HEAL_OPT_FIELDS)
+                    if not s.get("completed")
+                ]
             for t in candidates:
+                seen.add(t["gid"])
                 if needs(t["gid"], t.get("modified_at")):
                     pubsub.publish_task_changed(t["gid"], "heal")
                     republished += 1
+    for gid in repo.list_open_gids(conn) - seen:
+        pubsub.publish_task_changed(gid, "heal")
+        republished += 1
     return republished
 
 

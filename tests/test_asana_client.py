@@ -409,6 +409,12 @@ def test_get_subtasks_paginates(monkeypatch):
     assert calls[1]["params"]["offset"] == "abc"
 
 
+def test_get_subtasks_accepts_opt_fields_override(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": [], "next_page": None})])
+    asana.get_subtasks("t1", opt_fields=asana.HEAL_OPT_FIELDS)
+    assert calls[0]["params"]["opt_fields"] == asana.HEAL_OPT_FIELDS
+
+
 def test_task_exists_is_true_when_fetchable(monkeypatch):
     import clients.asana as asana
 

@@ -91,6 +91,13 @@ def test_row_to_facts_roundtrip():
     assert f.tags == ("a",) and f.dependencies == ("d",) and f.points_estimated == 3
 
 
+def test_list_open_gids_queries_uncompleted_facts():
+    conn = RowsConn(rows=[{"task_gid": "a"}, {"task_gid": "b"}])
+    assert repo.list_open_gids(conn) == {"a", "b"}
+    q, _ = conn.executed[0]
+    assert "SELECT task_gid FROM task_facts WHERE NOT completed" in q
+
+
 def test_claim_estimate_is_conditional():
     assert repo.claim_estimate(RowsConn(rowcount=1), "t1", 3) is True
     conn = RowsConn(rowcount=0)
