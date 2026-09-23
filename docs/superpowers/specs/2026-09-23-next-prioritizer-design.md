@@ -29,6 +29,9 @@ and the only ordering anyone has is due date.
   side is a database read that needs neither Asana nor Anthropic to be up.
 - Every weight, horizon and threshold lives in one config file, because they
   will be tuned.
+- The full ranked order is an API call, a Claude Code agent fronts it, and
+  the order can be overridden by hand (pin a task to a position, snooze one)
+  without fighting the scorer.
 - A feedback loop: what was offered and not started, and cycle time per point
   at completion, so `calibrate` can say how wrong the estimates are.
 
@@ -111,7 +114,8 @@ topic also gives the three write paths one consumer.
 | Table | Rewritten when | Holds |
 |---|---|---|
 | `task_facts` | every gather | deterministic Asana facts |
-| `task_enrichment` | content hash moves | raw model JSON + manual overrides |
+| `task_enrichment` | content hash moves | raw model JSON |
+| `task_overrides` | `PUT /tasks/{gid}/overrides` | manual field overrides, pin, snooze (D11) |
 | `task_scores` | every rescore | the whole scored set for today |
 | `prioritize_runs` | every rescore | run log (top-N; full set on the daily run) |
 | `task_stats` | completion; daily tick | deferral counter, cycle-time snapshot |
@@ -144,7 +148,7 @@ hash → no call. The raw JSON is stored verbatim so fields can be added
 without re-extracting.
 
 Effective value for every enrichable field: **tag** (`waiting:<who>`,
-`energy:deep|shallow`, `impact:low|medium|high`) > **`overrides`** JSONB
+`energy:deep|shallow`, `impact:low|medium|high`) > **`task_overrides`**
 (set through the API) > **model** > **default**.
 
 ### D6 — The model may write story points, once, as a draft
@@ -202,6 +206,35 @@ There is no other status: Asana has none.
 no prefix scores as `config.default_priority` (P2). The horizon for a soft
 deadline uses the same value.
 
+### D11 — The order can be overridden by hand: pins and snoozes
+
+Two manual controls, stored per task in `task_overrides` alongside the
+enrichment overrides (D5), applied by the pure scorer after scoring and
+before selection:
+
+| Override | Effect | Cleared |
+|---|---|---|
+| `pinned_rank: N` | the task holds position N in `next` regardless of score or capacity; the greedy pass fills the remaining positions around pins | by hand, or automatically when the task completes |
+| `snooze_until: YYYY-MM-DD` | bucket `snoozed` — out of `next` and the side lists until that date | when the date passes |
+
+Two pins on the same position keep their relative order by score. A pinned
+task that is blocked or waiting still shows in `next`, flagged, because a
+pin is an explicit instruction. Pins and snoozes are visible in `--explain`
+and in `GET /ranking` as `override`. Nothing else edits the order: there is
+no drag-to-reorder state to keep in sync, only these two fields.
+
+### D12 — An agent fronts the API
+
+`task-next` is a Claude Code agent in `.claude/agents/`, dispatched for
+"what should I work on", "what's next", "why is X ranked there", "pin X to
+the top", "snooze X until Friday", "point X at 3", "I started X". It reads
+`GET /ranking` / `POST /next` and performs only the small writes that
+express an ordering decision (pin, unpin, snooze, points, started-at,
+overrides) through the API. It never creates, edits text, completes or
+comments — those stay with the existing agents. Backed by a
+`prioritizing-tasks` skill for direct use, both symlinked by
+`scripts/link-skills.sh`, and listed in CLAUDE.md's standing dispatch.
+
 ## Components
 
 | Path | Layer | Role |
@@ -219,7 +252,8 @@ deadline uses the same value.
 | `handlers/prioritize.py` | handlers | `handle(message)`: dispatch on `kind`; gather → enrich → write-back → rescore; daily tick |
 | `handlers/asana_webhook.py` | handlers | publish `task_changed` per distinct gid; story events map to their parent task |
 | `handlers/task_create.py`, `api/routers/tasks.py`, `api/routers/comments.py` | handlers / routers | publish after each write |
-| `api/routers/next.py` | routers | `POST /next`, `GET /calibrate`, `PUT /tasks/{gid}/overrides` |
+| `api/routers/next.py` | routers | `GET /ranking`, `POST /next`, `GET /calibrate`, `PUT /tasks/{gid}/overrides` |
+| `.claude/agents/task-next.md`, `.claude/skills/prioritizing-tasks/` | consumer | the agent and skill (D12); `scripts/link-skills.sh` symlinks both |
 | `api/routers/tasks.py` | routers | `story_points`, `started_at` on create / update / detail; `dependencies`, `start_on` on detail |
 | `scripts/task_next.py` → `task-next` | scripts | stdlib CLI over the API |
 | `scripts/setup_custom_fields.py` | scripts | one-time field creation |
@@ -257,28 +291,39 @@ CREATE TABLE IF NOT EXISTS task_facts (
     fetched_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Model output, cached by content hash. overrides is never touched by
--- re-enrichment; only PUT /tasks/{gid}/overrides writes it.
+-- Model output, cached by content hash. Never carries manual state.
 CREATE TABLE IF NOT EXISTS task_enrichment (
     task_gid     TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
     raw          JSONB NOT NULL,             -- verbatim model JSON
     model        TEXT NOT NULL,
-    overrides    JSONB NOT NULL DEFAULT '{}',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- The whole scored set, rewritten on every rescore. POST /next reads only this.
+-- Manual state, written only by PUT /tasks/{gid}/overrides (D5 field
+-- overrides; D11 pinned_rank / snooze_until). Survives re-enrichment and
+-- re-gathering; pinned_rank is cleared by the subscriber on completion.
+CREATE TABLE IF NOT EXISTS task_overrides (
+    task_gid     TEXT PRIMARY KEY,
+    overrides    JSONB NOT NULL DEFAULT '{}',   -- {waiting_on, impact, energy, story_points, due_date_inferred, ...}
+    pinned_rank  INTEGER,
+    snooze_until DATE,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The whole scored set, rewritten on every rescore. GET /ranking and
+-- POST /next read only this.
 CREATE TABLE IF NOT EXISTS task_scores (
     task_gid     TEXT PRIMARY KEY,
     scored_at    TIMESTAMPTZ NOT NULL,
     today        DATE NOT NULL,
-    bucket       TEXT NOT NULL,   -- 'next' | 'nudge' | 'excluded:blocked' | 'excluded:parent' | 'excluded:completed'
+    bucket       TEXT NOT NULL,   -- 'next' | 'nudge' | 'snoozed' | 'excluded:blocked' | 'excluded:parent' | 'excluded:completed'
     score        DOUBLE PRECISION,
-    rank         INTEGER,         -- default selection order (no energy flag), NULL if not selected
+    position     INTEGER NOT NULL, -- 1-based order in the full ranking (pins first at their rank, then by score)
+    rank         INTEGER,         -- position within the default `next` selection, NULL if not selected
     components   JSONB NOT NULL,  -- P,U,I,B,A,C, points, points_source, effort_days, effective_due, soft,
                                   -- days_until_due, slack, simulated_start, effective_slack, days_stale,
-                                  -- energy, unenriched
+                                  -- energy, unenriched, override {pinned_rank?, snooze_until?, fields: [...]}
     overcommitted BOOLEAN NOT NULL DEFAULT false,
     stale         BOOLEAN NOT NULL DEFAULT false,
     stale_reason  TEXT
@@ -323,7 +368,8 @@ Deleted / removed tasks (webhook `deleted`/`removed`) drop their
    and `asana.get_stories(gid)`. A 404 deletes the rows and returns. For a
    parent with `num_subtasks > 0`, `get_subtasks` and gather each subtask
    the same way (they carry the parent's project). Upsert `task_facts`. If
-   the task just became completed, snapshot `task_stats` (D8's cycle time).
+   the task just became completed, snapshot `task_stats` (D8's cycle time)
+   and clear its `pinned_rank` (D11).
 2. **Enrich** (skipped for completed tasks). Compute the content hash; if it
    equals `task_enrichment.content_hash`, skip. Otherwise call
    `services/enrichment.extract`, validate, upsert the row with the new hash.
@@ -422,12 +468,22 @@ cost_of_delay = wP*P + wU*U + wI*I + wB*B + wA*A + wC*C   # .30 .30 .15 .10 .10 
 score = cost_of_delay / max(effort_days, min_effort_days)   # 0.25
 ```
 
-**Selection.** Greedy by score until `sum(points) ≥ capacity_points_per_day`
-or `n` reached; after each pick, remaining tasks in the same project ×
-`diversity_penalty` (0.8). With `--energy`, mismatched tasks ×
-`energy_penalty` (0.7) before the greedy pass. The stored `rank` is the
-selection with no energy flag and the config `default_n`; `POST /next`
-reruns the greedy pass from stored components when either knob is given.
+**Manual order (D11).** A task with `snooze_until > today` gets bucket
+`snoozed` and takes no further part. Pinned tasks are placed first, at
+their `pinned_rank` (ties by score), and count toward neither capacity nor
+`n`.
+
+**Ranking.** Every remaining candidate ordered by score descending; pins
+occupy their positions ahead of it. This order is `position` in
+`task_scores` and what `GET /ranking` returns.
+
+**Selection.** Greedy by score through the unpinned candidates until
+`sum(points) ≥ capacity_points_per_day` or `n` reached; after each pick,
+remaining tasks in the same project × `diversity_penalty` (0.8). With
+`--energy`, mismatched tasks × `energy_penalty` (0.7) before the greedy
+pass. The stored `rank` is the selection with no energy flag and the config
+`default_n`; `POST /next` reruns the greedy pass from stored components
+when either knob is given. Pins are never displaced by the knobs.
 
 **Side lists.**
 
@@ -436,8 +492,25 @@ reruns the greedy pass from stored components when either knob is given.
   `times_deferred ≥ deferred_limit (5)`, or a **soft** effective due already
   past; `stale_reason` records which
 - nudge: bucket `nudge`, sorted by `days_stale` descending
+- snoozed tasks appear in none of them
 
 ## Read side
+
+**`GET /ranking`** `?limit=100&offset=0&bucket=next|nudge|snoozed|excluded&explain=false`
+→ every scored task in `position` order:
+
+```json
+{"today": "…", "scored_at": "…", "total": 94,
+ "tasks": [{position, rank, task_gid, ref, name, project, permalink_url, bucket,
+            score, points, points_source, due_on, effective_due, soft,
+            overcommitted, stale, stale_reason, waiting_on,
+            override: {pinned_rank?, snooze_until?, fields?},
+            components?, reason?}]}
+```
+
+The default `bucket` filter is `next` (the actionable ranking); `excluded`
+covers every `excluded:*` bucket. This is the "tasks in ranked order" call;
+`POST /next` below is the daily view over it.
 
 **`POST /next`** `{energy?: "deep"|"shallow", n?: int, explain?: bool}` →
 
@@ -457,7 +530,11 @@ points_estimated` where both exist, `times_deferred` distribution, and the
 overall figures. Plain numbers; the multiplier is applied by editing config.
 
 **`PUT /tasks/{gid}/overrides`** `{field: value | null, …}` — merges into
-`task_enrichment.overrides`; null clears. Publishes `task_changed`.
+`task_overrides`; null clears. Fields: the enrichable ones (`waiting_on`,
+`impact`, `energy`, `due_date_inferred`, `story_points`) plus `pinned_rank`
+and `snooze_until` (D11). Publishes `task_changed` so the new order is
+materialised within seconds. Rejects unknown fields (422), as
+`UpdateTaskRequest` does.
 
 **`PATCH /tasks/{gid}`** gains `story_points: int | null` and
 `started_at: "YYYY-MM-DD" | null`; **`POST /tasks`** gains `story_points`;
@@ -469,16 +546,31 @@ overall figures. Plain numbers; the multiplier is applied by editing config.
 
 ```
 task-next [--energy deep|shallow] [--n N] [--explain]   # the lists, ref-first
+task-next ranking [--all] [--explain]                   # full order (GET /ranking)
 task-next start <ref|gid>                               # Started at = today
 task-next points <ref|gid> <n>
+task-next pin <ref|gid> <position> | unpin <ref|gid>
+task-next snooze <ref|gid> <YYYY-MM-DD> | unsnooze <ref|gid>
 task-next override <ref|gid> field=value [field=…]      # field= clears
 task-next calibrate
 ```
 
-Refs are `scripts/task_ref.py` refs over the scored set; `start`/`points`/
-`override` resolve a ref against the current `/next` response and send the
-GID. Output is the same ref-first TSV shape `task-ref` produces, one block
-per list.
+Refs are `scripts/task_ref.py` refs over the scored set; every write
+subcommand resolves a ref against the current `/ranking` response and sends
+the GID. Output is the same ref-first TSV shape `task-ref` produces, one
+block per list.
+
+**`task-next` agent** (`.claude/agents/task-next.md`, D12) and the
+`prioritizing-tasks` skill (`.claude/skills/prioritizing-tasks/SKILL.md`):
+the agent translates "what should I work on / what's next / why is X there /
+pin X / snooze X till Friday / X is 3 points / I started X" into the calls
+above, resolves refs and names against `/ranking`, and returns the ref-first
+listing. It is read-mostly: its only writes are `PUT /tasks/{gid}/overrides`
+and the `story_points` / `started_at` fields on `PATCH /tasks/{gid}`. It
+does not create, rename, complete or comment — it hands those to the
+existing agents. CLAUDE.md's standing dispatch gains: a request to **rank
+or choose** work ("what should I do next", "what's my day look like",
+"bump X up") goes to the `task-next` agent.
 
 ## Config (`config/prioritize.toml`)
 
@@ -600,6 +692,10 @@ the existing `claude_tokens` counter.
 - energy flag demotes mismatched tasks; `n` caps the list
 - stale rules: each of the three triggers, and their `stale_reason`
 - tag > override > model > default precedence
+- a pinned task holds its position over a higher-scoring one and beyond
+  capacity; two pins on one position order by score; a pinned blocked task
+  still appears, flagged
+- a snoozed task is in no list until its date; on the date it returns
 
 `tests/test_enrichment.py`: hash is stable across an added estimate comment
 and changes on any other comment; a cached hash makes no model call
@@ -614,8 +710,10 @@ un-started offer and not for a started one, and republishes stale facts.
 `tests/test_asana_webhook.py`: a story `added` event publishes the parent's
 gid; a delivery with three events for one task publishes once.
 
-`tests/test_api_next.py`: `/next` shape, `explain`, `energy`/`n` re-selection
-from stored components; `/calibrate` arithmetic; overrides merge and clear.
+`tests/test_api_next.py`: `/ranking` order, bucket filter and paging;
+`/next` shape, `explain`, `energy`/`n` re-selection from stored components
+with pins untouched; `/calibrate` arithmetic; overrides merge, clear, and
+422 on an unknown field; completion clears `pinned_rank`.
 
 ## Dependencies
 
