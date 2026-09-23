@@ -44,6 +44,10 @@ webhook_auth_failures: metrics.Counter = metrics.NoOpMeter("noop").create_counte
 webhooks_registered: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 webhooks_deleted: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 webhooks_active: metrics._Gauge = metrics.NoOpMeter("noop").create_gauge("noop")
+prioritize_events: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+prioritize_enrich: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+prioritize_rescore_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
+prioritize_candidates: metrics._Gauge = metrics.NoOpMeter("noop").create_gauge("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -59,6 +63,7 @@ def setup_telemetry(service_name: str) -> None:
     global digest_rebuilds, digest_events, digest_bullet_calls, digest_errors
     global webhook_auth_failures
     global webhooks_registered, webhooks_deleted, webhooks_active
+    global prioritize_events, prioritize_enrich, prioritize_rescore_duration, prioritize_candidates
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -158,6 +163,20 @@ def setup_telemetry(service_name: str) -> None:
         "asana.webhooks.active",
         description="Managed projects with a live webhook — below the managed count means "
         "deliveries are being dropped",
+    )
+    prioritize_events = meter.create_counter(
+        "asana.prioritize.events",
+        description="task-events messages by kind (task_changed|day_changed) and result (ok|error|gone)",
+    )
+    prioritize_enrich = meter.create_counter(
+        "asana.prioritize.enrich",
+        description="Enrichment by result (cached|ok|failed|written_back)",
+    )
+    prioritize_rescore_duration = meter.create_histogram(
+        "asana.prioritize.rescore.duration", unit="ms", description="Full-set rescore wall time"
+    )
+    prioritize_candidates = meter.create_gauge(
+        "asana.prioritize.candidates", description="Scored tasks by bucket after the last rescore"
     )
 
     # --- Logs ---
