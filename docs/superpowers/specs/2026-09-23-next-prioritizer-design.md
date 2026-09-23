@@ -509,8 +509,14 @@ when either knob is given. Pins are never displaced by the knobs.
 ```
 
 The default `bucket` filter is `next` (the actionable ranking); `excluded`
-covers every `excluded:*` bucket. This is the "tasks in ranked order" call;
-`POST /next` below is the daily view over it.
+covers every `excluded:*` bucket. A `list=overcommitted|stale|nudge`
+parameter returns one side list on its own, in its natural order
+(overcommitted and stale by `position`; nudge by `days_stale` descending),
+since overcommitted and stale are flags on tasks that may also be in `next`
+rather than buckets of their own. `bucket` and `list` are mutually
+exclusive (400 if both). This is the "tasks in ranked order" call;
+`POST /next` below is the daily view over it and always carries all three
+side lists.
 
 **`POST /next`** `{energy?: "deep"|"shallow", n?: int, explain?: bool}` →
 
