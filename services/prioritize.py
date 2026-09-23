@@ -291,9 +291,12 @@ def select(
         for g, other in pool.items():
             if other.project_name == t.project_name:
                 adjusted[g] *= config.diversity_penalty
+    inserted_at: dict[int, int] = {}
     for t in pinned:
-        idx = min(max((t.pinned_rank or 1) - 1, 0), len(picked))
+        base = max((t.pinned_rank or 1) - 1, 0)
+        idx = min(base + inserted_at.get(base, 0), len(picked))
         picked.insert(idx, t)
+        inserted_at[base] = inserted_at.get(base, 0) + 1
     return picked
 
 

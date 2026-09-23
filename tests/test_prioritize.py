@@ -225,6 +225,21 @@ def test_two_pins_same_position_order_by_score():
     assert [t.gid for t in scored.next()] == ["a", "b"]
 
 
+def test_two_pins_same_rank_select_and_rank_follow_score():
+    a = facts("a", points=1, due_on=TODAY + timedelta(days=1))
+    b = facts("b", points=1, due_on=TODAY + timedelta(days=30))
+    c = facts("c", points=1, due_on=TODAY + timedelta(days=10))
+    scored = run(
+        [a, b, c], overrides={"a": Overrides(pinned_rank=1), "b": Overrides(pinned_rank=1)}
+    )
+    assert [t.gid for t in pz.select(scored.next(), CFG)] == ["a", "b", "c"]
+    assert (scored.by_gid()["a"].rank, scored.by_gid()["b"].rank, scored.by_gid()["c"].rank) == (
+        1,
+        2,
+        3,
+    )
+
+
 def test_pinned_blocked_task_still_appears_flagged():
     dep = facts("dep", points=1)
     b = facts("b", points=1, dependencies=("dep",))
