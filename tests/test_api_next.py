@@ -157,6 +157,29 @@ def test_overrides_merge_and_reject_unknown(monkeypatch):
     )
 
 
+def test_overrides_rejects_malformed_date_and_serialises_valid_ones(monkeypatch):
+    saved = []
+
+    def merge(c, gid, patch):
+        saved.append((gid, patch))
+        from models.prioritize import Overrides
+
+        return Overrides(fields={}, pinned_rank=None, snooze_until=None)
+
+    monkeypatch.setattr(repo, "merge_overrides", merge)
+    assert (
+        client.put("/tasks/t1/overrides", headers=AUTH, json={"snooze_until": "banana"}).status_code
+        == 422
+    )
+    resp = client.put(
+        "/tasks/t1/overrides",
+        headers=AUTH,
+        json={"snooze_until": "2026-09-30", "due_date_inferred": "2026-10-01"},
+    )
+    assert resp.status_code == 200
+    assert saved == [("t1", {"snooze_until": "2026-09-30", "due_date_inferred": "2026-10-01"})]
+
+
 def test_calibrate_aggregates_per_project(monkeypatch):
     monkeypatch.setattr(
         repo,

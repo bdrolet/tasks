@@ -82,10 +82,10 @@ class OverridesRequest(BaseModel):
     waiting_on: str | None = None
     impact: str | None = None
     energy: str | None = None
-    due_date_inferred: str | None = None
+    due_date_inferred: date | None = None
     story_points: int | None = None
     pinned_rank: int | None = Field(default=None, ge=1)
-    snooze_until: str | None = None
+    snooze_until: date | None = None
 
 
 def _iso(value) -> str | None:
@@ -171,8 +171,9 @@ def ranking(
         )
     rows = _rows()
     today, scored_at = _stamp(rows)
+    scored_today = date.fromisoformat(today) if today else date.today()
     if list_:
-        sides = pz.side_lists(ScoredSet(today=date.today(), tasks=[_to_scored(r) for r in rows]))
+        sides = pz.side_lists(ScoredSet(today=scored_today, tasks=[_to_scored(r) for r in rows]))
         keep = [t.gid for t in sides[list_]]
         by_gid = {r["task_gid"]: r for r in rows}
         chosen = [by_gid[g] for g in keep]
@@ -198,7 +199,8 @@ def next_today(body: NextRequest) -> NextResponse:
         raise HTTPException(status_code=400, detail="energy must be deep or shallow")
     rows = _rows()
     today, scored_at = _stamp(rows)
-    scored = ScoredSet(today=date.today(), tasks=[_to_scored(r) for r in rows])
+    scored_today = date.fromisoformat(today) if today else date.today()
+    scored = ScoredSet(today=scored_today, tasks=[_to_scored(r) for r in rows])
     config = prioritize_config.load()
     picked = pz.select(scored.next(), config, n=body.n, energy=body.energy)
     sides = pz.side_lists(scored)
@@ -215,7 +217,7 @@ def next_today(body: NextRequest) -> NextResponse:
         run_id = repo.insert_run(
             conn,
             kind="manual",
-            today=date.fromisoformat(today) if today else date.today(),
+            today=scored_today,
             trigger_gid=None,
             top=top,
         )
@@ -233,7 +235,10 @@ def next_today(body: NextRequest) -> NextResponse:
 
 @router.put("/tasks/{gid}/overrides")
 def put_overrides(gid: str, body: OverridesRequest) -> dict:
-    patch = {k: getattr(body, k) for k in body.model_fields_set}
+    patch = {
+        k: (v.isoformat() if isinstance(v, date) else v)
+        for k, v in ((k, getattr(body, k)) for k in body.model_fields_set)
+    }
     if body.impact is not None and body.impact not in pz.IMPACTS:
         raise HTTPException(status_code=400, detail="impact must be low, medium or high")
     if body.energy is not None and body.energy not in pz.ENERGIES:

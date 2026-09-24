@@ -160,6 +160,13 @@ def test_tag_beats_override_beats_model():
     assert pz.effective(a, e, Overrides.NONE, CFG).waiting_on is None
 
 
+def test_effective_ignores_malformed_stored_due_date_inferred():
+    a = facts("a", points=1)
+    o = Overrides(fields={"due_date_inferred": "not-a-date"})
+    eff = pz.effective(a, enr(), o, CFG)
+    assert eff.due_date_inferred is None
+
+
 def test_points_precedence_and_low_confidence_multiplier():
     field = facts("f", points=2, points_estimated=5)
     est = facts("e", points=None, points_estimated=5)

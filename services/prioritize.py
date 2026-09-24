@@ -76,7 +76,10 @@ def effective(
 
     inferred = o.get("due_date_inferred", enrichment.due_date_inferred)
     if isinstance(inferred, str):
-        inferred = date.fromisoformat(inferred)
+        try:
+            inferred = date.fromisoformat(inferred)
+        except ValueError:
+            inferred = None
     inferred_conf = (
         "high"
         if "due_date_inferred" in o and o["due_date_inferred"]
