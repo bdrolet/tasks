@@ -33,6 +33,7 @@ def run(target_url: str) -> dict:
 
     registered: dict[str, str] = {}
     inactive: set[str] = set()
+    stale_filters: set[str] = set()
     for hook in asana.list_webhooks():
         project_gid = webhook_registry.target_project(hook.get("target") or "", target_url)
         if not project_gid:
@@ -62,12 +63,25 @@ def run(target_url: str) -> dict:
                 hook["gid"],
                 project_gid,
             )
+        if not webhook_registry.filters_match(hook.get("filters"), asana.WEBHOOK_FILTERS):
+            stale_filters.add(project_gid)
+            logger.warning(
+                "Webhook sync: webhook %s for project %s has stale filters — replacing",
+                hook["gid"],
+                project_gid,
+            )
 
     with get_conn() as conn:
         with_secrets = {row["project_gid"] for row in repo_webhooks.list_all(conn)}
 
-    plan = webhook_registry.plan(managed, registered, with_secrets, inactive)
-    live = {gid for gid in registered if gid in managed and gid not in inactive}
+    plan = webhook_registry.plan(
+        managed, registered, with_secrets, inactive, stale_filters=stale_filters
+    )
+    live = {
+        gid
+        for gid in registered
+        if gid in managed and gid not in inactive and gid not in stale_filters
+    }
 
     # Safety valve. managed_projects.managed() degrades an unset, blank or
     # malformed map to {} — right for sections.done(), wrong for a destructive

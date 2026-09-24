@@ -147,3 +147,22 @@ def test_an_inactive_webhook_for_an_unmanaged_project_is_simply_deleted():
 def test_inactive_defaults_to_empty():
     """The parameter is additive: existing three-argument callers are steady."""
     assert reg.plan({"p1"}, {"p1": "w1"}, {"p1"}) == reg.Plan([], [])
+
+
+def test_filters_match_ignores_order_and_nulls():
+    wanted = [
+        {"resource_type": "task", "action": "changed", "fields": ["completed", "name"]},
+        {"resource_type": "story", "action": "added"},
+    ]
+    registered = [
+        {"resource_type": "story", "action": "added", "fields": None, "resource_subtype": None},
+        {"resource_type": "task", "action": "changed", "fields": ["name", "completed"]},
+    ]
+    assert reg.filters_match(registered, wanted)
+    assert not reg.filters_match(registered[:1], wanted)
+    assert not reg.filters_match(None, wanted)
+
+
+def test_plan_replaces_stale_filters():
+    plan = reg.plan({"p1"}, {"p1": "w1"}, {"p1"}, stale_filters={"p1"})
+    assert plan.to_delete == [("p1", "w1")] and plan.to_register == ["p1"]

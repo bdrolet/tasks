@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import clients.pubsub as ps
 from handlers import asana_webhook
 from services import managed_projects, webhook_registry
 from tests.test_repo import FakeConn
@@ -377,3 +378,59 @@ def test_a_delivery_for_an_unmanaged_project_never_reaches_the_database(monkeypa
         PROJECT_SECRET, [{"action": "added", "resource": {"gid": "t1", "resource_type": "task"}}]
     )
     assert asana_webhook.receive(body, sig, "p-stranger") == ("", 401)
+
+
+def _published(monkeypatch):
+    out = []
+    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: out.append((gid, source)))
+    return out
+
+
+def test_task_events_publish_once_per_gid(monkeypatch):
+    _capture(monkeypatch)
+    published = _published(monkeypatch)
+    body, sig = _signed(
+        [
+            {
+                "action": "changed",
+                "resource": {"gid": "t1", "resource_type": "task"},
+                "change": {"field": "name"},
+            },
+            {
+                "action": "changed",
+                "resource": {"gid": "t1", "resource_type": "task"},
+                "change": {"field": "custom_fields"},
+            },
+            {"action": "deleted", "resource": {"gid": "t2", "resource_type": "task"}},
+        ]
+    )
+    asana_webhook.receive(body, sig)
+    assert published == [("t1", "webhook"), ("t2", "webhook")]
+
+
+def test_story_event_publishes_parent_task(monkeypatch):
+    _capture(monkeypatch)
+    published = _published(monkeypatch)
+    body, sig = _signed(
+        [
+            {
+                "action": "added",
+                "resource": {
+                    "gid": "s1",
+                    "resource_type": "story",
+                    "resource_subtype": "comment_added",
+                },
+                "parent": {"gid": "t7", "resource_type": "task"},
+            },
+        ]
+    )
+    assert asana_webhook.receive(body, sig) == ("", 200)
+    assert published == [("t7", "webhook")]
+
+
+def test_story_event_without_parent_is_ignored(monkeypatch):
+    _capture(monkeypatch)
+    published = _published(monkeypatch)
+    body, sig = _signed([{"action": "added", "resource": {"gid": "s1", "resource_type": "story"}}])
+    assert asana_webhook.receive(body, sig) == ("", 200)
+    assert published == []

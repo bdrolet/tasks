@@ -515,23 +515,38 @@ def delete_story(story_gid: str) -> None:
 # Registered filters are the delivery gate: an event type missing here never
 # reaches the CF, no matter what handlers/asana_webhook.py::receive supports.
 # Keep in sync with that function.
-WEBHOOK_FILTERS = [
+WEBHOOK_FILTERS: list[dict] = [
     {
         "resource_type": "task",
         "action": "changed",
-        "fields": ["completed", "name", "notes", "due_on"],
+        "fields": [
+            "completed",
+            "name",
+            "notes",
+            "due_on",
+            "due_at",
+            "start_on",
+            "custom_fields",
+            "dependencies",
+            "tags",
+        ],
     },
     {"resource_type": "task", "action": "added"},
     {"resource_type": "task", "action": "deleted"},
     {"resource_type": "task", "action": "removed"},
+    # Comments: a story `added` event carries parent.gid = the task.
+    {"resource_type": "story", "action": "added"},
 ]
 
 
 def list_webhooks() -> list[dict]:
-    """Every webhook in the workspace: [{gid, target, active, resource}]."""
+    """Every webhook in the workspace: [{gid, target, active, resource, filters}]."""
     return _paginate(
         "/webhooks",
-        {"workspace": get_workspace_gid(), "opt_fields": "target,active,resource.gid"},
+        {
+            "workspace": get_workspace_gid(),
+            "opt_fields": "target,active,resource.gid,filters.resource_type,filters.action,filters.fields",
+        },
         operation="list_webhooks",
     )
 
