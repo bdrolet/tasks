@@ -157,6 +157,13 @@ def test_overrides_merge_and_reject_unknown(monkeypatch):
     )
 
 
+def test_overrides_reject_zero_story_points(monkeypatch):
+    saved = []
+    monkeypatch.setattr(repo, "merge_overrides", lambda c, gid, patch: saved.append(patch))
+    resp = client.put("/tasks/t1/overrides", headers=AUTH, json={"story_points": 0})
+    assert resp.status_code == 422 and saved == []
+
+
 def test_overrides_rejects_malformed_date_and_serialises_valid_ones(monkeypatch):
     saved = []
 

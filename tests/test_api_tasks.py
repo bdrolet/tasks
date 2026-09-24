@@ -618,3 +618,27 @@ def test_create_with_points_sets_field_after_create(monkeypatch, fields):
     assert resp.status_code == 201
     assert sent == [("n1", {"custom_fields": {"cf-points": 2}})]
     assert fields == [("n1", "api")]
+
+
+def test_patch_missing_custom_field_is_503_before_any_write(monkeypatch, fields):
+    def missing(name):
+        raise RuntimeError(f"custom field {name!r} missing — run scripts/setup_custom_fields.py")
+
+    monkeypatch.setattr(cf, "field_gid", missing)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
+    sent = []
+    monkeypatch.setattr(asana, "update_task", lambda gid, f: sent.append(f))
+    resp = client.patch("/tasks/t1", headers=AUTH, json={"name": "Renamed", "story_points": 3})
+    assert resp.status_code == 503 and "setup_custom_fields" in resp.json()["detail"]
+    assert sent == [] and fields == []
+
+
+def test_patch_without_custom_fields_never_resolves_them(monkeypatch, fields):
+    def missing(name):
+        raise RuntimeError("missing")
+
+    monkeypatch.setattr(cf, "field_gid", missing)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
+    monkeypatch.setattr(asana, "update_task", lambda gid, f: None)
+    monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
+    assert client.patch("/tasks/t1", headers=AUTH, json={"name": "Renamed"}).status_code == 200

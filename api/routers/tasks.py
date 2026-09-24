@@ -84,7 +84,7 @@ class CreateTaskRequest(BaseModel):
     tags: list[str] = []
     assignee: str | None = None  # "me", email, or GID — passed through to Asana
     parent: str | None = None  # task GID; when set, created as a subtask (no project/section)
-    story_points: int | None = None
+    story_points: int | None = Field(default=None, ge=1)
 
 
 class CreatedTaskResponse(BaseModel):
@@ -112,7 +112,7 @@ class UpdateTaskRequest(BaseModel):
     add_tags: list[str] = []
     remove_tags: list[str] = []
     assignee: str | None = None  # explicit null unassigns
-    story_points: int | None = None
+    story_points: int | None = Field(default=None, ge=1)
     started_at: str | None = None  # explicit null clears
 
 
@@ -325,6 +325,16 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
     _validate_repeat_tags(body.add_tags)
 
     with translate_asana_errors():
+        # Resolve the custom-field gids before any mutation, so a missing
+        # field fails cleanly instead of after the name/section/tag writes.
+        field_gids: dict[str, str] = {}
+        try:
+            for name, key in ((cf.STORY_POINTS, "story_points"), (cf.STARTED_AT, "started_at")):
+                if key in body.model_fields_set:
+                    field_gids[key] = cf.field_gid(name)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
         task = asana.get_task_detail(gid)
         if task is None:
             raise HTTPException(status_code=404, detail=f"unknown task: {gid}")
@@ -383,10 +393,10 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
                     asana.remove_tag(gid, tag_gid_opt)
 
         custom: dict = {}
-        if "story_points" in body.model_fields_set:
-            custom[cf.gids()[cf.STORY_POINTS]] = body.story_points
-        if "started_at" in body.model_fields_set:
-            custom[cf.gids()[cf.STARTED_AT]] = cf.date_value(body.started_at)
+        if "story_points" in field_gids:
+            custom[field_gids["story_points"]] = body.story_points
+        if "started_at" in field_gids:
+            custom[field_gids["started_at"]] = cf.date_value(body.started_at)
         if custom:
             asana.update_task(gid, {"custom_fields": custom})
     task_index.refresh(gid)

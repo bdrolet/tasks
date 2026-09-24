@@ -90,7 +90,7 @@ def test_parse_rejects_schema_violations(bad):
 def test_extract_uses_injected_call_and_model():
     seen = {}
 
-    def fake(*, model, system, user, schema, effort="low", max_tokens=2048):
+    def fake(*, model, system, user, schema, effort="low", max_tokens=8000):
         seen.update(model=model, effort=effort, schema=schema)
         return json.dumps(GOOD)
 

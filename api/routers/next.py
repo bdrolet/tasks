@@ -83,7 +83,7 @@ class OverridesRequest(BaseModel):
     impact: str | None = None
     energy: str | None = None
     due_date_inferred: date | None = None
-    story_points: int | None = None
+    story_points: int | None = Field(default=None, ge=1)
     pinned_rank: int | None = Field(default=None, ge=1)
     snooze_until: date | None = None
 

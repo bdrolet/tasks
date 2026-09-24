@@ -11,9 +11,9 @@
     task-next override <ref|gid> field=value ... (field= clears)
     task-next calibrate
 
-Refs are scripts/task_ref.py refs over the ranking; a write resolves a ref
-against GET /ranking?bucket=next and every other bucket before sending the
-GID. Stdlib only — this runs from PATH under whatever python3 is first.
+Refs are scripts/task_ref.py refs; a write resolves a ref against the
+default listing (POST /next: next + side lists) first, then the non-completed
+ranking (GET /ranking, every bucket), before sending the GID. Stdlib only — this runs from PATH under whatever python3 is first.
 `scripts/link-skills.sh` symlinks this onto PATH as `task-next`."""
 
 import argparse
@@ -105,11 +105,16 @@ def _line(t: dict, refs: dict[str, str], explain: bool) -> str:
     return "\t".join(str(x) for x in row)
 
 
+LIST_KEYS = ("next", "overcommitted", "stale", "nudge")
+
+
+def _listed(payload: dict) -> list[dict]:
+    """The /next payload's rows in display order — the set its refs are over."""
+    return [t for key in LIST_KEYS for t in payload.get(key, [])]
+
+
 def render_lists(payload: dict, explain: bool = False) -> str:
-    all_tasks = [
-        t for key in ("next", "overcommitted", "stale", "nudge") for t in payload.get(key, [])
-    ]
-    refs = _refs(all_tasks)
+    refs = _refs(_listed(payload))
     out = [f"# {payload.get('today')} — ref\tgid\tdue\tpts\tname\tproject\tflags"]
     for key, title in (
         ("next", "Next"),
@@ -136,11 +141,37 @@ def render_ranking(payload: dict, explain: bool = False) -> str:
 
 
 def _all_tasks(explain: bool = False) -> list[dict]:
+    """Every non-completed ranked task (completed rows would only add refs
+    that can collide with the ones a listing shows)."""
     tasks: list[dict] = []
     for bucket in ("next", "nudge", "snoozed", "excluded"):
         params = {"bucket": bucket, "limit": 500, "explain": str(explain).lower()}
-        tasks += _api("GET", "/ranking", params=params).get("tasks", [])
+        tasks += [
+            t
+            for t in _api("GET", "/ranking", params=params).get("tasks", [])
+            if t.get("bucket") != "excluded:completed"
+        ]
     return tasks
+
+
+def _next_body(args: argparse.Namespace) -> dict:
+    body: dict = {"explain": args.explain}
+    if args.energy:
+        body["energy"] = args.energy
+    if args.n:
+        body["n"] = args.n
+    return body
+
+
+def resolve_for_write(ref_or_gid: str, args: argparse.Namespace) -> str:
+    """A ref means what the default listing showed: resolve against the /next
+    lists first, and only then against the non-completed ranking."""
+    if ref_or_gid.isdigit() and len(ref_or_gid) > 3:
+        return ref_or_gid
+    listed = _listed(_api("POST", "/next", _next_body(args)))
+    if ref_or_gid in _refs(listed).values():
+        return resolve(ref_or_gid, listed)
+    return resolve(ref_or_gid, _all_tasks())
 
 
 def resolve(ref_or_gid: str, tasks: list[dict]) -> str:
@@ -185,12 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd is None:
-        body: dict = {"explain": args.explain}
-        if args.energy:
-            body["energy"] = args.energy
-        if args.n:
-            body["n"] = args.n
-        print(render_lists(_api("POST", "/next", body), args.explain))
+        print(render_lists(_api("POST", "/next", _next_body(args)), args.explain))
         return 0
     if args.cmd == "ranking":
         if args.all:
@@ -212,9 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
-    gid = resolve(
-        args.task, _all_tasks() if not (args.task.isdigit() and len(args.task) > 3) else []
-    )
+    gid = resolve_for_write(args.task, args)
     if args.cmd == "start":
         _api("PATCH", f"/tasks/{gid}", {"started_at": date.today().isoformat()})
         print(f"started {gid} today")

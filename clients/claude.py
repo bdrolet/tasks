@@ -95,7 +95,7 @@ def extract_structured(
     user: str,
     schema: dict,
     effort: str = "low",
-    max_tokens: int = 2048,
+    max_tokens: int = 8000,  # adaptive thinking counts against it
 ) -> str:
     """Single-turn structured extraction on a current-generation model.
     Adaptive thinking (Opus 5 runs it by default; stated explicitly so the

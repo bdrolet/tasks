@@ -25,8 +25,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--publish", action="store_true", help="actually publish")
     args = parser.parse_args()
+    projects = managed_projects.gids()
+    if not projects:
+        raise SystemExit(
+            "backfill_prioritize: ASANA_MANAGED_PROJECTS is unset or empty — nothing to "
+            "backfill (run scripts/fetch-env.sh, or set it in .env)"
+        )
     gids: list[str] = []
-    for project_gid in sorted(managed_projects.gids()):
+    for project_gid in sorted(projects):
         for task in asana.list_project_tasks(
             project_gid, only_open=True, opt_fields=asana.HEAL_OPT_FIELDS
         ):
@@ -35,7 +41,7 @@ def main() -> None:
                 gids += [
                     s["gid"] for s in asana.get_subtasks(task["gid"]) if not s.get("completed")
                 ]
-    print(f"{len(gids)} task(s) across {len(managed_projects.gids())} project(s)")
+    print(f"{len(gids)} task(s) across {len(projects)} project(s)")
     if not args.publish:
         print("dry run — pass --publish to send")
         return
