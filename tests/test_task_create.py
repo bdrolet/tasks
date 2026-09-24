@@ -187,9 +187,16 @@ def test_created_task_is_indexed(monkeypatch):
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
     refreshed = []
     monkeypatch.setattr(task_create.task_index, "refresh", refreshed.append)
+    published = []
+    monkeypatch.setattr(
+        task_create.pubsub,
+        "publish_task_changed",
+        lambda gid, source: published.append((gid, source)),
+    )
 
     task_create.handle(make_email_event())
     assert refreshed == ["42"]
+    assert published == [("42", "pipeline")]
 
 
 def test_no_task_means_no_index_refresh(monkeypatch):

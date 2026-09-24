@@ -2,6 +2,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 import clients.asana as asana
+import clients.pubsub as ps
 from api.main import app
 
 client = TestClient(app)
@@ -16,10 +17,15 @@ def test_add_comment_text(monkeypatch):
         return {"gid": "s1", "text": text}
 
     monkeypatch.setattr(asana, "create_story", fake_create)
+    published = []
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
+    )
     resp = client.post("/tasks/t1/comments", json={"text": "note to self"}, headers=AUTH)
     assert resp.status_code == 201
     assert resp.json() == {"comment_gid": "s1", "text": "note to self"}
     assert captured["gid"] == "t1"
+    assert published == [("t1", "api")]
 
 
 def test_add_comment_html_wrapped(monkeypatch):

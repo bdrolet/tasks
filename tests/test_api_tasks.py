@@ -2,8 +2,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import clients.asana as asana
+import clients.pubsub as ps
 from api.main import app
 from models.events import CreatedTask
+from services import custom_fields as cf
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer sekrit"}
@@ -19,6 +21,18 @@ def no_db(monkeypatch):
     from api.routers import tasks as tasks_router
 
     monkeypatch.setattr(tasks_router, "email_context", lambda gids: {})
+
+
+@pytest.fixture(autouse=True)
+def fields(monkeypatch):
+    monkeypatch.setattr(
+        cf, "gids", lambda refresh=False: {"Story points": "cf-points", "Started at": "cf-started"}
+    )
+    published = []
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
+    )
+    return published
 
 
 DETAIL = {
@@ -53,7 +67,7 @@ STORIES = [
 
 
 def test_get_task_detail_with_comments(monkeypatch):
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: dict(DETAIL))
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
     monkeypatch.setattr(asana, "get_stories", lambda gid: list(STORIES))
 
     resp = client.get("/tasks/t1", headers=AUTH)
@@ -70,7 +84,7 @@ def test_get_task_detail_with_comments(monkeypatch):
 
 
 def test_get_task_404(monkeypatch):
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: None)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: None)
     assert client.get("/tasks/nope", headers=AUTH).status_code == 404
 
 
@@ -171,7 +185,9 @@ def test_create_task_unknown_section_400(monkeypatch):
 
 def _patch_env(monkeypatch, detail=None):
     captured = {"update": None, "added_tags": [], "removed_tags": [], "moved": None}
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: detail or dict(DETAIL))
+    monkeypatch.setattr(
+        asana, "get_task_detail", lambda gid, opt_fields=None: detail or dict(DETAIL)
+    )
     monkeypatch.setattr(
         asana, "update_task", lambda gid, fields: captured.__setitem__("update", fields)
     )
@@ -234,7 +250,7 @@ def test_patch_tags_add_and_remove(monkeypatch):
 
 
 def test_patch_unknown_task_404(monkeypatch):
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: None)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: None)
     assert client.patch("/tasks/nope", json={"name": "x"}, headers=AUTH).status_code == 404
 
 
@@ -323,7 +339,7 @@ def test_create_subtask_with_parent(monkeypatch):
 
 def test_get_task_includes_parent_and_subtasks(monkeypatch):
     detail = dict(DETAIL, num_subtasks=2, parent={"gid": "t0", "name": "[P1] Plan trip"})
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: detail)
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: detail)
     monkeypatch.setattr(asana, "get_stories", lambda gid: [])
     monkeypatch.setattr(
         asana,
@@ -354,7 +370,7 @@ def test_get_task_includes_parent_and_subtasks(monkeypatch):
 
 
 def test_get_task_skips_subtask_fetch_when_none(monkeypatch):
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: dict(DETAIL))
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
     monkeypatch.setattr(asana, "get_stories", lambda gid: [])
 
     def boom(gid):
@@ -387,7 +403,7 @@ def test_create_task_refreshes_index(monkeypatch):
 def test_patch_task_refreshes_index(monkeypatch):
     from api.routers import tasks as tasks_router
 
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: dict(DETAIL))
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
     monkeypatch.setattr(asana, "update_task", lambda gid, fields: None)
     refreshed = []
     monkeypatch.setattr(tasks_router.task_index, "refresh", refreshed.append)
@@ -405,7 +421,7 @@ def test_patch_moves_task_to_another_project(monkeypatch):
     monkeypatch.setattr(
         asana,
         "get_task_detail",
-        lambda gid: {
+        lambda gid, opt_fields=None: {
             "gid": gid,
             "name": "Complete portal documents",
             "memberships": [{"project": {"gid": "p_inbox", "name": "Inbox"}}],
@@ -438,7 +454,7 @@ def test_patch_project_move_places_the_task_in_a_section_of_the_new_project(monk
     monkeypatch.setattr(
         asana,
         "get_task_detail",
-        lambda gid: {"gid": gid, "name": "x", "memberships": []},
+        lambda gid, opt_fields=None: {"gid": gid, "name": "x", "memberships": []},
     )
     monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p_board", "name": "Ben's Board"}])
     monkeypatch.setattr(asana, "get_sections", lambda gid: [{"gid": "s_inbox", "name": "Inbox"}])
@@ -459,7 +475,11 @@ def test_patch_refuses_to_move_a_subtask_between_projects(monkeypatch):
     monkeypatch.setattr(
         asana,
         "get_task_detail",
-        lambda gid: {"gid": gid, "name": "x", "parent": {"gid": "p", "name": "Parent"}},
+        lambda gid, opt_fields=None: {
+            "gid": gid,
+            "name": "x",
+            "parent": {"gid": "p", "name": "Parent"},
+        },
     )
     monkeypatch.setattr(asana, "list_projects", lambda: [{"gid": "p_board", "name": "Ben's Board"}])
 
@@ -470,7 +490,9 @@ def test_patch_refuses_to_move_a_subtask_between_projects(monkeypatch):
 
 def test_patch_rejects_an_unknown_field_instead_of_silently_dropping_it(monkeypatch):
     """A 200 that ignored the only field the caller sent is the bug this guards."""
-    monkeypatch.setattr(asana, "get_task_detail", lambda gid: {"gid": gid, "name": "x"})
+    monkeypatch.setattr(
+        asana, "get_task_detail", lambda gid, opt_fields=None: {"gid": gid, "name": "x"}
+    )
     resp = client.patch("/tasks/t1", json={"proejct": "Ben's Board"}, headers=AUTH)
     assert resp.status_code == 422
 
@@ -536,3 +558,63 @@ def test_ordinary_tags_are_untouched(monkeypatch):
     )
     assert resp.status_code == 201
     assert captured["tags"] == ["tg1", "tg2"]
+
+
+# --- story points / started-at / dependencies -----------------------------
+
+
+def test_detail_exposes_points_started_and_dependencies(monkeypatch):
+    detail = dict(
+        DETAIL,
+        custom_fields=[
+            {"gid": "cf-points", "name": "Story points", "number_value": 3},
+            {"gid": "cf-started", "name": "Started at", "date_value": {"date": "2026-09-22"}},
+        ],
+        start_on="2026-09-20",
+        dependencies=[{"gid": "d1", "name": "Other", "completed": False}],
+    )
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: detail)
+    monkeypatch.setattr(asana, "get_stories", lambda gid: [])
+    body = client.get("/tasks/t1", headers=AUTH).json()
+    assert (
+        body["story_points"] == 3
+        and body["started_at"] == "2026-09-22"
+        and body["start_on"] == "2026-09-20"
+    )
+    assert body["dependencies"] == [{"gid": "d1", "name": "Other", "completed": False}]
+
+
+def test_patch_sets_points_and_started_and_publishes(monkeypatch, fields):
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
+    sent = []
+    monkeypatch.setattr(asana, "update_task", lambda gid, f: sent.append(f))
+    monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
+    resp = client.patch(
+        "/tasks/t1", headers=AUTH, json={"story_points": 5, "started_at": "2026-09-23"}
+    )
+    assert resp.status_code == 200
+    assert {"custom_fields": {"cf-points": 5, "cf-started": "2026-09-23"}} in sent
+    assert fields == [("t1", "api")]
+
+
+def test_patch_clears_started_at_with_null(monkeypatch, fields):
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
+    sent = []
+    monkeypatch.setattr(asana, "update_task", lambda gid, f: sent.append(f))
+    monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
+    client.patch("/tasks/t1", headers=AUTH, json={"started_at": None})
+    assert {"custom_fields": {"cf-started": None}} in sent
+
+
+def test_create_with_points_sets_field_after_create(monkeypatch, fields):
+    monkeypatch.setattr(
+        asana, "create_task_from_fields", lambda f: CreatedTask(gid="n1", permalink_url="u")
+    )
+    monkeypatch.setattr(asana, "add_task_to_section", lambda *a: None)
+    sent = []
+    monkeypatch.setattr(asana, "update_task", lambda gid, f: sent.append((gid, f)))
+    monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
+    resp = client.post("/tasks", headers=AUTH, json={"name": "Do it", "story_points": 2})
+    assert resp.status_code == 201
+    assert sent == [("n1", {"custom_fields": {"cf-points": 2}})]
+    assert fields == [("n1", "api")]
