@@ -72,6 +72,7 @@ class MemConn:
         self.facts, self.enrichment, self.overrides, self.stats = {}, {}, {}, {}
         self.scores, self.runs, self.estimated = [], [], set()
         self.deleted = []
+        self.last_offered = {}
 
     def __enter__(self):
         return self
@@ -106,6 +107,9 @@ def db(monkeypatch):
     monkeypatch.setattr(repo, "list_enrichment", lambda c: dict(c.enrichment))
     monkeypatch.setattr(repo, "list_overrides", lambda c: dict(c.overrides))
     monkeypatch.setattr(repo, "list_stats", lambda c: dict(c.stats))
+    monkeypatch.setattr(
+        repo, "project_last_offered", lambda c, *, today, days=30: dict(c.last_offered)
+    )
     monkeypatch.setattr(repo, "clear_pin", lambda c, gid: None)
     monkeypatch.setattr(
         repo, "snapshot_completion", lambda c, f: c.stats.__setitem__(f.gid, "snap")
@@ -752,3 +756,52 @@ def test_gather_depth_is_measured_from_the_tree_top(db, asana_fake, model, monke
     assert from_root is not None
     assert [f.gid for f, _, _ in from_root] == ["t1", *levels]
     assert from_root[-1][0].num_open_subtasks == 0
+
+
+def test_excluded_project_skips_enrichment_and_write_back(db, asana_fake, model, monkeypatch):
+    inbox = dict(
+        TASK,
+        memberships=[{"project": {"gid": "p1", "name": "Inbox"}, "section": None}],
+    )
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(inbox))
+    enriched = []
+    monkeypatch.setattr(
+        h.otel,
+        "prioritize_enrich",
+        type("C", (), {"add": staticmethod(lambda n, attrs: enriched.append(attrs))})(),
+    )
+    h.handle_task_changed("t1", today=TODAY)
+    assert model == [] and "t1" not in db.enrichment
+    assert asana_fake["points"] == [] and asana_fake["comments"] == []
+    assert db.facts["t1"].project_name == "Inbox"
+    assert enriched == [{"result": "skipped"}]
+    assert db.scores[-1].by_gid()["t1"].bucket == "excluded:project"
+
+
+def test_task_moved_out_of_excluded_project_enriches(db, asana_fake, model, monkeypatch):
+    inbox = dict(
+        TASK,
+        memberships=[{"project": {"gid": "p1", "name": "Inbox"}, "section": None}],
+    )
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(inbox))
+    h.handle_task_changed("t1", today=TODAY)
+    assert model == []
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(TASK))
+    h.handle_task_changed("t1", today=TODAY)
+    assert len(model) == 1 and asana_fake["points"] == [("t1", 3)]
+
+
+def test_rescore_passes_project_last_offered_into_the_scorer(db, monkeypatch):
+    db.facts["a"] = _facts("a", tags=[])
+    db.last_offered = {"Work": TODAY - timedelta(days=2)}
+    seen = []
+    real = h.pz.score_set
+
+    def spy(*args, **kw):
+        seen.append(kw.get("project_last_offered"))
+        return real(*args, **kw)
+
+    monkeypatch.setattr(h.pz, "score_set", spy)
+    scored = h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
+    assert seen == [{"Work": TODAY - timedelta(days=2)}]
+    assert scored.by_gid()["a"].components["days_since_project_offered"] == 2
