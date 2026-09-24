@@ -21,7 +21,7 @@ stays in inbox; task-serving work lives here.
 | **Digest** | Cloud Scheduler `tasks-digest`, `*/10 * * * *` → `POST <webhook-url>/digest` (same bearer as escalate) — rebuilds the due-day calendar digest when the Asana webhook has set `digest_state.dirty_at` or the last rebuild is > 60 min old; writes through `clients/schedule_api.py` (`SCHEDULE_API_URL`; auth is a Google ID token for the `tasks-webhook-cf` SA via `clients/gcp_auth.py` — schedule-api is behind Cloud Run IAM) |
 | **Webhook sync** | Cloud Scheduler `tasks-webhook-sync`, `30 5 * * *` America/New_York → `POST <webhook-url>/webhook-sync` (same bearer as escalate) — reconciles per-project Asana webhook registrations against `ASANA_MANAGED_PROJECTS`, self-healing a registration Asana dropped after 24h of failed delivery |
 | **Prioritizer** | `tasks-prioritize` CF — Pub/Sub trigger on the `task-events` topic (this repo's), entry point `prioritize` in `main.py`; Cloud Scheduler `tasks-day-changed` `45 5 * * *` America/New_York publishes `day_changed`; read side `GET /ranking`, `POST /next`, `GET /calibrate`, `PUT /tasks/{gid}/overrides` on tasks-api; `config/prioritize.toml` holds every weight. Design: `docs/superpowers/specs/2026-09-23-next-prioritizer-design.md` |
-| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets); schema in `repo/schema.sql` |
+| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets), `task_facts`, `task_enrichment`, `task_overrides`, `task_scores`, `prioritize_runs`, `task_stats` (prioritizer); schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
 | **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
 
@@ -191,7 +191,7 @@ routing: `docs/superpowers/specs/2026-09-08-project-calendar-routing-design.md`.
 
 DB usage in handlers is **best-effort**: Asana is the source of truth; a DB
 outage degrades lookups to the `external:{message_id}` fallback and must never
-crash an event. Three handlers depart from that deliberately, each because
+crash an event. Four handlers depart from that deliberately, each because
 failing is cheaper than acting on a state it cannot read:
 `handlers/due_digest.py` skips a rebuild outright when the DB is unavailable,
 since without `due_day_events` it cannot address its own calendar events and
@@ -199,9 +199,12 @@ would risk duplicating them (due-day digest spec D7);
 `handlers/asana_webhook.py::_secret_for` returns 401 on a cold secret cache
 plus a DB outage rather than validating a delivery it cannot authenticate —
 safe only because Asana redelivers for 24 hours (cross-project recurrence spec
-D6); and `handlers/webhook_sync.py` lets a DB failure raise, because a
+D6); `handlers/webhook_sync.py` lets a DB failure raise, because a
 reconciler that cannot read its own secret rows would compute a diff that
-deletes and re-registers every webhook (see its module docstring).
+deletes and re-registers every webhook (see its module docstring); and
+`handlers/prioritize.py` raises on a DB or Asana failure so Pub/Sub
+redelivers, since its whole job is writing the prioritizer tables — an
+Anthropic failure alone does not raise (next-prioritizer spec D7).
 
 ## Secrets
 

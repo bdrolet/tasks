@@ -24,6 +24,34 @@
    Incomplete tasks with `due_on` before today move to Overdue (skipping ones
    already there or with `escalated_at` set); `ASANA_OVERDUE_TAG_GID`
    optionally adds a tag.
+5. **task_changed / day_changed** — the prioritizer. Three write paths
+   (`handlers/asana_webhook.py`, batched behind one shared deadline;
+   `handlers/task_create.py`; and `api/routers/tasks.py`/`comments.py`) each
+   publish `task_changed` to this repo's own `task-events` topic after every
+   mutation, right beside their existing `task_index.refresh` call. The
+   `tasks-prioritize` CF (`main.py`'s `prioritize` entry point, body in
+   `handlers/prioritize.py`) subscribes and, per message, gathers the task's
+   Asana facts (and one level of subtasks), enriches with Claude when its
+   content hash has moved, writes a story-point draft back to Asana at most
+   once, and rescores the whole open set into `task_scores`. A Claude
+   failure leaves any existing enrichment row in place (flagged
+   `enrichment_stale`) rather than falling back to defaults — defaults apply
+   only when no row exists yet — and facts and scores still update; the
+   daily heal republishes it. A DB or Asana failure instead raises so
+   Pub/Sub redelivers (D7): this handler's whole job is writing those
+   tables, so failing loudly beats scoring on data it couldn't fetch or
+   save. Cloud Scheduler `tasks-day-changed` publishes a dateless
+   `day_changed` once a day (45 5 * * * America/New_York); the subscriber
+   settles yesterday's deferrals, heals — republishing `task_changed` for
+   any task Asana shows as modified since its last gather, never enriched,
+   or missing a facts row altogether, *and* for any task this service still
+   holds open that Asana's open-task listing no longer contains (a
+   completion or deletion whose event was lost) — then rescores and records
+   the day's canonical run. The read side (`GET /ranking`, `POST /next`,
+   `GET /calibrate`, `PUT /tasks/{gid}/overrides`, fronted by the `task-next`
+   CLI/agent) only ever reads `task_scores` and the other prioritizer
+   tables — it needs neither Asana nor Anthropic to be up. Design:
+   `docs/superpowers/specs/2026-09-23-next-prioritizer-design.md`.
 
 Asana is the source of truth; the DB accelerates lookups and records
 lifecycle timestamps. All DB writes/reads in handlers are best-effort — an
@@ -39,16 +67,20 @@ See `models/events.py` — it is the authoritative schema. JSON arrives with
 | Resource | Name |
 |---|---|
 | Pub/Sub topic | `email-events` — **owned by inbox terraform** (data source here) |
+| Pub/Sub topic | `task-events` — **owned here** (publishers: `tasks-events-cf`, `tasks-webhook-cf`, `tasks-api`, `tasks-prioritize-cf`) |
 | Cloud Function gen2 | `tasks-events` (Pub/Sub trigger on email-events, entry `process`) |
 | Cloud Function gen2 | `tasks-webhook` (HTTP public, entry `webhook`) |
+| Cloud Function gen2 | `tasks-prioritize` (Pub/Sub trigger on task-events, entry `prioritize`) |
 | Service accounts | `tasks-events-cf@`, `tasks-webhook-cf@` — secretAccessor on shared secrets |
+| Service account | `tasks-prioritize-cf@` — secretAccessor on `asana-api-key`, `grafana-otlp-*`, `tasks-db-password`, `tasks-anthropic-api-key`; `cloudsql.client`; publisher on `task-events` (for its own heal republishes) |
 | Cloud Scheduler | `tasks-escalation` |
+| Cloud Scheduler | `tasks-day-changed` — publishes `{"kind": "day_changed"}` to `task-events` |
 | GCS bucket | `bens-project-462804-tasks-cf-source` |
 | Cloud SQL | database `tasks` + user `tasks` on instance `inbox` (instance owned by inbox terraform) |
 | Secrets (owned here) | `asana-webhook-secret`, `tasks-db-password`, `tasks-anthropic-api-key`, `tasks-escalate-token` |
 
-Both CFs deploy from one repo-root zip with different entry points. Both SAs
-hold `roles/cloudsql.client`.
+All three CFs deploy from one repo-root zip with different entry points. All
+their SAs hold `roles/cloudsql.client`.
 
 ## IAM boundaries
 
@@ -64,6 +96,12 @@ hold `roles/cloudsql.client`.
   app level instead: Cloud Scheduler sends `Authorization: Bearer
   <tasks_escalate_token>`, checked by `services/escalation.py::is_authorized`
   (constant-time compare), independent of the Asana HMAC check.
+- `task-events` is produced by this repo (not inbox), so its publisher
+  bindings live here too — `tasks-events-cf`, `tasks-webhook-cf`, `tasks-api`
+  and `tasks-prioritize-cf` (the last for its own heal republishes) all hold
+  `roles/pubsub.publisher` on it. The `tasks-prioritize-cf` SA is scoped
+  narrowly: Asana, Anthropic, the DB and Grafana only — no calendar secret,
+  no standing-context mount, no per-project webhook secrets.
 
 ## Asana webhook lifecycle
 
