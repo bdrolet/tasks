@@ -1,3 +1,4 @@
+from dataclasses import replace as replace_facts
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -522,3 +523,104 @@ def test_same_day_or_future_offer_gives_no_boost_defensively():
     by = run([a, b], last_offered={"A": TODAY, "B": TODAY + timedelta(days=1)}).by_gid()
     assert by["a"].components["starvation_boost"] == 0
     assert by["b"].components["starvation_boost"] == 0
+
+
+# D16 — subtasks inherit snoozed / blocked / waiting from their ancestors.
+
+
+def test_child_of_snoozed_parent_is_snoozed():
+    parent = facts("p", points=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run(
+        [parent, child], overrides={"p": Overrides(snooze_until=TODAY + timedelta(days=3))}
+    ).by_gid()["c"]
+    assert s.bucket == "snoozed"
+    assert s.components["inherited"] == {"state": "snoozed", "from": "p"}
+
+
+def test_child_of_blocked_parent_is_blocked_until_the_dependency_completes():
+    dep = facts("dep", points=1)
+    parent = facts("p", points=1, dependencies=("dep",))
+    child = facts("c", points=1, parent_gid="p")
+    s = run([dep, parent, child]).by_gid()["c"]
+    assert s.bucket == "excluded:blocked"
+    assert s.components["inherited"] == {"state": "blocked", "from": "p"}
+    done = run([replace_facts(dep, completed=True), parent, child]).by_gid()["c"]
+    assert done.bucket == "next"
+    assert done.components["inherited"] is None
+
+
+def test_child_of_waiting_parent_is_a_nudge_under_the_parents_person():
+    parent = facts("p", points=1)
+    child = facts("c", points=1, parent_gid="p")
+    scored = run([parent, child], {"p": enr(waiting_on="the consulate")})
+    s = scored.by_gid()["c"]
+    assert s.bucket == "nudge"
+    assert s.components["waiting_on"] == "the consulate"
+    assert s.components["inherited"] == {"state": "waiting", "from": "p"}
+    assert "c" in {t.gid for t in pz.side_lists(scored)["nudge"]}
+
+
+def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
+    parent = facts("p", points=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], {"p": enr(waiting_on="A"), "c": enr(waiting_on="B")}).by_gid()["c"]
+    assert s.bucket == "nudge"
+    assert s.components["waiting_on"] == "B"
+    assert s.components["inherited"] is None
+
+
+def test_grandchild_inherits_through_two_levels():
+    dep = facts("dep", points=1)
+    gp = facts("gp", points=1, dependencies=("dep",))
+    p = facts("p", points=1, parent_gid="gp")
+    c = facts("c", points=1, parent_gid="p")
+    s = run([dep, gp, p, c]).by_gid()["c"]
+    assert s.bucket == "excluded:blocked"
+    assert s.components["inherited"] == {"state": "blocked", "from": "gp"}
+
+
+def test_pinned_child_of_blocked_parent_is_next_flagged():
+    dep = facts("dep", points=1)
+    parent = facts("p", points=1, dependencies=("dep",))
+    child = facts("c", points=1, parent_gid="p")
+    s = run([dep, parent, child], overrides={"c": Overrides(pinned_rank=1)}).by_gid()["c"]
+    assert s.bucket == "next"
+    assert s.components["pinned_despite"] == "blocked"
+    assert s.components["inherited"] == {"state": "blocked", "from": "p"}
+
+
+def test_pinned_child_of_snoozed_parent_stays_snoozed():
+    parent = facts("p", points=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run(
+        [parent, child],
+        overrides={
+            "p": Overrides(snooze_until=TODAY + timedelta(days=3)),
+            "c": Overrides(pinned_rank=1),
+        },
+    ).by_gid()["c"]
+    assert s.bucket == "snoozed"
+
+
+def test_inheritance_walks_at_most_three_levels():
+    root = facts("r", points=1)
+    chain = [root]
+    for i in range(1, 5):
+        chain.append(facts(f"l{i}", points=1, parent_gid=chain[-1].gid))
+    s = run(chain, overrides={"r": Overrides(snooze_until=TODAY + timedelta(days=3))}).by_gid()
+    assert s["l3"].bucket == "snoozed"
+    assert s["l3"].components["inherited"] == {"state": "snoozed", "from": "r"}
+    assert s["l4"].bucket == "next"
+
+
+def test_inheritance_stops_at_a_missing_ancestor_row():
+    gp = facts("gp", points=1)
+    c = facts("c", points=1, parent_gid="missing")
+    missing_child_of_gp = facts("x", points=1, parent_gid="gp")
+    s = run(
+        [gp, c, missing_child_of_gp],
+        overrides={"gp": Overrides(snooze_until=TODAY + timedelta(days=3))},
+    ).by_gid()
+    assert s["c"].bucket == "next"
+    assert s["x"].bucket == "snoozed"
