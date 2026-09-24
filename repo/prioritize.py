@@ -331,19 +331,23 @@ def last_daily_run(conn: Any) -> dict | None:
 
 
 def project_last_offered(conn: Any, *, today: date, days: int = 30) -> dict[str, date]:
-    """Project name -> the last day one of its tasks was in a daily pick,
-    over the last `days` days. A project absent from the result has not been
-    offered in the window — the scorer treats it as never offered (D14)."""
+    """Project name -> the last PRIOR day one of its tasks was in a daily
+    pick, over [today - days, today). Today's own daily run is excluded: were
+    it counted, every later event rescore would see the morning's projects
+    as offered 0 days ago and reshuffle the pick it just made. A project
+    absent from the result has not been offered in the window — the scorer
+    treats it as never offered (D14)."""
     rows = conn.execute(
         """
         SELECT f.project_name AS project, max(r.today) AS last
         FROM prioritize_runs r
         CROSS JOIN LATERAL jsonb_array_elements(r.top) AS e
         JOIN task_facts f ON f.task_gid = e->>'gid'
-        WHERE r.kind = 'daily' AND r.today >= %s AND f.project_name IS NOT NULL
+        WHERE r.kind = 'daily' AND r.today >= %s AND r.today < %s
+          AND f.project_name IS NOT NULL
         GROUP BY f.project_name
         """,
-        (today - timedelta(days=days),),
+        (today - timedelta(days=days), today),
     ).fetchall()
     out: dict[str, date] = {}
     for r in rows:

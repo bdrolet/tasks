@@ -194,8 +194,10 @@ def test_project_last_offered_reads_daily_runs_within_the_window():
     assert "FROM prioritize_runs r" in q
     assert "CROSS JOIN LATERAL jsonb_array_elements(r.top) AS e" in q
     assert "JOIN task_facts f ON f.task_gid = e->>'gid'" in q
-    assert "r.kind = 'daily'" in q and "r.today >= %s" in q
+    # prior days only: today's own daily run must not zero the boost of the
+    # projects it just picked (every later event rescore would reshuffle them)
+    assert "r.kind = 'daily' AND r.today >= %s AND r.today < %s" in q
     assert "f.project_name IS NOT NULL" in q and "GROUP BY f.project_name" in q
-    assert params == (date(2026, 8, 24),)
+    assert params == (date(2026, 8, 24), date(2026, 9, 23))
     repo.project_last_offered(conn, today=date(2026, 9, 23), days=7)
-    assert conn.executed[1][1] == (date(2026, 9, 16),)
+    assert conn.executed[1][1] == (date(2026, 9, 16), date(2026, 9, 23))

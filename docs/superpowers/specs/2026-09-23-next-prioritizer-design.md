@@ -268,10 +268,16 @@ were middling; it also cost a P1 due today its place. Fairness now works
 across days: each project's tasks carry a **starvation boost**
 `min(max_boost, boost_per_day × days since the project last had a task in a
 daily pick)` (0.1/day, capped at 0.5; a project never offered in the 30-day
-window gets the cap), read from `prioritize_runs` of kind `daily`. The
+window gets the cap), read from **prior** `prioritize_runs` of kind `daily`
+— runs dated before today; today's own run is excluded, or every event
+rescore after the morning run would see its picked projects as offered 0
+days ago and reshuffle the pick. A task's offer history follows its
+*current* project row (the join is on `task_facts`), and a pinned task in
+`top` counts as an offer of its project. The
 boost multiplies score at selection only — it never changes `score` or
 `position`. The same-day haircut stays, softened to 0.95, as a tie-breaker.
-Not every board appears every day; none goes days without appearing.
+Not every board appears every day; a board is less likely to go days
+without appearing.
 
 Hard dates due within `hard_due_window_days` (today or tomorrow; overdue
 included) are **must-dos**: placed first, beyond `n` and capacity, exempt
@@ -371,7 +377,7 @@ CREATE TABLE IF NOT EXISTS task_scores (
     task_gid     TEXT PRIMARY KEY,
     scored_at    TIMESTAMPTZ NOT NULL,
     today        DATE NOT NULL,
-    bucket       TEXT NOT NULL,   -- 'next' | 'nudge' | 'snoozed' | 'excluded:blocked' | 'excluded:parent' | 'excluded:completed'
+    bucket       TEXT NOT NULL,   -- 'next' | 'nudge' | 'snoozed' | 'excluded:blocked' | 'excluded:parent' | 'excluded:completed' | 'excluded:project'
     score        DOUBLE PRECISION,
     position     INTEGER NOT NULL, -- 1-based order in the full ranking (pins first at their rank, then by score)
     rank         INTEGER,         -- position within the default `next` selection, NULL if not selected
@@ -542,11 +548,12 @@ occupy their positions ahead of it. This order is `position` in
 `task_scores` and what `GET /ranking` returns.
 
 **Starvation boost (D14).** `score_set` takes `project_last_offered`
-(project name → last `daily` run date with one of its tasks in `top`, 30-day
-window). Per task: `days = today − last_offered` (null when absent),
-`starvation_boost = max_boost` when null, else `min(max_boost,
-boost_per_day × days)`; both stored in `components`. It feeds selection
-only.
+(project name → last `daily` run date **before today** with one of its
+tasks in `top`, pins included, window `[today − 30, today)`; the project is
+the task's current `task_facts.project_name`). Per task: `days = today −
+last_offered` (null when absent, so ≥ 1 otherwise), `starvation_boost =
+max_boost` when null, else `min(max_boost, boost_per_day × max(0, days))`;
+both stored in `components`. It feeds selection only.
 
 **Selection.**
 

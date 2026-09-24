@@ -107,9 +107,14 @@ def db(monkeypatch):
     monkeypatch.setattr(repo, "list_enrichment", lambda c: dict(c.enrichment))
     monkeypatch.setattr(repo, "list_overrides", lambda c: dict(c.overrides))
     monkeypatch.setattr(repo, "list_stats", lambda c: dict(c.stats))
-    monkeypatch.setattr(
-        repo, "project_last_offered", lambda c, *, today, days=30: dict(c.last_offered)
-    )
+
+    def last_offered(c, *, today, days=30):
+        # Emulates the SQL window: daily runs from [today - days, today).
+        return {
+            p: d for p, d in c.last_offered.items() if today - timedelta(days=days) <= d < today
+        }
+
+    monkeypatch.setattr(repo, "project_last_offered", last_offered)
     monkeypatch.setattr(repo, "clear_pin", lambda c, gid: None)
     monkeypatch.setattr(
         repo, "snapshot_completion", lambda c, f: c.stats.__setitem__(f.gid, "snap")
@@ -805,3 +810,28 @@ def test_rescore_passes_project_last_offered_into_the_scorer(db, monkeypatch):
     scored = h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
     assert seen == [{"Work": TODAY - timedelta(days=2)}]
     assert scored.by_gid()["a"].components["days_since_project_offered"] == 2
+
+
+def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkeypatch):
+    """After the morning daily run, an event rescore the same day must see the
+    same starvation inputs as the daily run did, so the stored rank holds."""
+    db.facts["a"] = _facts("a", tags=[])
+    calls = []
+    real = repo.project_last_offered
+
+    def spy(c, *, today, days=30):
+        calls.append(today)
+        return real(c, today=today, days=days)
+
+    monkeypatch.setattr(repo, "project_last_offered", spy)
+    db.last_offered = {"Work": TODAY - timedelta(days=3)}
+    daily = h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
+    db.last_offered = {"Work": TODAY}  # today's daily run picked a Work task
+    event = h.rescore(db, kind="event", trigger_gid="a", today=TODAY)
+    assert calls == [TODAY, TODAY]
+    for scored in (daily, event):
+        c = scored.by_gid()["a"].components
+        assert c["days_since_project_offered"] is None or c["days_since_project_offered"] >= 1
+    # only today's run exists: the project reads as never offered, not 0 days
+    assert event.by_gid()["a"].components["days_since_project_offered"] is None
+    assert event.by_gid()["a"].components["starvation_boost"] == 0.5

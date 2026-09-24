@@ -512,3 +512,13 @@ def test_hard_p1_due_today_outscores_horizon_p0():
     assert by["h"].components["U"] > 0.9
     assert (by["h"].score or 0) > (by["z"].score or 0)
     assert by["h"].position < by["z"].position
+
+
+def test_same_day_or_future_offer_gives_no_boost_defensively():
+    # The query excludes today's run; should a same-day (or clock-skewed
+    # future) date reach the scorer anyway, it reads as "just offered".
+    a = facts("a", project="A", points=1)
+    b = facts("b", project="B", points=1)
+    by = run([a, b], last_offered={"A": TODAY, "B": TODAY + timedelta(days=1)}).by_gid()
+    assert by["a"].components["starvation_boost"] == 0
+    assert by["b"].components["starvation_boost"] == 0
