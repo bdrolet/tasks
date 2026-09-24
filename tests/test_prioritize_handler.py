@@ -651,7 +651,7 @@ def test_project_walk_and_descent_stop_at_max_depth(db, asana_fake, model, monke
         tasks[f"s{i}"] = _sub(f"s{i}", prev, num_subtasks=1)
         prev = f"s{i}"
     calls = _chain_fake(monkeypatch, tasks)
-    assert h._resolve_project(tasks[prev]) == (None, None)
+    assert h._resolve_project(tasks[prev]) == (None, None, h.MAX_SUBTASK_DEPTH)
     assert len(calls) == h.MAX_SUBTASK_DEPTH
 
     # Downward: gathering the root stops after MAX_SUBTASK_DEPTH levels.
@@ -729,3 +729,28 @@ def test_failed_write_back_persists_no_points(db, asana_fake, model, monkeypatch
     monkeypatch.setattr(cf, "set_story_points", boom)
     h.handle_task_changed("t1", today=TODAY)
     assert "points_set" not in db.__dict__
+
+
+def test_gather_depth_is_measured_from_the_tree_top(db, asana_fake, model, monkeypatch):
+    """A 5-deep chain: gathering from l1 or from the root stores levels up to
+    MAX_SUBTASK_DEPTH only — the same absolute levels heal lists."""
+    tasks = {"t1": dict(TASK, num_subtasks=1)}
+    subtasks = {"t1": [{"gid": "l1", "completed": False}]}
+    prev = "t1"
+    for i in range(1, 6):
+        tasks[f"l{i}"] = _sub(f"l{i}", prev, num_subtasks=1 if i < 5 else 0)
+        if i < 5:
+            subtasks[f"l{i}"] = [{"gid": f"l{i + 1}", "completed": False}]
+        prev = f"l{i}"
+    _chain_fake(monkeypatch, tasks, subtasks)
+    levels = [f"l{i}" for i in range(1, h.MAX_SUBTASK_DEPTH + 1)]
+
+    from_l1 = h.gather("l1")
+    assert from_l1 is not None
+    assert [f.gid for f, _, _ in from_l1] == levels
+    assert all(f.project_name == "Inbox" for f, _, _ in from_l1)
+
+    from_root = h.gather("t1")
+    assert from_root is not None
+    assert [f.gid for f, _, _ in from_root] == ["t1", *levels]
+    assert from_root[-1][0].num_open_subtasks == 0

@@ -233,7 +233,10 @@ def claim_estimate(conn: Any, gid: str, points: int) -> bool:
 
 def set_story_points(conn: Any, gid: str, points: int) -> None:
     """Record points just written to Asana, so the facts row need not wait for
-    an echo event — which a subtask never gets (project webhooks skip them)."""
+    an echo event — which a subtask never gets (project webhooks skip them).
+    Bumps fetched_at deliberately so heal does not re-fetch after our own
+    write; the stored content_hash therefore does not yet include the estimate
+    comment, which is harmless since content_hash excludes that comment anyway."""
     conn.execute(
         "UPDATE task_facts SET story_points = %s, fetched_at = now() WHERE task_gid = %s",
         (points, gid),

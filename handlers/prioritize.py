@@ -82,27 +82,31 @@ def _project(task: dict, parent: dict | None) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _resolve_project(task: dict) -> tuple[str | None, str | None]:
-    """The task's project, walking up the parent chain: a subtask has no
-    memberships, and neither does a level-1 subtask's child's parent, so a
-    single parent hop leaves a grandchild with no project. Stops at the first
-    managed project, at MAX_SUBTASK_DEPTH hops, or at a parent Asana 404s.
-    Falls back to the nearest unmanaged project any hop had."""
+def _resolve_project(task: dict) -> tuple[str | None, str | None, int]:
+    """(gid, name, hops): the task's project, walking up the parent chain — a
+    subtask has no memberships, and neither does a level-1 subtask's child's
+    parent, so a single parent hop leaves a grandchild with no project. Stops
+    at the first managed project, at MAX_SUBTASK_DEPTH hops, or at a parent
+    Asana 404s; falls back to the nearest unmanaged project any hop had.
+
+    `hops` is how far up the walk went (0 for a top-level task): the task's
+    own level in its tree, so gather can measure its descent from the tree
+    top exactly as heal does. Unresolved, it is the hops actually walked."""
     first_any: tuple[str | None, str | None] = (None, None)
     current = task
     depth = 0
     while True:
         gid, name = _project(current, None)
         if gid and gid in managed_projects.gids():
-            return gid, name
+            return gid, name, depth
         if gid and first_any[0] is None:
             first_any = (gid, name)
         parent_ref = current.get("parent") or {}
         if not parent_ref.get("gid") or depth >= MAX_SUBTASK_DEPTH:
-            return first_any
+            return first_any[0], first_any[1], depth
         parent = asana.get_task_detail(parent_ref["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS)
         if parent is None:
-            return first_any
+            return first_any[0], first_any[1], depth
         current = parent
         depth += 1
 
@@ -201,10 +205,14 @@ def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
     stories = asana.get_stories(gid)
     # gid may itself be a subtask at any level (e.g. republished directly by
     # heal); it carries no memberships, so its project comes up the chain.
-    project = _resolve_project(task)
-    facts, comments = facts_from(task, stories, inherited=project)
+    project_gid, project_name, level = _resolve_project(task)
+    facts, comments = facts_from(task, stories, inherited=(project_gid, project_name))
     out: list[tuple[TaskFacts, dict, list[dict]]] = []
-    open_subs = _gather_subtasks(task, (facts.project_gid, facts.project_name), 1, out)
+    # Depth counts from the tree top, as heal's walk does: gathering a level-1
+    # subtask descends to level MAX_SUBTASK_DEPTH, never beyond, so it cannot
+    # store rows heal never lists (which heal would then republish, fail to
+    # resolve, and delete — an oscillation).
+    open_subs = _gather_subtasks(task, (facts.project_gid, facts.project_name), level + 1, out)
     facts = TaskFacts(**(facts.__dict__ | {"num_open_subtasks": open_subs}))
     return [(facts, task, comments), *out]
 
