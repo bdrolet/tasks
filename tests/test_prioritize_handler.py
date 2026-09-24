@@ -123,6 +123,13 @@ def db(monkeypatch):
         return True
 
     monkeypatch.setattr(repo, "claim_estimate", claim)
+
+    def set_points(c, gid, pts):
+        c.__dict__.setdefault("points_set", []).append((gid, pts))
+        if gid in c.facts:
+            c.facts[gid] = TaskFacts(**(c.facts[gid].__dict__ | {"story_points": pts}))
+
+    monkeypatch.setattr(repo, "set_story_points", set_points)
     return conn
 
 
@@ -477,7 +484,8 @@ def test_claim_commits_before_write_back_and_rescore_is_its_own_transaction(
     monkeypatch.setattr(h, "get_conn", lambda: LoggingConn())
     monkeypatch.setattr(cf, "set_story_points", lambda gid, pts: log.append("write"))
     h.handle_task_changed("t1", today=TODAY)
-    assert log == ["begin", "commit", "write", "begin", "commit"]
+    # A: facts + claim; write-back; the written points persisted; B: rescore.
+    assert log == ["begin", "commit", "write", "begin", "commit", "begin", "commit"]
     assert "t1" in db.estimated and db.locks == [1]
 
 
@@ -561,3 +569,163 @@ def test_missing_field_is_retried_on_the_next_cached_event(db, asana_fake, model
     h.handle_task_changed("t1", today=TODAY)
     assert len(model) == 1  # cached — no second model call
     assert asana_fake["points"] == [("t1", 3)] and "t1" in db.estimated
+
+
+# ---- nested subtasks ----------------------------------------------------------
+
+
+def _chain_fake(monkeypatch, tasks: dict, subtasks: dict | None = None):
+    detail_calls: list[str] = []
+
+    def detail(gid, opt_fields=None):
+        detail_calls.append(gid)
+        return dict(tasks[gid]) if gid in tasks else None
+
+    monkeypatch.setattr(asana, "get_task_detail", detail)
+    monkeypatch.setattr(asana, "get_subtasks", lambda gid: list((subtasks or {}).get(gid, [])))
+    return detail_calls
+
+
+def _sub(gid, parent, **kw):
+    return dict(
+        TASK,
+        gid=gid,
+        name=gid,
+        parent={"gid": parent},
+        memberships=[],
+        **({"num_subtasks": 0} | kw),
+    )
+
+
+def test_grandchild_gathered_directly_resolves_project_two_hops_up(
+    db, asana_fake, model, monkeypatch
+):
+    root = dict(TASK, num_subtasks=1)
+    level1 = _sub("l1", "t1", num_subtasks=1)
+    grandchild = _sub("l2", "l1")
+    calls = _chain_fake(monkeypatch, {"t1": root, "l1": level1, "l2": grandchild})
+    h.handle_task_changed("l2", today=TODAY)
+    assert calls == ["l2", "l1", "t1"]
+    assert db.facts["l2"].project_name == "Inbox" and db.facts["l2"].project_gid == "p1"
+    assert db.deleted == []
+
+
+def test_gather_top_level_descends_into_nested_subtasks(db, asana_fake, model, monkeypatch):
+    root = dict(TASK, num_subtasks=1)
+    level1 = _sub("l1", "t1", num_subtasks=1)
+    grandchild = _sub("l2", "l1")
+    _chain_fake(
+        monkeypatch,
+        {"t1": root, "l1": level1, "l2": grandchild},
+        {"t1": [{"gid": "l1", "completed": False}], "l1": [{"gid": "l2", "completed": False}]},
+    )
+    h.handle_task_changed("t1", today=TODAY)
+    assert set(db.facts) == {"t1", "l1", "l2"}
+    assert all(f.project_name == "Inbox" for f in db.facts.values())
+    assert db.facts["t1"].num_open_subtasks == 1 and db.facts["l1"].num_open_subtasks == 1
+    assert db.facts["l2"].num_open_subtasks == 0
+
+
+def test_gather_level1_subtask_passes_resolved_project_to_its_children(
+    db, asana_fake, model, monkeypatch
+):
+    root = dict(TASK, num_subtasks=1)
+    level1 = _sub("l1", "t1", num_subtasks=1)
+    grandchild = _sub("l2", "l1")
+    _chain_fake(
+        monkeypatch,
+        {"t1": root, "l1": level1, "l2": grandchild},
+        {"l1": [{"gid": "l2", "completed": False}]},
+    )
+    h.handle_task_changed("l1", today=TODAY)
+    assert db.facts["l1"].project_name == "Inbox" and db.facts["l2"].project_name == "Inbox"
+    assert db.facts["l1"].num_open_subtasks == 1
+
+
+def test_project_walk_and_descent_stop_at_max_depth(db, asana_fake, model, monkeypatch):
+    depth = h.MAX_SUBTASK_DEPTH + 2
+    # Upward: a chain deeper than the bound never reaches the managed root.
+    tasks = {"t1": dict(TASK, num_subtasks=1)}
+    prev = "t1"
+    for i in range(1, depth + 1):
+        tasks[f"s{i}"] = _sub(f"s{i}", prev, num_subtasks=1)
+        prev = f"s{i}"
+    calls = _chain_fake(monkeypatch, tasks)
+    assert h._resolve_project(tasks[prev]) == (None, None)
+    assert len(calls) == h.MAX_SUBTASK_DEPTH
+
+    # Downward: gathering the root stops after MAX_SUBTASK_DEPTH levels.
+    subtasks = {"t1": [{"gid": "s1", "completed": False}]}
+    for i in range(1, depth):
+        subtasks[f"s{i}"] = [{"gid": f"s{i + 1}", "completed": False}]
+    _chain_fake(monkeypatch, tasks, subtasks)
+    gathered = h.gather("t1")
+    assert gathered is not None
+    assert [f.gid for f, _, _ in gathered] == ["t1"] + [
+        f"s{i}" for i in range(1, h.MAX_SUBTASK_DEPTH + 1)
+    ]
+    assert gathered[-1][0].num_open_subtasks == 0
+
+
+def test_heal_republishes_a_modified_grandchild(db, monkeypatch):
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    listing = [{"gid": "top", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 1}]
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing
+    )
+    subs = {
+        "top": [
+            {
+                "gid": "child",
+                "modified_at": "2026-09-01T00:00:00.000Z",
+                "num_subtasks": 1,
+                "completed": False,
+            }
+        ],
+        "child": [
+            {
+                "gid": "grandchild",
+                "modified_at": "2026-09-21T00:00:00.000Z",
+                "num_subtasks": 0,
+                "completed": False,
+            }
+        ],
+    }
+    listed = []
+
+    def fake_get_subtasks(gid, opt_fields=None):
+        assert opt_fields == asana.HEAL_OPT_FIELDS
+        listed.append(gid)
+        return subs.get(gid, [])
+
+    monkeypatch.setattr(asana, "get_subtasks", fake_get_subtasks)
+    index = {g: (old, f"h-{g}") for g in ("top", "child", "grandchild")}
+    monkeypatch.setattr(repo, "list_facts_index", lambda c: index)
+    monkeypatch.setattr(
+        repo, "list_enrichment", lambda c: {g: (hsh, {}) for g, (_, hsh) in index.items()}
+    )
+    monkeypatch.setattr(repo, "list_open_gids", lambda c: set(index))
+    published = []
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
+    )
+    assert h.heal() == 1
+    assert published == [("grandchild", "heal")]
+    assert listed == ["top", "child"]  # one listing per parent, no detail fetches
+
+
+def test_written_points_are_persisted_before_the_rescore(db, asana_fake, model):
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.points_set == [("t1", 3)]
+    t = db.scores[-1].by_gid()["t1"]
+    assert t.components["points_source"] == "field"
+
+
+def test_failed_write_back_persists_no_points(db, asana_fake, model, monkeypatch):
+    def boom(gid, pts):
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(cf, "set_story_points", boom)
+    h.handle_task_changed("t1", today=TODAY)
+    assert "points_set" not in db.__dict__

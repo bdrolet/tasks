@@ -113,6 +113,14 @@ def test_claim_estimate_is_conditional():
     assert "points_estimated IS NULL" in conn.executed[0][0]
 
 
+def test_set_story_points_updates_the_field_and_fetched_at():
+    conn = FakeConn()
+    repo.set_story_points(conn, "t1", 5)
+    q, params = conn.executed[0]
+    assert "UPDATE task_facts SET story_points = %s, fetched_at = now()" in q
+    assert "WHERE task_gid = %s" in q and params == (5, "t1")
+
+
 def test_merge_overrides_splits_columns_and_json():
     conn = RowsConn(row={"overrides": {"impact": "high"}, "pinned_rank": 2, "snooze_until": None})
     out = repo.merge_overrides(conn, "t1", {"impact": "high", "pinned_rank": 2, "waiting_on": None})

@@ -231,6 +231,15 @@ def claim_estimate(conn: Any, gid: str, points: int) -> bool:
     return cur.rowcount == 1
 
 
+def set_story_points(conn: Any, gid: str, points: int) -> None:
+    """Record points just written to Asana, so the facts row need not wait for
+    an echo event — which a subtask never gets (project webhooks skip them)."""
+    conn.execute(
+        "UPDATE task_facts SET story_points = %s, fetched_at = now() WHERE task_gid = %s",
+        (points, gid),
+    )
+
+
 # ---- task_scores ---------------------------------------------------------
 
 RESCORE_LOCK_KEY = 7231
