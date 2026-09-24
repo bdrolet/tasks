@@ -20,6 +20,7 @@ stays in inbox; task-serving work lives here.
 | **Escalation** | Cloud Scheduler `tasks-escalation`, `0 6 * * *` America/New_York → `POST <webhook-url>/escalate` |
 | **Digest** | Cloud Scheduler `tasks-digest`, `*/10 * * * *` → `POST <webhook-url>/digest` (same bearer as escalate) — rebuilds the due-day calendar digest when the Asana webhook has set `digest_state.dirty_at` or the last rebuild is > 60 min old; writes through `clients/schedule_api.py` (`SCHEDULE_API_URL`; auth is a Google ID token for the `tasks-webhook-cf` SA via `clients/gcp_auth.py` — schedule-api is behind Cloud Run IAM) |
 | **Webhook sync** | Cloud Scheduler `tasks-webhook-sync`, `30 5 * * *` America/New_York → `POST <webhook-url>/webhook-sync` (same bearer as escalate) — reconciles per-project Asana webhook registrations against `ASANA_MANAGED_PROJECTS`, self-healing a registration Asana dropped after 24h of failed delivery |
+| **Prioritizer** | `tasks-prioritize` CF — Pub/Sub trigger on the `task-events` topic (this repo's), entry point `prioritize` in `main.py`; Cloud Scheduler `tasks-day-changed` `45 5 * * *` America/New_York publishes `day_changed`; read side `GET /ranking`, `POST /next`, `GET /calibrate`, `PUT /tasks/{gid}/overrides` on tasks-api; `config/prioritize.toml` holds every weight. Design: `docs/superpowers/specs/2026-09-23-next-prioritizer-design.md` |
 | **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets); schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
 | **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
@@ -235,8 +236,10 @@ CF URL changes): `docs/asana-webhook-setup.md`.
 ## Consumer skills
 
 The Asana consumer skills (`searching-tasks`, `fetching-task`,
-`editing-tasks`, `creating-tasks`, `planning-project-tasks`) and the
-`task-builder` / `task-lister` / `task-commenter` / `task-launcher` agents
+`editing-tasks`, `creating-tasks`, `planning-project-tasks`,
+`prioritizing-tasks`) and the
+`task-builder` / `task-lister` / `task-commenter` / `task-launcher` /
+`task-next` agents
 live in `.claude/skills/` / `.claude/agents/` and are symlinked into
 `~/.claude/` by `scripts/link-skills.sh` (per-skill
 symlinks — never the parent directory; run once per machine). That script
@@ -256,6 +259,9 @@ does not apply here:
 - A request to **open a session** on a task ("give me a session for that",
   "open sessions for everything due today") goes to the `task-launcher`
   agent.
+- A request to **rank or choose** work ("what should I do next", "what's my
+  day look like", "why is X ranked there", "bump X up", "snooze that") goes
+  to the `task-next` agent.
 
 Use the underlying skills directly when agent dispatch is unavailable, or for
 a single trivial lookup. Both paths must produce the same ref-first listing

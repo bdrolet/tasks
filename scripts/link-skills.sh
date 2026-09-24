@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$HOME/.claude/skills"
 mkdir -p "$DEST"
 
-for skill in searching-tasks fetching-task editing-tasks creating-tasks planning-project-tasks; do
+for skill in searching-tasks fetching-task editing-tasks creating-tasks planning-project-tasks prioritizing-tasks; do
   # ln -sfn onto a real (non-symlink) directory fails and set -e aborts the
   # loop half-linked; guard so a pre-existing real copy fails loudly instead.
   if [[ -e "$DEST/$skill" && ! -L "$DEST/$skill" ]]; then
@@ -22,7 +22,7 @@ for skill in searching-tasks fetching-task editing-tasks creating-tasks planning
 done
 
 mkdir -p "$HOME/.claude/agents"
-for agent in task-builder task-lister task-commenter task-launcher; do
+for agent in task-builder task-lister task-commenter task-launcher task-next; do
   AGENT_DEST="$HOME/.claude/agents/$agent.md"
   if [[ -e "$AGENT_DEST" && ! -L "$AGENT_DEST" ]]; then
     echo "error: $AGENT_DEST exists and is not a symlink — remove the old copy first" >&2
