@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import clients.asana as asana
+import clients.pubsub as pubsub
 from api.errors import translate_asana_errors
 from api.routers.tasks import wrap_html_body
 
@@ -26,6 +27,7 @@ def add_comment(gid: str, body: CommentBody) -> dict:
     body = _validated(body)
     with translate_asana_errors():
         story = asana.create_story(gid, text=body.text, html_text=body.html_text)
+    pubsub.publish_task_changed(gid, "api")
     return {"comment_gid": story["gid"], "text": story.get("text")}
 
 

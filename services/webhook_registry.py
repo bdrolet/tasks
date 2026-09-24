@@ -98,11 +98,26 @@ def target_for(base_url: str, project_gid: str) -> str:
     return f"{base_url}?project={project_gid}&{TOKEN_PARAM}={project_token(project_gid)}"
 
 
+def _norm(filters: list[dict]) -> set[tuple]:
+    out = set()
+    for f in filters:
+        out.add((f.get("resource_type"), f.get("action"), tuple(sorted(f.get("fields") or []))))
+    return out
+
+
+def filters_match(registered: list[dict] | None, wanted: list[dict]) -> bool:
+    """Order-insensitive equality; a missing or null `fields` is an empty list."""
+    if registered is None:
+        return False
+    return _norm(registered) == _norm(wanted)
+
+
 def plan(
     managed: set[str],
     registered: dict[str, str],
     with_secrets: set[str],
     inactive: Collection[str] = (),
+    stale_filters: Collection[str] = (),
 ) -> Plan:
     """What to change so every managed project has exactly one live, healthy
     webhook whose secret we hold.
@@ -111,11 +126,14 @@ def plan(
     webhooks; `with_secrets` is the set of projects with an asana_webhooks row;
     `inactive` is the set of projects whose webhook Asana has marked
     `active: false` — it still exists and still parses, but it is delivering
-    nothing.
+    nothing; `stale_filters` is the set of projects whose webhook is active
+    but registered with an out-of-date filter set — treated identically to
+    `inactive`.
 
     Deletes must be applied before registrations: a project whose webhook is
     unusable appears in both lists, and the replacement only works in that
     order."""
+    unusable = set(inactive) | set(stale_filters)
     to_register: list[str] = []
     to_delete: list[tuple[str, str]] = []
 
@@ -123,7 +141,7 @@ def plan(
         webhook_gid = registered.get(gid)
         if webhook_gid is None:
             to_register.append(gid)
-        elif gid not in with_secrets or gid in inactive:
+        elif gid not in with_secrets or gid in unusable:
             # Unusable, two ways. No secret row: a half-finished registration
             # whose deliveries we could never validate. active: false: Asana
             # disabled it after repeated delivery failures and will drop it

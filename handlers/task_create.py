@@ -2,6 +2,7 @@ import logging
 
 import clients.asana as asana
 import clients.otel as otel
+import clients.pubsub as pubsub
 from clients.db import get_conn
 from models.events import Decision, EmailClassifiedEvent, Screening
 from repo import suppressions as repo_suppressions
@@ -234,6 +235,7 @@ def handle(event: EmailClassifiedEvent) -> None:
     # Index for semantic search — best-effort by construction (refresh
     # swallows all failures).
     task_index.refresh(task.gid)
+    pubsub.publish_task_changed(task.gid, "pipeline")
 
     logger.info(
         "Task created gid=%s category=%s section=%s message_id=%s",

@@ -409,6 +409,12 @@ def test_get_subtasks_paginates(monkeypatch):
     assert calls[1]["params"]["offset"] == "abc"
 
 
+def test_get_subtasks_accepts_opt_fields_override(monkeypatch):
+    calls = _capture_seq(monkeypatch, [_resp(200, {"data": [], "next_page": None})])
+    asana.get_subtasks("t1", opt_fields=asana.HEAL_OPT_FIELDS)
+    assert calls[0]["params"]["opt_fields"] == asana.HEAL_OPT_FIELDS
+
+
 def test_task_exists_is_true_when_fetchable(monkeypatch):
     import clients.asana as asana
 
@@ -561,3 +567,53 @@ def test_get_task_returns_none_for_a_deleted_task(monkeypatch):
 
     monkeypatch.setattr(asana, "_request", lambda *a, **k: Resp())
     assert asana.get_task("gone") is None
+
+
+def test_get_task_detail_accepts_opt_fields(monkeypatch):
+    seen = {}
+
+    def fake_request(method, path, *, operation, timeout=10, **kw):
+        seen.update(path=path, params=kw.get("params"))
+        return _resp(200, {"data": {"gid": "t1"}})
+
+    monkeypatch.setattr(asana, "_request", fake_request)
+    asana.get_task_detail("t1", opt_fields=asana.PRIORITIZE_OPT_FIELDS)
+    assert seen["params"]["opt_fields"] == asana.PRIORITIZE_OPT_FIELDS
+    assert (
+        "custom_fields" in asana.PRIORITIZE_OPT_FIELDS
+        and "dependencies.gid" in asana.PRIORITIZE_OPT_FIELDS
+    )
+
+
+def test_custom_field_calls(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, *, operation, timeout=10, **kw):
+        calls.append((method, path, kw.get("json"), kw.get("params")))
+        body = {"data": {"gid": "cf-1", "name": "Story points", "resource_subtype": "number"}}
+        return _resp(200, body if "custom_fields" in path else {"data": []})
+
+    monkeypatch.setattr(asana, "_request", fake_request)
+    monkeypatch.setattr(asana, "get_workspace_gid", lambda: "ws")
+    monkeypatch.setattr(asana, "_paginate", lambda path, params, *, operation: [])
+    asana.create_custom_field("Story points", "number", precision=0)
+    asana.add_custom_field_to_project("p1", "cf-1")
+    assert calls[0] == (
+        "POST",
+        "/custom_fields",
+        {
+            "data": {
+                "workspace": "ws",
+                "name": "Story points",
+                "resource_subtype": "number",
+                "precision": 0,
+            }
+        },
+        {"opt_fields": "gid,name,resource_subtype"},
+    )
+    assert calls[1] == (
+        "POST",
+        "/projects/p1/addCustomFieldSetting",
+        {"data": {"custom_field": "cf-1"}},
+        None,
+    )

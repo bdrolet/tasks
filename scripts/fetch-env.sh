@@ -23,6 +23,7 @@ GRAFANA_OTLP_TOKEN=$(secret grafana-otlp-token)
 INBOX_API_URL=$(tfvar inbox_api_url)
 SCHEDULE_API_URL=https://schedule-api.drolet.cloud
 ASANA_PROJECT_CALENDARS='$(tfvar_json asana_project_calendars)'
+ASANA_MANAGED_PROJECTS='$(tfvar_json asana_managed_projects)'
 CALENDAR_SHARED_ID=$(tfvar calendar_shared_id)
 CHERYL_EMAILS=$(tfvar cheryl_emails)
 CLOUD_SQL_CONNECTION_NAME=bens-project-462804:us-central1:inbox

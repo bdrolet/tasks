@@ -7,6 +7,7 @@ webhook — HTTP trigger (public); Asana webhook handshake + completion events,
           POST /escalate for the Cloud Scheduler overdue scan, POST /digest
           for the due-day digest, and POST /webhook-sync for per-project
           webhook reconciliation.
+prioritize — Pub/Sub trigger on task-events (tasks-prioritize CF)
 
 LAYER RULE: this file is a transport adapter — decode the envelope, route,
 flush telemetry, count errors. All behavior lives in handlers/ and services/;
@@ -45,6 +46,7 @@ from cloudevents.http import CloudEvent
 
 import clients.otel as otel
 from handlers import asana_webhook, due_digest, label_applied, task_create, webhook_sync
+from handlers import prioritize as prioritize_handler
 from services import escalation
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,20 @@ def process(cloud_event: CloudEvent) -> None:
                 logger.warning("Unknown event type %r — ignoring", other)
     except Exception:
         otel.errors.add(1, {"handler": str(data.get("event", "unknown"))})
+        raise
+    finally:
+        otel.flush()
+
+
+@functions_framework.cloud_event
+def prioritize(cloud_event: CloudEvent) -> None:
+    """tasks-prioritize CF: one task-events message per invocation."""
+    data = json.loads(base64.b64decode(cloud_event.data["message"]["data"]))
+    otel.flush()
+    try:
+        prioritize_handler.handle(data)
+    except Exception:
+        otel.errors.add(1, {"handler": "prioritize"})
         raise
     finally:
         otel.flush()

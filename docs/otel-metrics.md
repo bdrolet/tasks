@@ -15,6 +15,10 @@ inbox `docs/otel-metrics-in-cloud-functions.md`.
 | `asana.claude.tokens` | Counter | `token_type` | clients/claude.py (enrichment spend) |
 | `asana.api.duration` | Histogram (ms) | `operation` | clients/asana.py `_request` |
 | `vertex.api.duration` | Histogram (ms) | `model` | clients/vertex.py `embed` |
+| `asana.prioritize.events` | Counter | `kind`, `result` | handlers/prioritize.py |
+| `asana.prioritize.enrich` | Counter | `result` | handlers/prioritize.py |
+| `asana.prioritize.rescore.duration` | Histogram (ms) | — | handlers/prioritize.py |
+| `asana.prioritize.candidates` | Gauge | `bucket` | handlers/prioritize.py |
 
 ## Prometheus names
 

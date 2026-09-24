@@ -36,6 +36,14 @@ DIGEST_OPT_FIELDS = (
     "name,html_notes,due_on,completed,permalink_url,modified_at,tags.name,"
     "memberships.project.gid,memberships.project.name,parent.gid"
 )
+# Prioritizer gather (handlers/prioritize.py): everything the scorer reads.
+PRIORITIZE_OPT_FIELDS = (
+    DETAIL_OPT_FIELDS + ",completed_at,start_on,custom_fields.gid,custom_fields.name,"
+    "custom_fields.number_value,custom_fields.date_value,"
+    "dependencies.gid,dependents.gid"
+)
+# Daily heal listing (handlers/prioritize.py::heal): enough to compare against task_facts.
+HEAL_OPT_FIELDS = "modified_at,num_subtasks,completed"
 
 _workspace_gid: str | None = None
 
@@ -306,6 +314,41 @@ def list_tags() -> list[dict]:
     )
 
 
+def list_custom_fields() -> list[dict]:
+    """Workspace custom fields: [{gid, name, resource_subtype}]. Starter plan
+    and above — the free tier answers 402 here."""
+    return _paginate(
+        f"/workspaces/{get_workspace_gid()}/custom_fields",
+        {"opt_fields": "gid,name,resource_subtype"},
+        operation="list_custom_fields",
+    )
+
+
+def create_custom_field(name: str, subtype: str, *, precision: int | None = None) -> dict:
+    data: dict = {"workspace": get_workspace_gid(), "name": name, "resource_subtype": subtype}
+    if precision is not None:
+        data["precision"] = precision
+    resp = _request(
+        "POST",
+        "/custom_fields",
+        operation="create_custom_field",
+        json={"data": data},
+        params={"opt_fields": "gid,name,resource_subtype"},
+    )
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
+def add_custom_field_to_project(project_gid: str, field_gid: str) -> None:
+    resp = _request(
+        "POST",
+        f"/projects/{project_gid}/addCustomFieldSetting",
+        operation="add_custom_field_to_project",
+        json={"data": {"custom_field": field_gid}},
+    )
+    resp.raise_for_status()
+
+
 def create_project(name: str, sections: list[str] | None = None) -> dict:
     """Create a workspace project and its sections in order.
     Returns {gid, permalink_url, sections: {name: gid}}.
@@ -365,12 +408,12 @@ def list_my_tasks(*, only_open: bool = False, opt_fields: str = SEARCH_OPT_FIELD
     return _paginate("/tasks", params, operation="list_my_tasks")
 
 
-def get_task_detail(task_gid: str) -> dict | None:
+def get_task_detail(task_gid: str, *, opt_fields: str = DETAIL_OPT_FIELDS) -> dict | None:
     resp = _request(
         "GET",
         f"/tasks/{task_gid}",
         operation="get_task_detail",
-        params={"opt_fields": DETAIL_OPT_FIELDS},
+        params={"opt_fields": opt_fields},
     )
     if resp.status_code == 404:
         return None
@@ -391,11 +434,11 @@ def task_exists(task_gid: str) -> bool:
         return False
 
 
-def get_subtasks(task_gid: str) -> list[dict]:
+def get_subtasks(task_gid: str, *, opt_fields: str = SEARCH_OPT_FIELDS) -> list[dict]:
     """Compact subtasks of a task — one level only, sub-subtasks not fetched."""
     return _paginate(
         f"/tasks/{task_gid}/subtasks",
-        {"opt_fields": SEARCH_OPT_FIELDS},
+        {"opt_fields": opt_fields},
         operation="get_subtasks",
     )
 
@@ -472,23 +515,38 @@ def delete_story(story_gid: str) -> None:
 # Registered filters are the delivery gate: an event type missing here never
 # reaches the CF, no matter what handlers/asana_webhook.py::receive supports.
 # Keep in sync with that function.
-WEBHOOK_FILTERS = [
+WEBHOOK_FILTERS: list[dict] = [
     {
         "resource_type": "task",
         "action": "changed",
-        "fields": ["completed", "name", "notes", "due_on"],
+        "fields": [
+            "completed",
+            "name",
+            "notes",
+            "due_on",
+            "due_at",
+            "start_on",
+            "custom_fields",
+            "dependencies",
+            "tags",
+        ],
     },
     {"resource_type": "task", "action": "added"},
     {"resource_type": "task", "action": "deleted"},
     {"resource_type": "task", "action": "removed"},
+    # Comments: a story `added` event carries parent.gid = the task.
+    {"resource_type": "story", "action": "added"},
 ]
 
 
 def list_webhooks() -> list[dict]:
-    """Every webhook in the workspace: [{gid, target, active, resource}]."""
+    """Every webhook in the workspace: [{gid, target, active, resource, filters}]."""
     return _paginate(
         "/webhooks",
-        {"workspace": get_workspace_gid(), "opt_fields": "target,active,resource.gid"},
+        {
+            "workspace": get_workspace_gid(),
+            "opt_fields": "target,active,resource.gid,filters.resource_type,filters.action,filters.fields",
+        },
         operation="list_webhooks",
     )
 

@@ -210,6 +210,15 @@ def test_webhook_sync_rejects_blank_target(monkeypatch):
     assert ran == []
 
 
+def test_prioritize_entry_point_dispatches(monkeypatch):
+    from handlers import prioritize
+
+    seen = []
+    monkeypatch.setattr(prioritize, "handle", lambda m: seen.append(m))
+    main.prioritize(_cloud_event({"kind": "task_changed", "gid": "t1"}))
+    assert seen == [{"kind": "task_changed", "gid": "t1"}]
+
+
 def test_webhook_passes_the_project_query_parameter(monkeypatch):
     seen = {}
     monkeypatch.setattr(

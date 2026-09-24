@@ -19,6 +19,10 @@ inbox CF ──publish──▶ email-events (Pub/Sub, INBOX-owned) ──trigge
                                                                         │ label_applied    → move task to label's section
 Asana ──webhook POST──▶ tasks-webhook CF (main.py webhook) ────────────▶ completed → move to Done
 Cloud Scheduler (6 AM ET) ──POST /escalate──▶ tasks-webhook CF ────────▶ overdue scan → move to Overdue
+webhook/task_create/API ──publish──▶ task-events (Pub/Sub, owned here) ──trigger──▶ tasks-prioritize CF (main.py prioritize)
+                                                                                     │ task_changed → gather → enrich → rescore
+Cloud Scheduler tasks-day-changed (5:45 AM ET) ──publish {"kind":"day_changed"}──▶ task-events ──▶ tasks-prioritize CF
+                                                                                     │ day_changed → settle deferrals → heal → rescore
 ```
 
 ## GCP resources (all in `terraform/`, state prefix `tasks`)
@@ -26,10 +30,14 @@ Cloud Scheduler (6 AM ET) ──POST /escalate──▶ tasks-webhook CF ──�
 | Resource | Name | Notes |
 |----------|------|-------|
 | Pub/Sub topic | `email-events` | **owned by INBOX terraform** (producer owns); data source here |
+| Pub/Sub topic | `task-events` | **owned here** — publishers `tasks-events-cf`, `tasks-webhook-cf`, `tasks-api`, `tasks-prioritize-cf` |
 | CF gen2 | `tasks-events` | Pub/Sub trigger on email-events, entry point `process`, repo-root source |
 | CF gen2 | `tasks-webhook` | HTTP public, entry point `webhook`, same source zip |
+| CF gen2 | `tasks-prioritize` | Pub/Sub trigger on task-events, entry point `prioritize`, same source zip |
 | Cloud Scheduler | `tasks-escalation` | `0 6 * * *` America/New_York → POST `<webhook-url>/escalate` |
+| Cloud Scheduler | `tasks-day-changed` | `45 5 * * *` America/New_York → publishes `{"kind": "day_changed"}` to task-events |
 | SA | `tasks-events-cf@`, `tasks-webhook-cf@` | secretAccessor on shared secrets + `cloudsql.client` |
+| SA | `tasks-prioritize-cf@` | secretAccessor on asana-api-key, grafana-otlp-*, tasks-db-password, tasks-anthropic-api-key; `cloudsql.client`; publisher on task-events |
 | Cloud SQL | database `tasks`, user `tasks` on instance `inbox` | instance owned by inbox terraform (platform migration pending) |
 | GCS | `bens-project-462804-tasks-cf-source` | CF source zips |
 

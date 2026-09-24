@@ -4,9 +4,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 import clients.asana as asana
+import clients.pubsub as pubsub
 from api.errors import translate_asana_errors
 from api.routers.search import email_context, membership
 from models.task_content import TaskContent
+from services import custom_fields as cf
 from services import recurrence, task_index, task_search
 from services import tags as tags_service
 from services.task_content import render_html_notes
@@ -35,6 +37,12 @@ class SubtaskSummary(BaseModel):
     permalink_url: str | None = None
 
 
+class DependencySummary(BaseModel):
+    gid: str
+    name: str | None = None
+    completed: bool = False
+
+
 class TaskDetail(BaseModel):
     task_gid: str
     name: str
@@ -56,6 +64,10 @@ class TaskDetail(BaseModel):
     importance: str | None = None
     parent: TaskParent | None = None
     subtasks: list[SubtaskSummary] = []
+    story_points: int | None = None
+    started_at: str | None = None
+    start_on: str | None = None
+    dependencies: list[DependencySummary] = []
 
 
 class CreateTaskRequest(BaseModel):
@@ -72,6 +84,7 @@ class CreateTaskRequest(BaseModel):
     tags: list[str] = []
     assignee: str | None = None  # "me", email, or GID — passed through to Asana
     parent: str | None = None  # task GID; when set, created as a subtask (no project/section)
+    story_points: int | None = Field(default=None, ge=1)
 
 
 class CreatedTaskResponse(BaseModel):
@@ -99,6 +112,8 @@ class UpdateTaskRequest(BaseModel):
     add_tags: list[str] = []
     remove_tags: list[str] = []
     assignee: str | None = None  # explicit null unassigns
+    story_points: int | None = Field(default=None, ge=1)
+    started_at: str | None = None  # explicit null clears
 
 
 def wrap_html_body(html: str) -> str:
@@ -196,7 +211,10 @@ def _resolve_project_gid(ref: str | None) -> str:
 @router.get("/tasks/{gid}", response_model=TaskDetail)
 def get_task(gid: str) -> TaskDetail:
     with translate_asana_errors():
-        task = asana.get_task_detail(gid)
+        task = asana.get_task_detail(
+            gid,
+            opt_fields=asana.PRIORITIZE_OPT_FIELDS + ",dependencies.name,dependencies.completed",
+        )
         if task is None:
             raise HTTPException(status_code=404, detail=f"unknown task: {gid}")
         stories = asana.get_stories(gid)
@@ -215,6 +233,7 @@ def get_task(gid: str) -> TaskDetail:
         for s in stories
         if s.get("type") == "comment"
     ]
+    points, started = cf.read(task)
     return TaskDetail(
         task_gid=task["gid"],
         name=task.get("name") or "",
@@ -248,6 +267,13 @@ def get_task(gid: str) -> TaskDetail:
                 permalink_url=s.get("permalink_url"),
             )
             for s in raw_subtasks
+        ],
+        story_points=points,
+        started_at=started.isoformat() if started else None,
+        start_on=task.get("start_on"),
+        dependencies=[
+            DependencySummary(gid=d["gid"], name=d.get("name"), completed=bool(d.get("completed")))
+            for d in task.get("dependencies") or []
         ],
     )
 
@@ -284,7 +310,10 @@ def create_task(body: CreateTaskRequest) -> CreatedTaskResponse:
             if section_gid:
                 asana.add_task_to_section(created.gid, section_gid)
 
+        if body.story_points is not None:
+            cf.set_story_points(created.gid, body.story_points)
     task_index.refresh(created.gid)
+    pubsub.publish_task_changed(created.gid, "api")
 
     return CreatedTaskResponse(task_gid=created.gid, permalink_url=created.permalink_url)
 
@@ -296,6 +325,16 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
     _validate_repeat_tags(body.add_tags)
 
     with translate_asana_errors():
+        # Resolve the custom-field gids before any mutation, so a missing
+        # field fails cleanly instead of after the name/section/tag writes.
+        field_gids: dict[str, str] = {}
+        try:
+            for name, key in ((cf.STORY_POINTS, "story_points"), (cf.STARTED_AT, "started_at")):
+                if key in body.model_fields_set:
+                    field_gids[key] = cf.field_gid(name)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
         task = asana.get_task_detail(gid)
         if task is None:
             raise HTTPException(status_code=404, detail=f"unknown task: {gid}")
@@ -353,6 +392,14 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
                 if tag_gid_opt:  # unknown removes are ignored (idempotent)
                     asana.remove_tag(gid, tag_gid_opt)
 
+        custom: dict = {}
+        if "story_points" in field_gids:
+            custom[field_gids["story_points"]] = body.story_points
+        if "started_at" in field_gids:
+            custom[field_gids["started_at"]] = cf.date_value(body.started_at)
+        if custom:
+            asana.update_task(gid, {"custom_fields": custom})
     task_index.refresh(gid)
+    pubsub.publish_task_changed(gid, "api")
 
     return {"status": "updated", "task_gid": gid}

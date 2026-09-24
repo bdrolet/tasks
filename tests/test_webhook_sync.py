@@ -60,7 +60,7 @@ def test_deregisters_a_project_that_left_the_map(monkeypatch):
         asana,
         "list_webhooks",
         lambda: [
-            {"gid": "w1", "target": f"{BASE}?project=p1"},
+            {"gid": "w1", "target": f"{BASE}?project=p1", "filters": asana.WEBHOOK_FILTERS},
             {"gid": "w9", "target": f"{BASE}?project=p9"},
         ],
     )
@@ -82,7 +82,9 @@ def test_deregisters_a_project_that_left_the_map(monkeypatch):
 def test_steady_state_changes_nothing(monkeypatch):
     _managed(monkeypatch, "p1")
     monkeypatch.setattr(
-        asana, "list_webhooks", lambda: [{"gid": "w1", "target": f"{BASE}?project=p1"}]
+        asana,
+        "list_webhooks",
+        lambda: [{"gid": "w1", "target": f"{BASE}?project=p1", "filters": asana.WEBHOOK_FILTERS}],
     )
     monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
     monkeypatch.setattr(
@@ -253,7 +255,7 @@ def test_a_populated_map_still_deletes_an_unmanaged_projects_webhook(monkeypatch
         asana,
         "list_webhooks",
         lambda: [
-            {"gid": "w1", "target": f"{BASE}?project=p1"},
+            {"gid": "w1", "target": f"{BASE}?project=p1", "filters": asana.WEBHOOK_FILTERS},
             {"gid": "w9", "target": f"{BASE}?project=p9"},
         ],
     )
@@ -306,6 +308,39 @@ def test_an_inactive_webhook_is_replaced_and_does_not_count_as_live(monkeypatch)
     assert gauges == [1]  # healthy again only because it was replaced
 
 
+def test_sync_reregisters_when_filters_differ(monkeypatch):
+    """A webhook that is active and otherwise healthy but registered with a
+    stale filter set (e.g. before WEBHOOK_FILTERS grew a new event type)
+    must still be replaced — active: true alone is not enough."""
+    _managed(monkeypatch, "p1")
+    monkeypatch.setattr(
+        asana,
+        "list_webhooks",
+        lambda: [
+            {
+                "gid": "w1",
+                "target": f"{BASE}?project=p1",
+                "active": True,
+                "resource": {"gid": "p1"},
+                "filters": [{"resource_type": "task", "action": "added"}],
+            }
+        ],
+    )
+    monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))
+
+    calls = []
+    monkeypatch.setattr(asana, "delete_webhook", lambda gid: calls.append(("delete", gid)))
+    monkeypatch.setattr(
+        asana,
+        "create_webhook",
+        lambda resource, target: calls.append(("create", resource, target)) or {"gid": "w2"},
+    )
+
+    result = webhook_sync.run(BASE)
+    assert calls == [("delete", "w1"), ("create", "p1", _target("p1"))]
+    assert result == {"managed": 1, "registered": 1, "deleted": 1, "active": 1}
+
+
 def test_an_inactive_webhook_that_cannot_be_replaced_is_not_counted_live(monkeypatch):
     """The gauge has to fall when the repair itself fails — that is the alert."""
     _managed(monkeypatch, "p1")
@@ -333,7 +368,13 @@ def test_an_active_webhook_is_left_alone(monkeypatch):
         asana,
         "list_webhooks",
         lambda: [
-            {"gid": "w1", "target": f"{BASE}?project=p1", "active": True, "resource": {"gid": "p1"}}
+            {
+                "gid": "w1",
+                "target": f"{BASE}?project=p1",
+                "active": True,
+                "resource": {"gid": "p1"},
+                "filters": asana.WEBHOOK_FILTERS,
+            }
         ],
     )
     monkeypatch.setattr(webhook_sync, "get_conn", lambda: RowsConn(rows=[{"project_gid": "p1"}]))

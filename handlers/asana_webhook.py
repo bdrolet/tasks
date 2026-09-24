@@ -11,6 +11,7 @@ import os
 import time
 
 import clients.otel as otel
+import clients.pubsub as pubsub
 from clients.db import get_conn
 from handlers import task_complete
 from repo import asana_webhooks as repo_webhooks
@@ -156,11 +157,18 @@ def receive(body: bytes, signature: str, project_gid: str | None = None) -> tupl
     handled = 0
     refresh_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     delete_gids: dict[str, None] = {}  # insertion-ordered de-dupe
+    changed_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     digest_relevant = False
     for event in payload.get("events", []):
         resource = event.get("resource") or {}
+        if resource.get("resource_type") == "story":
+            parent = event.get("parent") or {}
+            if parent.get("resource_type") == "task" and parent.get("gid"):
+                changed_gids[parent["gid"]] = None
+            continue
         if resource.get("resource_type") != "task":
             continue
+        changed_gids[resource["gid"]] = None
         action = event.get("action")
         field = (event.get("change") or {}).get("field")
         if action == "changed" and field == "completed":
@@ -193,6 +201,11 @@ def receive(body: bytes, signature: str, project_gid: str | None = None) -> tupl
         task_index.refresh(gid)
     for gid in delete_gids:
         task_index.remove(gid)
+
+    if changed_gids:
+        # One shared deadline for the whole batch, not N sequential 30s
+        # waits — a bulk edit must not overrun Asana's ~10s reply window.
+        pubsub.publish_task_changed_many(list(changed_gids), "webhook")
 
     logger.info(
         "Webhook: %d event(s) received, %d completion(s), %d index refresh(es), "

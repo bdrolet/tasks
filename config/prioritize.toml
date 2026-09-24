@@ -1,0 +1,58 @@
+# config/prioritize.toml — every tunable of the "do next" scorer.
+# Design: docs/superpowers/specs/2026-09-23-next-prioritizer-design.md
+
+[capacity]
+points_per_day = 5
+default_points = 3            # unpointed AND unenriched tasks
+low_confidence_multiplier = 1.5
+min_effort_days = 0.25
+
+[weights]                     # cost_of_delay terms; sum to 1.0
+priority = 0.30
+urgency = 0.30
+impact = 0.15
+unblock = 0.10
+aging = 0.10
+category = 0.05
+
+[priority]
+P0 = 1.0
+P1 = 0.6
+P2 = 0.3
+P3 = 0.1
+default = "P2"                # a title with no [PX] prefix
+
+[horizon_days]                # soft deadline = created_at + horizon[priority]
+P0 = 3
+P1 = 14
+P2 = 45
+P3 = 120
+
+[urgency]                     # U = 1 / (1 + exp(k * (effective_slack - s0)))
+k = 1.0
+s0 = 3.0
+soft_cap = 0.6
+no_due = 0.1
+
+[impact]
+low = 0.2
+medium = 0.5
+high = 1.0
+
+[aging]
+stale_days = 30               # A = min(1, days_stale / stale_days)
+
+[unblock]
+per_task = 0.3                # B = min(1, per_task * open dependents)
+
+[category]                    # keyed by Asana project name; unknown -> default
+default = 0.5
+
+[selection]
+default_n = 5
+diversity_penalty = 0.8
+energy_penalty = 0.7
+
+[stale]
+after_days = 45
+deferred_limit = 5

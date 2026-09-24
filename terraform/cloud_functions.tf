@@ -20,6 +20,7 @@ locals {
     CALENDAR_SHARED_ID        = var.calendar_shared_id
     CHERYL_EMAILS             = var.cheryl_emails
     ASANA_MANAGED_PROJECTS    = var.asana_managed_projects
+    TASK_EVENTS_TOPIC         = "task-events"
   }
 }
 
@@ -271,6 +272,72 @@ resource "google_cloud_run_v2_service_iam_member" "webhook_public" {
   name     = google_cloudfunctions2_function.tasks_webhook.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# ---------------------------------------------------------------------------
+# tasks-prioritize — Pub/Sub trigger on task-events: gather → enrich → rescore
+# ---------------------------------------------------------------------------
+resource "google_cloudfunctions2_function" "tasks_prioritize" {
+  name     = "tasks-prioritize"
+  location = var.region
+
+  build_config {
+    runtime     = "python313"
+    entry_point = "prioritize"
+    source {
+      storage_source {
+        bucket = google_storage_bucket.cf_source.name
+        object = google_storage_bucket_object.source.name
+      }
+    }
+  }
+
+  service_config {
+    service_account_email = google_service_account.tasks_prioritize_cf.email
+    min_instance_count    = 0
+    max_instance_count    = 3
+    timeout_seconds       = 120 # one task: 2-4 Asana calls + ≤1 Claude call + a rescore
+    available_memory      = "512Mi"
+    environment_variables = local.common_env
+
+    secret_environment_variables {
+      key        = "ASANA_API_KEY"
+      project_id = var.project_id
+      secret     = data.google_secret_manager_secret.shared["asana-api-key"].secret_id
+      version    = "latest"
+    }
+    secret_environment_variables {
+      key        = "GRAFANA_OTLP_ENDPOINT"
+      project_id = var.project_id
+      secret     = data.google_secret_manager_secret.shared["grafana-otlp-endpoint"].secret_id
+      version    = "latest"
+    }
+    secret_environment_variables {
+      key        = "GRAFANA_OTLP_TOKEN"
+      project_id = var.project_id
+      secret     = data.google_secret_manager_secret.shared["grafana-otlp-token"].secret_id
+      version    = "latest"
+    }
+    secret_environment_variables {
+      key        = "POSTGRES_PASSWORD"
+      project_id = var.project_id
+      secret     = google_secret_manager_secret.tasks_db_password.secret_id
+      version    = "latest"
+    }
+    secret_environment_variables {
+      key        = "ANTHROPIC_API_KEY"
+      project_id = var.project_id
+      secret     = google_secret_manager_secret.tasks_anthropic_api_key.secret_id
+      version    = "latest"
+    }
+  }
+
+  event_trigger {
+    trigger_region = var.region
+    event_type     = "google.cloud.pubsub.topic.v1.messagePublished"
+    pubsub_topic   = google_pubsub_topic.task_events.id
+    retry_policy   = "RETRY_POLICY_RETRY"
+  }
 }
 
 output "webhook_url" {
