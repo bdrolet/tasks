@@ -11,7 +11,7 @@ TODAY = date(2026, 9, 23)
 TS = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
 
-def facts(gid, name="[P1] Do thing", project="Inbox", due_on=None, points=None, **kw):
+def facts(gid, name="[P1] Do thing", project="Work", due_on=None, points=None, **kw):
     base = dict(
         gid=gid,
         project_gid="p-" + project,
@@ -45,8 +45,16 @@ def enr(**kw):
     return Enrichment(**d)
 
 
-def run(fs, enrichments=None, overrides=None, stats=None, today=TODAY):
-    return pz.score_set(fs, enrichments or {}, overrides or {}, stats or {}, CFG, today)
+def run(fs, enrichments=None, overrides=None, stats=None, today=TODAY, last_offered=None):
+    return pz.score_set(
+        fs,
+        enrichments or {},
+        overrides or {},
+        stats or {},
+        CFG,
+        today,
+        project_last_offered=last_offered,
+    )
 
 
 def test_parse_priority():
@@ -81,8 +89,8 @@ def test_soft_deadline_caps_urgency():
         "a", due_on=None, points=1, created_at=TS - timedelta(days=60)
     )  # P1 horizon long past
     s = run([a]).by_gid()["a"]
-    assert s.components["soft"] is True
-    assert s.components["U"] == CFG.soft_cap
+    assert s.components["soft"] is True and s.components["due_source"] == "horizon"
+    assert s.components["U"] == CFG.soft_cap_horizon
 
 
 def test_inferred_due_is_soft_and_needs_confidence():
@@ -266,14 +274,17 @@ def test_snoozed_is_in_no_list_until_its_date():
 def test_stale_rules_each_trigger():
     old_p3 = facts("o", name="[P3] old", points=1, modified_at=TS - timedelta(days=60))
     deferred = facts("d", points=1)
-    soft_past = facts("s", name="[P0] past", points=1, created_at=TS - timedelta(days=10))
+    soft_past = facts("s", name="[P0] past", points=1)
     fresh = facts(
         "f",
         points=1,
         due_on=TODAY + timedelta(days=10),
         modified_at=datetime(2026, 9, 22, 12, tzinfo=timezone.utc),
     )
-    s = run([old_p3, deferred, soft_past, fresh], stats={"d": Stats(times_deferred=5)}).by_gid()
+    past = enr(due_date_inferred=TODAY - timedelta(days=2), due_date_inferred_confidence="high")
+    s = run(
+        [old_p3, deferred, soft_past, fresh], {"s": past}, stats={"d": Stats(times_deferred=5)}
+    ).by_gid()
     assert s["o"].stale and s["o"].stale_reason == "aged"
     assert s["d"].stale and s["d"].stale_reason == "deferred"
     assert s["s"].stale and s["s"].stale_reason == "soft_due_passed"
@@ -332,3 +343,172 @@ def test_pin_takes_its_position_among_unpinned():
         t.gid for t in sorted(scored.next(), key=lambda t: t.rank or 99) if t.rank
     ]
     assert by["pin"].rank == 3
+
+
+# ---- tuning: sources, exclusion, hard-only feasibility, must-do, starvation ----
+
+
+def test_due_source_is_recorded_per_kind():
+    hard = facts("h", points=1, due_on=TODAY + timedelta(days=4))
+    inferred = facts("i", points=1)
+    horizon = facts("z", points=1)
+    cfg_no_horizon = pc.Config(**(CFG.__dict__ | {"horizon_days": {}}))
+    s = run(
+        [hard, inferred, horizon],
+        {
+            "i": enr(
+                due_date_inferred=TODAY + timedelta(days=4), due_date_inferred_confidence="medium"
+            )
+        },
+    ).by_gid()
+    assert (s["h"].components["due_source"], s["h"].components["soft"]) == ("hard", False)
+    assert (s["i"].components["due_source"], s["i"].components["soft"]) == ("inferred", True)
+    assert (s["z"].components["due_source"], s["z"].components["soft"]) == ("horizon", True)
+    none = pz.score_set([horizon], {}, {}, {}, cfg_no_horizon, TODAY).by_gid()["z"]
+    assert none.components["due_source"] == "none"
+
+
+def test_excluded_project_is_bucketed_and_a_pin_cannot_override():
+    inbox = facts("i", project="Inbox", points=1, due_on=TODAY)
+    pinned = facts("p", project="Inbox", points=1)
+    work = facts("w", points=1)
+    s = run([inbox, pinned, work], overrides={"p": Overrides(pinned_rank=1)})
+    by = s.by_gid()
+    assert by["i"].bucket == "excluded:project" and by["p"].bucket == "excluded:project"
+    assert by["i"].rank is None and by["p"].rank is None
+    assert [t.gid for t in s.next()] == ["w"]
+    assert [t.gid for t in pz.select(s.next(), CFG)] == ["w"]
+
+
+def test_excluded_project_check_follows_completed_and_snoozed():
+    done = facts("d", project="Inbox", points=1, completed=True)
+    snoozed = facts("s", project="Inbox", points=1)
+    by = run(
+        [done, snoozed], overrides={"s": Overrides(snooze_until=TODAY + timedelta(days=2))}
+    ).by_gid()
+    assert by["d"].bucket == "excluded:completed" and by["s"].bucket == "snoozed"
+
+
+def test_feasibility_runs_over_hard_dates_only():
+    a = facts("a", points=3, due_on=TODAY + timedelta(days=3))
+    b = facts("b", points=3, due_on=TODAY + timedelta(days=3))
+    soft = facts("s", points=3, created_at=TS - timedelta(days=90))  # horizon long past
+    by = run([a, b, soft]).by_gid()
+    starts = sorted(by[g].components["simulated_start"] for g in "ab")
+    assert starts[0] == 0 and starts[1] > 0
+    assert by["s"].components["simulated_start"] is None and by["s"].overcommitted is False
+    c = by["s"].components
+    assert c["slack"] == c["effective_slack"] == c["days_until_due"] - c["effort_days"]
+
+
+def test_hundreds_of_undated_tasks_do_not_overcommit_a_hard_one():
+    undated = [facts(f"u{i}", points=5, created_at=TS - timedelta(days=200)) for i in range(50)]
+    hard = facts("h", points=1, due_on=TODAY + timedelta(days=10))
+    scored = run([*undated, hard])
+    assert pz.side_lists(scored)["overcommitted"] == []
+    assert scored.by_gid()["h"].components["simulated_start"] == 0
+
+
+def test_urgency_caps_by_source():
+    past = TODAY - timedelta(days=20)
+    inferred = facts("i", points=1)
+    horizon = facts("z", points=1, created_at=TS - timedelta(days=90))
+    hard_a = facts("a", points=8, due_on=TODAY + timedelta(days=1))
+    hard_b = facts("b", points=8, due_on=TODAY + timedelta(days=1))
+    by = run(
+        [inferred, horizon, hard_a, hard_b],
+        {"i": enr(due_date_inferred=past, due_date_inferred_confidence="high")},
+    ).by_gid()
+    assert by["i"].components["U"] == pytest.approx(CFG.soft_cap_inferred)
+    assert by["z"].components["U"] == pytest.approx(CFG.soft_cap_horizon)
+    assert by["i"].components["U"] <= 0.6 and by["z"].components["U"] <= 0.4
+    assert by["b"].components["effective_slack"] < 0 and by["b"].components["U"] > 0.99
+
+
+def test_past_horizon_is_not_stale_but_past_inferred_is():
+    horizon = facts("z", name="[P0] old", points=1, created_at=TS - timedelta(days=30))
+    inferred = facts("i", points=1)
+    by = run(
+        [horizon, inferred],
+        {
+            "i": enr(
+                due_date_inferred=TODAY - timedelta(days=1), due_date_inferred_confidence="high"
+            )
+        },
+    ).by_gid()
+    assert by["z"].components["days_until_due"] < 0 and not by["z"].stale
+    assert by["i"].stale and by["i"].stale_reason == "soft_due_passed"
+
+
+def test_hard_due_today_is_selected_first_beyond_n_and_consumes_capacity():
+    must = facts("m", name="[P3] file it", points=4, due_on=TODAY)
+    highs = [
+        facts(f"h{i}", name="[P0] big", points=1, due_on=TODAY + timedelta(days=3))
+        for i in range(4)
+    ]
+    scored = run([must, *highs])
+    by = scored.by_gid()
+    assert all((by[f"h{i}"].score or 0) > (by["m"].score or 0) for i in range(4))
+    picked = pz.select(scored.next(), CFG)
+    assert picked[0].gid == "m"
+    assert [t.gid for t in picked][1:] and len(picked) == 2  # 4 + 1 fills 5
+    assert [t.gid for t in pz.select(scored.next(), CFG, n=1)] == ["m"]
+    assert by["m"].rank == 1
+
+
+def test_every_hard_must_do_is_placed_even_past_n_and_capacity():
+    musts = [
+        facts(f"m{i}", name="[P3] x", points=3, due_on=TODAY + timedelta(days=d))
+        for i, d in enumerate((-2, 0, 1))
+    ]
+    other = facts("o", name="[P0] y", points=1, due_on=TODAY + timedelta(days=5))
+    picked = pz.select(run([*musts, other]).next(), CFG, n=1)
+    assert {t.gid for t in picked} == {"m0", "m1", "m2"}
+
+
+def test_must_do_ignores_soft_dates_inside_the_window():
+    inferred = facts("i", name="[P3] x", points=1)
+    top = facts("t", name="[P0] y", points=1, due_on=TODAY + timedelta(days=5))
+    scored = run(
+        [inferred, top],
+        {"i": enr(due_date_inferred=TODAY, due_date_inferred_confidence="high")},
+    )
+    assert [t.gid for t in pz.select(scored.next(), CFG, n=1)] == ["t"]
+
+
+def test_starvation_boost_favours_the_longer_unpicked_project():
+    a = facts("a", project="A", points=1)  # undated: identical scores
+    b = facts("b", project="B", points=1)  # undated: identical scores
+    c = facts("c", project="C", points=1)  # undated: identical scores
+    last = {"A": TODAY - timedelta(days=1), "B": TODAY - timedelta(days=5)}
+    scored = run([a, b, c], last_offered=last)
+    by = scored.by_gid()
+    assert by["a"].score == by["b"].score
+    assert by["a"].components["starvation_boost"] == pytest.approx(0.1)
+    assert by["a"].components["days_since_project_offered"] == 1
+    assert by["b"].components["starvation_boost"] == pytest.approx(0.5)
+    assert by["c"].components["starvation_boost"] == CFG.starvation_max_boost
+    assert by["c"].components["days_since_project_offered"] is None
+    assert [t.gid for t in pz.select([by["a"], by["b"]], CFG, n=1)] == ["b"]
+    # the boost is a selection input only: score and position are untouched
+    assert by["b"].score == by["c"].score
+
+
+def test_equal_scores_across_projects_still_mix_the_top():
+    fs = [
+        facts(f"{p}{i}", project=p, points=1)  # undated: identical scores
+        for p in ("A", "B")
+        for i in range(3)
+    ]
+    picked = pz.select(run(fs).next(), CFG, n=2)
+    assert {t.project_name for t in picked} == {"A", "B"}
+
+
+def test_hard_p1_due_today_outscores_horizon_p0():
+    p0 = facts("z", name="[P0] made up", points=1, created_at=TS - timedelta(days=30))
+    p1 = facts("h", name="[P1] real", points=1, due_on=TODAY)
+    by = run([p0, p1]).by_gid()
+    assert by["z"].components["U"] == pytest.approx(CFG.soft_cap_horizon)
+    assert by["h"].components["U"] > 0.9
+    assert (by["h"].score or 0) > (by["z"].score or 0)
+    assert by["h"].position < by["z"].position

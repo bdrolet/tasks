@@ -30,7 +30,7 @@ TASK = {
     "parent": None,
     "num_subtasks": 0,
     "memberships": [
-        {"project": {"gid": "p1", "name": "Inbox"}, "section": {"gid": "s", "name": "Respond"}}
+        {"project": {"gid": "p1", "name": "Work"}, "section": {"gid": "s", "name": "Respond"}}
     ],
     "custom_fields": [],
     "dependencies": [{"gid": "d1"}],
@@ -171,9 +171,7 @@ def model(monkeypatch):
 
 def test_facts_from_maps_fields_and_comments():
     facts, comments = h.facts_from(TASK, STORIES)
-    assert (
-        facts.priority == "P1" and facts.project_name == "Inbox" and facts.dependencies == ("d1",)
-    )
+    assert facts.priority == "P1" and facts.project_name == "Work" and facts.dependencies == ("d1",)
     assert facts.tags == ("cheryl",) and facts.due_on == date(2026, 9, 30)
     assert facts.created_at.tzinfo is not None
     assert comments == [
@@ -245,7 +243,7 @@ def test_subtasks_are_gathered_with_parent_project(db, asana_fake, model, monkey
     monkeypatch.setattr(asana, "get_subtasks", lambda gid: [{"gid": "t1-sub", "completed": False}])
     h.handle_task_changed("t1", today=TODAY)
     assert db.facts["t1"].num_open_subtasks == 1
-    assert db.facts["t1-sub"].project_name == "Inbox" and db.facts["t1-sub"].parent_gid == "t1"
+    assert db.facts["t1-sub"].project_name == "Work" and db.facts["t1-sub"].parent_gid == "t1"
 
 
 def test_gather_subtask_gid_directly_keeps_its_project(db, asana_fake, model, monkeypatch):
@@ -260,7 +258,7 @@ def test_gather_subtask_gid_directly_keeps_its_project(db, asana_fake, model, mo
     )
     monkeypatch.setattr(asana, "get_subtasks", lambda gid: [])
     h.handle_task_changed("t1-sub", today=TODAY)
-    assert db.facts["t1-sub"].project_name == "Inbox"
+    assert db.facts["t1-sub"].project_name == "Work"
 
 
 def test_handle_dispatches_on_kind(monkeypatch):
@@ -516,11 +514,11 @@ def test_facts_prefer_the_managed_project_of_a_multi_homed_task(monkeypatch):
         TASK,
         memberships=[
             {"project": {"gid": "p-other", "name": "Other"}},
-            {"project": {"gid": "p1", "name": "Inbox"}},
+            {"project": {"gid": "p1", "name": "Work"}},
         ],
     )
     facts, _ = h.facts_from(multi, [])
-    assert (facts.project_gid, facts.project_name) == ("p1", "Inbox")
+    assert (facts.project_gid, facts.project_name) == ("p1", "Work")
 
 
 def test_subtask_in_unmanaged_project_takes_its_managed_parents(db, asana_fake, model, monkeypatch):
@@ -606,7 +604,7 @@ def test_grandchild_gathered_directly_resolves_project_two_hops_up(
     calls = _chain_fake(monkeypatch, {"t1": root, "l1": level1, "l2": grandchild})
     h.handle_task_changed("l2", today=TODAY)
     assert calls == ["l2", "l1", "t1"]
-    assert db.facts["l2"].project_name == "Inbox" and db.facts["l2"].project_gid == "p1"
+    assert db.facts["l2"].project_name == "Work" and db.facts["l2"].project_gid == "p1"
     assert db.deleted == []
 
 
@@ -621,7 +619,7 @@ def test_gather_top_level_descends_into_nested_subtasks(db, asana_fake, model, m
     )
     h.handle_task_changed("t1", today=TODAY)
     assert set(db.facts) == {"t1", "l1", "l2"}
-    assert all(f.project_name == "Inbox" for f in db.facts.values())
+    assert all(f.project_name == "Work" for f in db.facts.values())
     assert db.facts["t1"].num_open_subtasks == 1 and db.facts["l1"].num_open_subtasks == 1
     assert db.facts["l2"].num_open_subtasks == 0
 
@@ -638,7 +636,7 @@ def test_gather_level1_subtask_passes_resolved_project_to_its_children(
         {"l1": [{"gid": "l2", "completed": False}]},
     )
     h.handle_task_changed("l1", today=TODAY)
-    assert db.facts["l1"].project_name == "Inbox" and db.facts["l2"].project_name == "Inbox"
+    assert db.facts["l1"].project_name == "Work" and db.facts["l2"].project_name == "Work"
     assert db.facts["l1"].num_open_subtasks == 1
 
 
@@ -748,7 +746,7 @@ def test_gather_depth_is_measured_from_the_tree_top(db, asana_fake, model, monke
     from_l1 = h.gather("l1")
     assert from_l1 is not None
     assert [f.gid for f, _, _ in from_l1] == levels
-    assert all(f.project_name == "Inbox" for f, _, _ in from_l1)
+    assert all(f.project_name == "Work" for f, _, _ in from_l1)
 
     from_root = h.gather("t1")
     assert from_root is not None

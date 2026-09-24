@@ -22,7 +22,8 @@ class Config:
     horizon_days: dict[str, int]
     urgency_k: float
     urgency_s0: float
-    soft_cap: float
+    soft_cap_inferred: float
+    soft_cap_horizon: float
     no_due_urgency: float
     impact_weight: dict[str, float]
     stale_days: int
@@ -34,6 +35,10 @@ class Config:
     energy_penalty: float
     stale_after_days: int
     deferred_limit: int
+    excluded_projects: tuple[str, ...]
+    hard_due_window_days: int
+    starvation_boost_per_day: float
+    starvation_max_boost: float
 
 
 def load(path: str | None = None) -> Config:
@@ -42,6 +47,7 @@ def load(path: str | None = None) -> Config:
         raw = tomllib.load(fh)
     cap, weights, prio = raw["capacity"], raw["weights"], raw["priority"]
     urg, cat, sel, stale = raw["urgency"], raw["category"], raw["selection"], raw["stale"]
+    starve = raw["starvation"]
     return Config(
         points_per_day=float(cap["points_per_day"]),
         default_points=int(cap["default_points"]),
@@ -53,7 +59,8 @@ def load(path: str | None = None) -> Config:
         horizon_days={k: int(v) for k, v in raw["horizon_days"].items()},
         urgency_k=float(urg["k"]),
         urgency_s0=float(urg["s0"]),
-        soft_cap=float(urg["soft_cap"]),
+        soft_cap_inferred=float(urg["soft_cap_inferred"]),
+        soft_cap_horizon=float(urg["soft_cap_horizon"]),
         no_due_urgency=float(urg["no_due"]),
         impact_weight={k: float(v) for k, v in raw["impact"].items()},
         stale_days=int(raw["aging"]["stale_days"]),
@@ -65,4 +72,8 @@ def load(path: str | None = None) -> Config:
         energy_penalty=float(sel["energy_penalty"]),
         stale_after_days=int(stale["after_days"]),
         deferred_limit=int(stale["deferred_limit"]),
+        excluded_projects=tuple(str(p) for p in raw["projects"]["excluded"]),
+        hard_due_window_days=int(sel["hard_due_window_days"]),
+        starvation_boost_per_day=float(starve["boost_per_day"]),
+        starvation_max_boost=float(starve["max_boost"]),
     )

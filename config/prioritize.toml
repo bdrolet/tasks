@@ -8,12 +8,12 @@ low_confidence_multiplier = 1.5
 min_effort_days = 0.25
 
 [weights]                     # cost_of_delay terms; sum to 1.0
-priority = 0.30
+priority = 0.25
 urgency = 0.30
 impact = 0.15
 unblock = 0.10
-aging = 0.10
-category = 0.05
+aging = 0.05
+category = 0.15
 
 [priority]
 P0 = 1.0
@@ -31,7 +31,8 @@ P3 = 120
 [urgency]                     # U = 1 / (1 + exp(k * (effective_slack - s0)))
 k = 1.0
 s0 = 3.0
-soft_cap = 0.6
+soft_cap_inferred = 0.6       # due date the model read from the text (medium/high confidence)
+soft_cap_horizon = 0.4        # due date manufactured from created_at + horizon[priority]
 no_due = 0.1
 
 [impact]
@@ -47,11 +48,21 @@ per_task = 0.3                # B = min(1, per_task * open dependents)
 
 [category]                    # keyed by Asana project name; unknown -> default
 default = 0.5
+Consulting = 1.0
+"Ben's Board" = 0.7
+
+[projects]
+excluded = ["Inbox"]          # gathered and stored, never ranked or selected (bucket excluded:project)
 
 [selection]
 default_n = 5
-diversity_penalty = 0.8
+diversity_penalty = 0.95      # same-day, per pick in the same project
 energy_penalty = 0.7
+hard_due_window_days = 1      # hard due_on <= today + N is selected first, beyond n and capacity
+
+[starvation]                  # cross-day fairness: boost a project's tasks the longer it has gone without a daily pick
+boost_per_day = 0.1
+max_boost = 0.5
 
 [stale]
 after_days = 45
