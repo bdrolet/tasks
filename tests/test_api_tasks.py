@@ -642,3 +642,60 @@ def test_patch_without_custom_fields_never_resolves_them(monkeypatch, fields):
     monkeypatch.setattr(asana, "update_task", lambda gid, f: None)
     monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
     assert client.patch("/tasks/t1", headers=AUTH, json={"name": "Renamed"}).status_code == 200
+
+
+def test_detail_exposes_dependents(monkeypatch):
+    detail = dict(DETAIL, dependents=[{"gid": "x1", "name": "Waits on me", "completed": True}])
+    seen = {}
+
+    def fake_detail(gid, opt_fields=None):
+        seen["opt_fields"] = opt_fields
+        return detail
+
+    monkeypatch.setattr(asana, "get_task_detail", fake_detail)
+    monkeypatch.setattr(asana, "get_stories", lambda gid: [])
+    body = client.get("/tasks/t1", headers=AUTH).json()
+    assert body["dependents"] == [{"gid": "x1", "name": "Waits on me", "completed": True}]
+    assert "dependents.name" in seen["opt_fields"] and "dependents.completed" in seen["opt_fields"]
+
+
+def test_patch_adds_and_removes_dependencies_and_publishes_each(monkeypatch, fields):
+    _patch_env(monkeypatch)
+    monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
+    added, removed = [], []
+    monkeypatch.setattr(asana, "add_dependencies", lambda gid, deps: added.append((gid, deps)))
+    monkeypatch.setattr(asana, "remove_dependencies", lambda gid, deps: removed.append((gid, deps)))
+    resp = client.patch(
+        "/tasks/t1",
+        headers=AUTH,
+        json={"add_dependencies": ["d1", "d2"], "remove_dependencies": ["d3"]},
+    )
+    assert resp.status_code == 200
+    assert added == [("t1", ["d1", "d2"])]
+    assert removed == [("t1", ["d3"])]
+    assert fields[0] == ("t1", "api")
+    assert sorted(fields[1:]) == [("d1", "api"), ("d2", "api"), ("d3", "api")]
+
+
+def test_patch_without_dependencies_never_calls_the_client(monkeypatch, fields):
+    _patch_env(monkeypatch)
+    monkeypatch.setattr("api.routers.tasks.task_index.refresh", lambda gid: None)
+
+    def boom(*a):
+        raise AssertionError("should not be called")
+
+    monkeypatch.setattr(asana, "add_dependencies", boom)
+    monkeypatch.setattr(asana, "remove_dependencies", boom)
+    assert client.patch("/tasks/t1", headers=AUTH, json={"name": "x"}).status_code == 200
+    assert fields == [("t1", "api")]
+
+
+@pytest.mark.parametrize("key", ["add_dependencies", "remove_dependencies"])
+def test_patch_self_dependency_is_400_before_any_write(monkeypatch, fields, key):
+    captured = _patch_env(monkeypatch)
+    monkeypatch.setattr(asana, "add_dependencies", lambda *a: captured.__setitem__("dep", a))
+    monkeypatch.setattr(asana, "remove_dependencies", lambda *a: captured.__setitem__("dep", a))
+    resp = client.patch("/tasks/t1", headers=AUTH, json={"name": "x", key: ["d1", "t1"]})
+    assert resp.status_code == 400
+    assert "cannot depend on itself" in resp.json()["detail"]
+    assert captured["update"] is None and "dep" not in captured and fields == []

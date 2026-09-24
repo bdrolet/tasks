@@ -9,6 +9,8 @@
     task-next pin <ref|gid> <position> | unpin <ref|gid>
     task-next snooze <ref|gid> <YYYY-MM-DD> | unsnooze <ref|gid>
     task-next override <ref|gid> field=value ... (field= clears)
+    task-next block <ref|gid> <blocker ref|gid>    # X depends on the blocker
+    task-next unblock <ref|gid> <blocker ref|gid>
     task-next calibrate
 
 Refs are scripts/task_ref.py refs; a write resolves a ref against the
@@ -230,6 +232,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("override")
     p.add_argument("task")
     p.add_argument("pairs", nargs="+")
+    for name in ("block", "unblock"):
+        p = sub.add_parser(name)
+        p.add_argument("task")
+        p.add_argument("blocker")
     sub.add_parser("calibrate")
     args = parser.parse_args(argv)
 
@@ -283,6 +289,14 @@ def main(argv: list[str] | None = None) -> int:
                 (int(value) if key in ("story_points", "pinned_rank") else value) if value else None
             )
         _overrides(gid, patch)
+    elif args.cmd == "block":
+        blocker = resolve_for_write(args.blocker, args)
+        _api("PATCH", f"/tasks/{gid}", {"add_dependencies": [blocker]})
+        print(f"{gid} blocked by {blocker}")
+    elif args.cmd == "unblock":
+        blocker = resolve_for_write(args.blocker, args)
+        _api("PATCH", f"/tasks/{gid}", {"remove_dependencies": [blocker]})
+        print(f"{gid} no longer blocked by {blocker}")
     return 0
 
 

@@ -617,3 +617,25 @@ def test_custom_field_calls(monkeypatch):
         {"data": {"custom_field": "cf-1"}},
         None,
     )
+
+
+@pytest.mark.parametrize(
+    "fn,path,op",
+    [
+        (asana.add_dependencies, "/tasks/t1/addDependencies", "add"),
+        (asana.remove_dependencies, "/tasks/t1/removeDependencies", "remove"),
+    ],
+)
+def test_dependencies_post_the_gid_list(monkeypatch, fn, path, op):
+    calls = _capture(monkeypatch, _resp(200, {"data": {}}))
+    fn("t1", ["d1", "d2"])
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith(path)
+    assert calls[0]["json"] == {"data": {"dependencies": ["d1", "d2"]}}
+
+
+@pytest.mark.parametrize("fn", [asana.add_dependencies, asana.remove_dependencies])
+def test_dependencies_raise_on_4xx(monkeypatch, fn):
+    _capture(monkeypatch, _resp(400, {"errors": [{"message": "bad"}]}))
+    with pytest.raises(httpx.HTTPStatusError):
+        fn("t1", ["d1"])

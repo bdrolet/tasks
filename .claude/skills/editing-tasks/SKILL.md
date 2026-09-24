@@ -90,7 +90,14 @@ curl -s -XPATCH "$BASE/tasks/<gid>" -H "Authorization: Bearer $TOKEN" -H "Conten
   -d '{"add_tags": ["urgent"], "remove_tags": ["waiting"]}'
   -d '{"key_points": ["new point"]}'
   -d '{"assignee": "me"}'                        # null unassigns
+  -d '{"add_dependencies": ["<blocker gid>"]}'   # this task is blocked by those tasks
+  -d '{"remove_dependencies": ["<blocker gid>"]}'
 ```
+
+`add_dependencies` / `remove_dependencies` take task GIDs (never refs); a task
+cannot depend on itself (400). A dependency on an open task keeps the task —
+and its subtasks — out of the prioritizer's **Next** until that task completes.
+`GET /tasks/<gid>` shows both `dependencies` and `dependents`.
 
 Unknown section/project names return 400 with the valid names — retry with one.
 
