@@ -37,10 +37,18 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
 - `POST /next` — today's selection (capacity 5 points, diversity across
   projects, optional `energy` deep|shallow and `n`) plus `overcommitted`,
   `stale`, `nudge`. Logs a `manual` run; never bumps deferral counters.
+  - Must-dos first: a hard `due_on` today or tomorrow (or overdue) leads the
+    list whatever its score, beyond `n` and capacity, and consumes capacity.
+  - Inbox is excluded: its tasks bucket `excluded:project`, never selected;
+    a pin does not override that.
+  - Starvation boost: a project not in a recent daily pick gets up to +50%
+    at selection (`starvation_boost`), so no board goes days unpicked.
+  - Nudge is presented grouped by `waiting_on` (who is owed), largest first.
 - `GET /ranking` — every task in score order. `bucket` = `next` (default) |
   `nudge` | `snoozed` | `excluded`; or `list` = `overcommitted` | `stale` |
   `nudge`. `explain=true` adds `components` (P, U, I, B, A, C, points,
-  effective_due, soft, slack, effective_slack, days_stale, unenriched) and
+  effective_due, due_source (hard | inferred | horizon | none), soft, slack,
+  effective_slack, days_stale, starvation_boost, unenriched) and
   the model's one-line `reason`.
 - Overrides (`PUT /tasks/{gid}/overrides`, null clears): `pinned_rank`
   (holds that position regardless of score), `snooze_until`, and field

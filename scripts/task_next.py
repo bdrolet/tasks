@@ -124,10 +124,28 @@ def render_lists(payload: dict, explain: bool = False) -> str:
     ):
         out.append(f"## {title}")
         rows = payload.get(key) or []
-        out += [_line(t, refs, explain) for t in rows] or ["—"]
+        if key == "nudge" and rows:
+            out += _nudge_groups(rows, refs, explain)
+        else:
+            out += [_line(t, refs, explain) for t in rows] or ["—"]
     if payload.get("unenriched"):
         out.append(f"({payload['unenriched']} task(s) scored with defaults — enrichment pending)")
     return "\n".join(out)
+
+
+def _nudge_groups(rows: list[dict], refs: dict[str, str], explain: bool) -> list[str]:
+    """Nudge rows grouped by who is owed: waiting_on compared case-insensitively
+    (the first spelling seen labels the group), "—" for none; biggest group
+    first, then by name. Rows keep their API order within a group."""
+    groups: dict[str, tuple[str, list[dict]]] = {}
+    for t in rows:
+        who = (t.get("waiting_on") or "").strip() or "—"
+        groups.setdefault(who.casefold(), (who, []))[1].append(t)
+    out: list[str] = []
+    for label, members in sorted(groups.values(), key=lambda g: (-len(g[1]), g[0].casefold())):
+        out.append(f"### {label} ({len(members)})")
+        out += [_line(t, refs, explain) for t in members]
+    return out
 
 
 def render_ranking(payload: dict, explain: bool = False) -> str:
