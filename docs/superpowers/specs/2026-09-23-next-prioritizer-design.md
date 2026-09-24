@@ -203,6 +203,7 @@ excluded from "do next", with a reason, when:
 | `parent` | it has open subtasks (its subtasks are the work) |
 | `waiting` | `waiting_on` is set → **nudge** list instead |
 | `completed` | completed (kept in facts for calibration) |
+| `project` | its project is in `[projects].excluded` (Inbox) — gathered and stored, never ranked or selected; a pin does not override it (D15) |
 
 There is no other status: Asana has none.
 
@@ -240,6 +241,59 @@ overrides) through the API. It never creates, edits text, completes or
 comments — those stay with the existing agents. Backed by a
 `prioritizing-tasks` skill for direct use, both symlinked by
 `scripts/link-skills.sh`, and listed in CLAUDE.md's standing dispatch.
+
+### D13 — Horizons manufacture urgency, never infeasibility
+
+*Amended 2026-09-23, after the first production day.* 119 of 195 open tasks
+had no `due_on`, so their effective due was the horizon
+`created_at + horizon[priority]` — long past for most. The EDF pass queued
+those manufactured dates alongside real ones, which made 99 of 136
+candidates "overcommitted" and pinned `U` at ~1.0 for nearly everything:
+urgency stopped discriminating, a P2 party-date task reached #3 of the daily
+pick, and a horizon-dated P0 outranked a P1 genuinely due that day.
+
+So the effective due now carries its **source** — `hard` (`due_on`),
+`inferred` (the model's date at medium/high confidence), `horizon`, or
+`none` — and only hard dates take part in feasibility. A horizon still
+contributes urgency, capped low (0.4) because nobody set it; an inferred
+date is capped higher (0.6) because someone wrote it down. Only an inferred
+date that has passed marks a task stale: a past horizon says nothing about
+the task, only about how long ago it was created.
+
+### D14 — Cross-day fairness replaces same-day diversity
+
+The same-day diversity haircut (0.8 per pick) forced every project into
+every daily list and still let a board go unpicked for days when its scores
+were middling; it also cost a P1 due today its place. Fairness now works
+across days: each project's tasks carry a **starvation boost**
+`min(max_boost, boost_per_day × days since the project last had a task in a
+daily pick)` (0.1/day, capped at 0.5; a project never offered in the 30-day
+window gets the cap), read from **prior** `prioritize_runs` of kind `daily`
+— runs dated before today; today's own run is excluded, or every event
+rescore after the morning run would see its picked projects as offered 0
+days ago and reshuffle the pick. A task's offer history follows its
+*current* project row (the join is on `task_facts`), and a pinned task in
+`top` counts as an offer of its project. The
+boost multiplies score at selection only — it never changes `score` or
+`position`. The same-day haircut stays, softened to 0.95, as a tie-breaker.
+Not every board appears every day; a board is less likely to go days
+without appearing.
+
+Hard dates due within `hard_due_window_days` (today or tomorrow; overdue
+included) are **must-dos**: placed first, beyond `n` and capacity, exempt
+from the energy and diversity adjustments, but consuming capacity and
+counting as their project's pick.
+
+### D15 — Excluded projects
+
+Inbox is where email-born tasks land for triage; it is not work to be
+ranked against the boards. Projects named in `[projects].excluded` are
+gathered and their facts stored (so a move out is seen at once), but their
+tasks bucket `excluded:project` and are never ranked or selected. A pin does
+not override this — unlike blocked/parent/waiting, the exclusion is about
+where the task lives, not its state, and moving it is the explicit act. The
+subscriber also skips enrichment and the story-point write-back for them;
+a task moved out of an excluded project enriches on that move's event.
 
 ## Components
 
@@ -323,12 +377,13 @@ CREATE TABLE IF NOT EXISTS task_scores (
     task_gid     TEXT PRIMARY KEY,
     scored_at    TIMESTAMPTZ NOT NULL,
     today        DATE NOT NULL,
-    bucket       TEXT NOT NULL,   -- 'next' | 'nudge' | 'snoozed' | 'excluded:blocked' | 'excluded:parent' | 'excluded:completed'
+    bucket       TEXT NOT NULL,   -- 'next' | 'nudge' | 'snoozed' | 'excluded:blocked' | 'excluded:parent' | 'excluded:completed' | 'excluded:project'
     score        DOUBLE PRECISION,
     position     INTEGER NOT NULL, -- 1-based order in the full ranking (pins first at their rank, then by score)
     rank         INTEGER,         -- position within the default `next` selection, NULL if not selected
-    components   JSONB NOT NULL,  -- P,U,I,B,A,C, points, points_source, effort_days, effective_due, soft,
-                                  -- days_until_due, slack, simulated_start, effective_slack, days_stale,
+    components   JSONB NOT NULL,  -- P,U,I,B,A,C, points, points_source, effort_days, effective_due,
+                                  -- due_source, soft, days_until_due, slack, simulated_start, effective_slack,
+                                  -- days_stale, starvation_boost, days_since_project_offered,
                                   -- energy, unenriched, override {pinned_rank?, snooze_until?, fields: [...]}
     overcommitted BOOLEAN NOT NULL DEFAULT false,
     stale         BOOLEAN NOT NULL DEFAULT false,
@@ -450,27 +505,36 @@ All in days; `today` is `services/due_digest.today_local()` (America/Los_Angeles
 default. `effort_days = points / capacity_points_per_day`; if the points
 came from an estimate (or default) with `low` confidence, × `low_confidence_multiplier` (1.5).
 
-**Effective due.** `due_on` (hard) → else `due_date_inferred` with
-medium/high confidence (soft) → else `created_at + horizon[priority]` (soft)
-→ else none.
+**Effective due** carries a source (D13), stored as `components.due_source`
+(`components.soft = source ≠ hard`, kept for compatibility):
 
-**Feasibility.** Candidates sorted by effective due (none last), simulated
-back-to-back from today: `simulated_start` = cumulative effort before it;
-`effective_slack = days_until_due − (simulated_start + effort_days)`.
-Negative → `overcommitted` (still scored, still eligible).
+- `hard` — `due_on`;
+- `inferred` — else `due_date_inferred` with medium/high confidence;
+- `horizon` — else `created_at (local date) + horizon[priority]`;
+- `none` — else no date.
+
+**Feasibility** runs over `next`-bucket tasks with a **hard** date only (D13),
+sorted by due date and simulated back-to-back from today: `simulated_start`
+= cumulative effort before it; `effective_slack = days_until_due −
+(simulated_start + effort_days)`. Negative → `overcommitted` (still scored,
+still eligible). Every other task has `simulated_start = null`, `slack =
+effective_slack = days_until_due − effort_days` (null with no date), and is
+never overcommitted.
 
 **Components** (0–1):
 
 ```
 P = priority_weight[priority]            # P0 1.0, P1 0.6, P2 0.3, P3 0.1
 U = 1 / (1 + exp(k * (effective_slack − s0)))   # k 1.0, s0 3
-    soft due → min(U, soft_urgency_cap)  # 0.6
-    no due   → no_due_urgency            # 0.1
+    hard     → uncapped, on the EDF effective_slack
+    inferred → min(U, soft_cap_inferred) # 0.6, on raw slack
+    horizon  → min(U, soft_cap_horizon)  # 0.4, on raw slack
+    none     → no_due_urgency            # 0.1
 A = min(1, days_stale / stale_days)      # days_stale = today − modified_at; 30
-C = category_weight[project_name] or default_category_weight   # 0.5
+C = category_weight[project_name] or default_category_weight   # Consulting 1.0, Ben's Board 0.7, else 0.5
 I = impact_weight[impact]                # 0.2 / 0.5 / 1.0
 B = min(1, unblock_per_task * open dependents)  # 0.3 each
-cost_of_delay = wP*P + wU*U + wI*I + wB*B + wA*A + wC*C   # .30 .30 .15 .10 .10 .05
+cost_of_delay = wP*P + wU*U + wI*I + wB*B + wA*A + wC*C   # .25 .30 .15 .10 .05 .15
 score = cost_of_delay / max(effort_days, min_effort_days)   # 0.25
 ```
 
@@ -483,21 +547,41 @@ their `pinned_rank` (ties by score), and count toward neither capacity nor
 occupy their positions ahead of it. This order is `position` in
 `task_scores` and what `GET /ranking` returns.
 
-**Selection.** Greedy by score through the unpinned candidates until
-`sum(points) ≥ capacity_points_per_day` or `n` reached; after each pick,
-remaining tasks in the same project × `diversity_penalty` (0.8). With
-`--energy`, mismatched tasks × `energy_penalty` (0.7) before the greedy
-pass. The stored `rank` is the selection with no energy flag and the config
-`default_n`; `POST /next` reruns the greedy pass from stored components
-when either knob is given. Pins are never displaced by the knobs.
+**Starvation boost (D14).** `score_set` takes `project_last_offered`
+(project name → last `daily` run date **before today** with one of its
+tasks in `top`, pins included, window `[today − 30, today)`; the project is
+the task's current `task_facts.project_name`). Per task: `days = today −
+last_offered` (null when absent, so ≥ 1 otherwise), `starvation_boost =
+max_boost` when null, else `min(max_boost, boost_per_day × max(0, days))`;
+both stored in `components`. It feeds selection only.
+
+**Selection.**
+
+1. **Must-dos:** unpinned candidates with `due_source = hard` and
+   `days_until_due ≤ hard_due_window_days` (1), by score. Placed first,
+   whatever `n`, capacity, energy or diversity; they consume capacity and
+   count as a pick of their project for the diversity haircut.
+2. **Fill:** greedy over the remaining unpinned candidates by
+   `score × (1 + starvation_boost) × energy_factor` (`energy_penalty` 0.7
+   for a mismatch under `--energy`); after each pick (must-dos included),
+   remaining tasks in the same project × `diversity_penalty` (0.95). Stops at
+   `n` total picks or `sum(points) ≥ capacity_points_per_day`.
+3. **Pins** inserted at their rank, as before.
+
+Selection reads only `components` (`due_source`, `days_until_due`,
+`starvation_boost`) and task fields, so `POST /next` reruns it from stored
+rows identically. The stored `rank` is the selection with no energy flag
+and the config `default_n`. Pins are never displaced by the knobs.
 
 **Side lists.**
 
-- overcommitted: `effective_slack < 0`
+- overcommitted: `effective_slack < 0` — hard-dated tasks only (D13)
 - stale: `priority ∈ {P2, P3} and days_stale > stale_after_days (45)`, or
-  `times_deferred ≥ deferred_limit (5)`, or a **soft** effective due already
-  past; `stale_reason` records which
-- nudge: bucket `nudge`, sorted by `days_stale` descending
+  `times_deferred ≥ deferred_limit (5)`, or an **inferred** effective due
+  already past (`soft_due_passed`; a horizon never marks a task stale);
+  `stale_reason` records which
+- nudge: bucket `nudge`, sorted by `days_stale` descending; the CLI and the
+  agent present it grouped by `waiting_on` (who is owed), largest group first
 - snoozed tasks appear in none of them
 
 ## Read side
@@ -594,13 +678,13 @@ default_points = 3
 low_confidence_multiplier = 1.5
 min_effort_days = 0.25
 
-[weights]           # cost_of_delay terms
-priority = 0.30
+[weights]           # cost_of_delay terms; sum to 1.0
+priority = 0.25
 urgency = 0.30
 impact = 0.15
 unblock = 0.10
-aging = 0.10
-category = 0.05
+aging = 0.05
+category = 0.15
 
 [priority]          # P
 P0 = 1.0
@@ -618,7 +702,8 @@ P3 = 120
 [urgency]
 k = 1.0
 s0 = 3.0
-soft_cap = 0.6
+soft_cap_inferred = 0.6      # due date the model read from the text (medium/high confidence)
+soft_cap_horizon = 0.4       # due date manufactured from created_at + horizon[priority]
 no_due = 0.1
 
 [impact]
@@ -632,13 +717,23 @@ stale_days = 30
 [unblock]
 per_task = 0.3
 
-[category]          # keyed by Asana project name; unknown → default
+[category]                   # keyed by Asana project name; unknown -> default
 default = 0.5
+Consulting = 1.0
+"Ben's Board" = 0.7
+
+[projects]
+excluded = ["Inbox"]         # gathered and stored, never ranked or selected (bucket excluded:project)
 
 [selection]
 default_n = 5
-diversity_penalty = 0.8
+diversity_penalty = 0.95     # same-day, per pick in the same project
 energy_penalty = 0.7
+hard_due_window_days = 1     # hard due_on <= today + N is selected first, beyond n and capacity
+
+[starvation]                 # cross-day fairness: boost a project's tasks the longer it has gone without a daily pick
+boost_per_day = 0.1
+max_boost = 0.5
 
 [stale]
 after_days = 45
@@ -697,7 +792,13 @@ the existing `claude_tokens` counter.
 
 - same due date, different points → the shorter-slack task ranks higher
 - negative slack saturates `U` and sets `overcommitted`
-- a soft deadline never yields `U > 0.6`; no deadline yields `0.1`
+- an inferred deadline never yields `U > 0.6`, a horizon never `U > 0.4`;
+  no deadline yields `0.1` (D13)
+- feasibility covers hard dates only: a horizon-dated task is never
+  overcommitted and never delays a hard one (D13)
+- a hard date due today is selected first, beyond `n`, and consumes
+  capacity; the longer-unpicked project wins a tie (D14)
+- an excluded-project task is `excluded:project`, pinned or not (D15)
 - blocked and parent tasks are excluded with the right reason; a
   waiting-on task lands in `nudge`
 - diversity penalty: a set of eight tasks in one project and two in another

@@ -32,9 +32,22 @@ BASE=https://tasks-api.drolet.cloud
 - "what am I waiting on" → `GET /ranking?list=nudge`. "what can't I make" → `list=overcommitted`.
   "what's rotting" → `list=stale`. "what did I snooze" → `bucket=snoozed`.
 - "why is X there / explain X" → `GET /ranking?explain=true`, find X, report its
-  components in words: priority, effective due (say "soft" when `soft`), slack,
+  components in words: priority, effective due and its `due_source` (hard /
+  inferred / horizon — only hard dates can be overcommitted), slack,
   points and where they came from, impact, aging, any pin, and the model's reason.
 - "how good are the estimates" → `GET /calibrate`.
+
+How the selection is built, so you can explain it:
+
+- **Must-dos first.** A hard due date (`due_on`, `due_source: hard`) today or
+  tomorrow is placed at the top of **Next** whatever its score, even past `n`
+  and the 5-point capacity — and it uses up capacity.
+- **Inbox is not ranked.** Inbox tasks are triage, not work: bucket
+  `excluded:project`, never in **Next**, and a pin cannot put one there.
+- **Starvation boost.** A project with no task in a recent daily pick gets up
+  to +50% (`starvation_boost`) when the day's list is filled — no board is
+  starved for days, but not every board appears every day.
+- **Nudge is grouped by who is owed** (`waiting_on`), biggest group first.
 
 ## Writes (only these)
 
@@ -63,6 +76,17 @@ Ref-first, like every task listing. Pipe `{"results": [...]}` through
 <ref> · <gid> · <effective_due or "—"><~ if soft> · <points>p
   [<name>](<permalink_url>) · <project> · <flags: overcommitted / stale:<reason> / pinned #N / waiting on X>
   <reason line — only when explain was asked>
+```
+
+In **Next**, mark a must-do with `due today` / `due tomorrow` / `overdue` in
+its flags. In **Nudge**, group the rows under a heading per person owed —
+`waiting_on` compared case-insensitively, `—` for none — largest group first,
+then by name; drop the redundant `waiting on X` flag inside a group:
+
+```
+### <who> (<count>)
+<ref> · <gid> · <effective_due or "—"><~ if soft> · <points>p
+  [<name>](<permalink_url>) · <project> · <flags>
 ```
 
 Then one line with the count, capacity used, and any assumption. Close with the

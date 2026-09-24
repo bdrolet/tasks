@@ -221,3 +221,30 @@ def test_calibrate_aggregates_per_project(monkeypatch):
     assert inbox["mean_cycle_days_per_point"] == pytest.approx(1.5)  # (2.0 + 1.0) / 2
     assert inbox["mean_points_ratio"] == pytest.approx(0.5)
     assert body["overall"]["deferred_histogram"] == {"0": 1, "1": 1, "5": 1}
+
+
+def _with(r, **components):
+    return {**r, "components": {**r["components"], **components}}
+
+
+def test_next_reselection_honours_must_do_and_starvation(monkeypatch):
+    rows = [
+        _with(row("hi", 1, rank=2, score=3.0), due_source="horizon", starvation_boost=0.0),
+        _with(
+            row("must", 2, rank=1, score=0.2, project="Family", points=4),
+            due_source="hard",
+            days_until_due=0,
+            starvation_boost=0.0,
+        ),
+        _with(
+            row("starved", 3, score=2.5, project="Consulting", points=1),
+            due_source="horizon",
+            starvation_boost=0.5,
+        ),
+    ]
+    monkeypatch.setattr(repo, "list_scores", lambda c: [dict(r) for r in rows])
+    body = client.post("/next", headers=AUTH, json={"n": 2}).json()
+    # must-do first despite the lowest score; starved 2.5 * 1.5 beats hi 3.0
+    assert [t["task_gid"] for t in body["next"]] == ["must", "starved"]
+    one = client.post("/next", headers=AUTH, json={"n": 1}).json()["next"]
+    assert [t["task_gid"] for t in one] == ["must"]

@@ -181,3 +181,36 @@ def test_write_ref_falls_back_to_the_ranking(api):
     with pytest.raises(SystemExit):
         tn.main(["unpin", ref_z])
     assert any(c[1] == "/ranking" for c in api)
+
+
+def test_nudge_is_grouped_by_who_is_owed():
+    payload = {
+        "today": "2026-09-23",
+        "next": [],
+        "overcommitted": [],
+        "stale": [],
+        "nudge": [
+            T("n1", waiting_on="the lawyer"),
+            T("n2", waiting_on="Accountant"),
+            T("n3", waiting_on=None),
+            T("n4", waiting_on="The Lawyer"),
+            T("n5", waiting_on="accountant"),
+            T("n6", waiting_on="Bank"),
+        ],
+        "unenriched": 0,
+    }
+    out = tn.render_lists(payload).splitlines()
+    nudge = out[out.index("## Nudge") + 1 :]
+    heads = [line for line in nudge if line.startswith("### ")]
+    # size desc, then name (case-insensitive); the first-seen spelling labels a group
+    assert heads == ["### Accountant (2)", "### the lawyer (2)", "### Bank (1)", "### — (1)"]
+    gids = [line.split("\t")[1] for line in nudge if not line.startswith("### ")]
+    assert gids == ["n2", "n5", "n1", "n4", "n6", "n3"]
+    refs = tn._refs(tn._listed(payload))
+    assert nudge[1] == tn._line(payload["nudge"][1], refs, False)
+
+
+def test_empty_nudge_still_renders_a_dash():
+    payload = {"today": "x", "next": [], "overcommitted": [], "stale": [], "nudge": []}
+    out = tn.render_lists(payload).splitlines()
+    assert out[out.index("## Nudge") + 1] == "—"

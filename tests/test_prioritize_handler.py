@@ -30,7 +30,7 @@ TASK = {
     "parent": None,
     "num_subtasks": 0,
     "memberships": [
-        {"project": {"gid": "p1", "name": "Inbox"}, "section": {"gid": "s", "name": "Respond"}}
+        {"project": {"gid": "p1", "name": "Work"}, "section": {"gid": "s", "name": "Respond"}}
     ],
     "custom_fields": [],
     "dependencies": [{"gid": "d1"}],
@@ -72,6 +72,7 @@ class MemConn:
         self.facts, self.enrichment, self.overrides, self.stats = {}, {}, {}, {}
         self.scores, self.runs, self.estimated = [], [], set()
         self.deleted = []
+        self.last_offered = {}
 
     def __enter__(self):
         return self
@@ -106,6 +107,14 @@ def db(monkeypatch):
     monkeypatch.setattr(repo, "list_enrichment", lambda c: dict(c.enrichment))
     monkeypatch.setattr(repo, "list_overrides", lambda c: dict(c.overrides))
     monkeypatch.setattr(repo, "list_stats", lambda c: dict(c.stats))
+
+    def last_offered(c, *, today, days=30):
+        # Emulates the SQL window: daily runs from [today - days, today).
+        return {
+            p: d for p, d in c.last_offered.items() if today - timedelta(days=days) <= d < today
+        }
+
+    monkeypatch.setattr(repo, "project_last_offered", last_offered)
     monkeypatch.setattr(repo, "clear_pin", lambda c, gid: None)
     monkeypatch.setattr(
         repo, "snapshot_completion", lambda c, f: c.stats.__setitem__(f.gid, "snap")
@@ -171,9 +180,7 @@ def model(monkeypatch):
 
 def test_facts_from_maps_fields_and_comments():
     facts, comments = h.facts_from(TASK, STORIES)
-    assert (
-        facts.priority == "P1" and facts.project_name == "Inbox" and facts.dependencies == ("d1",)
-    )
+    assert facts.priority == "P1" and facts.project_name == "Work" and facts.dependencies == ("d1",)
     assert facts.tags == ("cheryl",) and facts.due_on == date(2026, 9, 30)
     assert facts.created_at.tzinfo is not None
     assert comments == [
@@ -245,7 +252,7 @@ def test_subtasks_are_gathered_with_parent_project(db, asana_fake, model, monkey
     monkeypatch.setattr(asana, "get_subtasks", lambda gid: [{"gid": "t1-sub", "completed": False}])
     h.handle_task_changed("t1", today=TODAY)
     assert db.facts["t1"].num_open_subtasks == 1
-    assert db.facts["t1-sub"].project_name == "Inbox" and db.facts["t1-sub"].parent_gid == "t1"
+    assert db.facts["t1-sub"].project_name == "Work" and db.facts["t1-sub"].parent_gid == "t1"
 
 
 def test_gather_subtask_gid_directly_keeps_its_project(db, asana_fake, model, monkeypatch):
@@ -260,7 +267,7 @@ def test_gather_subtask_gid_directly_keeps_its_project(db, asana_fake, model, mo
     )
     monkeypatch.setattr(asana, "get_subtasks", lambda gid: [])
     h.handle_task_changed("t1-sub", today=TODAY)
-    assert db.facts["t1-sub"].project_name == "Inbox"
+    assert db.facts["t1-sub"].project_name == "Work"
 
 
 def test_handle_dispatches_on_kind(monkeypatch):
@@ -516,11 +523,11 @@ def test_facts_prefer_the_managed_project_of_a_multi_homed_task(monkeypatch):
         TASK,
         memberships=[
             {"project": {"gid": "p-other", "name": "Other"}},
-            {"project": {"gid": "p1", "name": "Inbox"}},
+            {"project": {"gid": "p1", "name": "Work"}},
         ],
     )
     facts, _ = h.facts_from(multi, [])
-    assert (facts.project_gid, facts.project_name) == ("p1", "Inbox")
+    assert (facts.project_gid, facts.project_name) == ("p1", "Work")
 
 
 def test_subtask_in_unmanaged_project_takes_its_managed_parents(db, asana_fake, model, monkeypatch):
@@ -606,7 +613,7 @@ def test_grandchild_gathered_directly_resolves_project_two_hops_up(
     calls = _chain_fake(monkeypatch, {"t1": root, "l1": level1, "l2": grandchild})
     h.handle_task_changed("l2", today=TODAY)
     assert calls == ["l2", "l1", "t1"]
-    assert db.facts["l2"].project_name == "Inbox" and db.facts["l2"].project_gid == "p1"
+    assert db.facts["l2"].project_name == "Work" and db.facts["l2"].project_gid == "p1"
     assert db.deleted == []
 
 
@@ -621,7 +628,7 @@ def test_gather_top_level_descends_into_nested_subtasks(db, asana_fake, model, m
     )
     h.handle_task_changed("t1", today=TODAY)
     assert set(db.facts) == {"t1", "l1", "l2"}
-    assert all(f.project_name == "Inbox" for f in db.facts.values())
+    assert all(f.project_name == "Work" for f in db.facts.values())
     assert db.facts["t1"].num_open_subtasks == 1 and db.facts["l1"].num_open_subtasks == 1
     assert db.facts["l2"].num_open_subtasks == 0
 
@@ -638,7 +645,7 @@ def test_gather_level1_subtask_passes_resolved_project_to_its_children(
         {"l1": [{"gid": "l2", "completed": False}]},
     )
     h.handle_task_changed("l1", today=TODAY)
-    assert db.facts["l1"].project_name == "Inbox" and db.facts["l2"].project_name == "Inbox"
+    assert db.facts["l1"].project_name == "Work" and db.facts["l2"].project_name == "Work"
     assert db.facts["l1"].num_open_subtasks == 1
 
 
@@ -748,9 +755,83 @@ def test_gather_depth_is_measured_from_the_tree_top(db, asana_fake, model, monke
     from_l1 = h.gather("l1")
     assert from_l1 is not None
     assert [f.gid for f, _, _ in from_l1] == levels
-    assert all(f.project_name == "Inbox" for f, _, _ in from_l1)
+    assert all(f.project_name == "Work" for f, _, _ in from_l1)
 
     from_root = h.gather("t1")
     assert from_root is not None
     assert [f.gid for f, _, _ in from_root] == ["t1", *levels]
     assert from_root[-1][0].num_open_subtasks == 0
+
+
+def test_excluded_project_skips_enrichment_and_write_back(db, asana_fake, model, monkeypatch):
+    inbox = dict(
+        TASK,
+        memberships=[{"project": {"gid": "p1", "name": "Inbox"}, "section": None}],
+    )
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(inbox))
+    enriched = []
+    monkeypatch.setattr(
+        h.otel,
+        "prioritize_enrich",
+        type("C", (), {"add": staticmethod(lambda n, attrs: enriched.append(attrs))})(),
+    )
+    h.handle_task_changed("t1", today=TODAY)
+    assert model == [] and "t1" not in db.enrichment
+    assert asana_fake["points"] == [] and asana_fake["comments"] == []
+    assert db.facts["t1"].project_name == "Inbox"
+    assert enriched == [{"result": "skipped"}]
+    assert db.scores[-1].by_gid()["t1"].bucket == "excluded:project"
+
+
+def test_task_moved_out_of_excluded_project_enriches(db, asana_fake, model, monkeypatch):
+    inbox = dict(
+        TASK,
+        memberships=[{"project": {"gid": "p1", "name": "Inbox"}, "section": None}],
+    )
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(inbox))
+    h.handle_task_changed("t1", today=TODAY)
+    assert model == []
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(TASK))
+    h.handle_task_changed("t1", today=TODAY)
+    assert len(model) == 1 and asana_fake["points"] == [("t1", 3)]
+
+
+def test_rescore_passes_project_last_offered_into_the_scorer(db, monkeypatch):
+    db.facts["a"] = _facts("a", tags=[])
+    db.last_offered = {"Work": TODAY - timedelta(days=2)}
+    seen = []
+    real = h.pz.score_set
+
+    def spy(*args, **kw):
+        seen.append(kw.get("project_last_offered"))
+        return real(*args, **kw)
+
+    monkeypatch.setattr(h.pz, "score_set", spy)
+    scored = h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
+    assert seen == [{"Work": TODAY - timedelta(days=2)}]
+    assert scored.by_gid()["a"].components["days_since_project_offered"] == 2
+
+
+def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkeypatch):
+    """After the morning daily run, an event rescore the same day must see the
+    same starvation inputs as the daily run did, so the stored rank holds."""
+    db.facts["a"] = _facts("a", tags=[])
+    calls = []
+    real = repo.project_last_offered
+
+    def spy(c, *, today, days=30):
+        calls.append(today)
+        return real(c, today=today, days=days)
+
+    monkeypatch.setattr(repo, "project_last_offered", spy)
+    db.last_offered = {"Work": TODAY - timedelta(days=3)}
+    daily = h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
+    db.last_offered = {"Work": TODAY}  # today's daily run picked a Work task
+    event = h.rescore(db, kind="event", trigger_gid="a", today=TODAY)
+    assert calls == [TODAY, TODAY]
+    for scored in (daily, event):
+        c = scored.by_gid()["a"].components
+        assert c["days_since_project_offered"] is None or c["days_since_project_offered"] >= 1
+    # only today's run exists: the project reads as never offered, not 0 days
+    assert event.by_gid()["a"].components["days_since_project_offered"] is None
+    assert event.by_gid()["a"].components["starvation_boost"] == 0.5

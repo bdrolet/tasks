@@ -179,3 +179,25 @@ def test_get_enrichment_returns_hash_and_parsed_raw():
     conn = RowsConn(row={"content_hash": "h", "raw": '{"impact": "high"}'})
     assert repo.get_enrichment(conn, "t1") == ("h", {"impact": "high"})
     assert repo.get_enrichment(RowsConn(row=None), "t1") is None
+
+
+def test_project_last_offered_reads_daily_runs_within_the_window():
+    conn = RowsConn(
+        rows=[
+            {"project": "Consulting", "last": date(2026, 9, 22)},
+            {"project": "Ben's Board", "last": "2026-09-18"},
+        ]
+    )
+    out = repo.project_last_offered(conn, today=date(2026, 9, 23))
+    assert out == {"Consulting": date(2026, 9, 22), "Ben's Board": date(2026, 9, 18)}
+    q, params = conn.executed[0]
+    assert "FROM prioritize_runs r" in q
+    assert "CROSS JOIN LATERAL jsonb_array_elements(r.top) AS e" in q
+    assert "JOIN task_facts f ON f.task_gid = e->>'gid'" in q
+    # prior days only: today's own daily run must not zero the boost of the
+    # projects it just picked (every later event rescore would reshuffle them)
+    assert "r.kind = 'daily' AND r.today >= %s AND r.today < %s" in q
+    assert "f.project_name IS NOT NULL" in q and "GROUP BY f.project_name" in q
+    assert params == (date(2026, 8, 24), date(2026, 9, 23))
+    repo.project_last_offered(conn, today=date(2026, 9, 23), days=7)
+    assert conn.executed[1][1] == (date(2026, 9, 16), date(2026, 9, 23))

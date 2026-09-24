@@ -314,7 +314,13 @@ def rescore(conn, *, kind: str, trigger_gid: str | None, today: date) -> ScoredS
     # A stale enrichment (hash moved, model call failed) is still better than
     # defaults; the flag below is what --explain shows.
     scored = pz.score_set(
-        facts, enrichments, repo.list_overrides(conn), repo.list_stats(conn), config, today
+        facts,
+        enrichments,
+        repo.list_overrides(conn),
+        repo.list_stats(conn),
+        config,
+        today,
+        project_last_offered=repo.project_last_offered(conn, today=today),
     )
     current = {f.gid: f.content_hash for f in facts}
     stored = {gid: hsh for gid, (hsh, _) in repo.list_enrichment(conn).items()}
@@ -354,6 +360,13 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
     estimate is already in Asana; transaction B rescores."""
     today = today or today_local()
     gathered = gather(gid)
+    # An excluded project (D15) is gathered and stored but never ranked, so
+    # the model call and the points write-back would be spend for nothing. A
+    # task moved out of it enriches on that move's own event.
+    excluded = (
+        gathered is not None
+        and gathered[0][0].project_name in prioritize_config.load().excluded_projects
+    )
     if gathered is not None and gathered[0][0].project_gid not in managed_projects.gids():
         with get_conn() as conn:
             repo.delete_task(conn, gid)
@@ -387,6 +400,9 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
                             ),
                         )
                         repo.clear_pin(conn, facts.gid)
+                    continue
+                if excluded:
+                    results.append((facts.gid, "skipped"))
                     continue
                 merged = TaskFacts(
                     **(
