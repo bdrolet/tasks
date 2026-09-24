@@ -114,3 +114,22 @@ def test_calibrate_renders_table(api, capsys):
     tn.main(["calibrate"])
     out = capsys.readouterr().out
     assert "Inbox" in out and "1.50" in out
+
+
+def test_ranking_all_forwards_explain(api):
+    tn.main(["ranking", "--all", "--explain"])
+    ranking_calls = [c for c in api if c[1] == "/ranking"]
+    assert len(ranking_calls) == 4
+    assert all(c[3]["explain"] == "true" for c in ranking_calls)
+
+
+def test_global_explain_survives_subcommand_either_order(api):
+    tn.main(["--explain", "ranking"])
+    assert api[-1][3]["explain"] == "true"
+    tn.main(["ranking", "--explain"])
+    assert api[-1][3]["explain"] == "true"
+
+
+def test_override_rejects_unknown_field(api):
+    with pytest.raises(SystemExit):
+        tn.main(["override", "1218118170820306", "colour=red"])

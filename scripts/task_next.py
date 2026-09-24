@@ -135,10 +135,11 @@ def render_ranking(payload: dict, explain: bool = False) -> str:
     return "\n".join(out)
 
 
-def _all_tasks() -> list[dict]:
+def _all_tasks(explain: bool = False) -> list[dict]:
     tasks: list[dict] = []
     for bucket in ("next", "nudge", "snoozed", "excluded"):
-        tasks += _api("GET", "/ranking", params={"bucket": bucket, "limit": 500}).get("tasks", [])
+        params = {"bucket": bucket, "limit": 500, "explain": str(explain).lower()}
+        tasks += _api("GET", "/ranking", params=params).get("tasks", [])
     return tasks
 
 
@@ -165,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--explain", action="store_true")
     r = sub.add_parser("ranking")
     r.add_argument("--all", action="store_true")
-    r.add_argument("--explain", action="store_true")
+    r.add_argument("--explain", action="store_true", default=argparse.SUPPRESS)
     for name in ("start", "unpin", "unsnooze"):
         sub.add_parser(name).add_argument("task")
     p = sub.add_parser("points")
@@ -193,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "ranking":
         if args.all:
-            tasks = _all_tasks()
+            tasks = _all_tasks(args.explain)
             payload = {"today": None, "total": len(tasks), "tasks": tasks}
         else:
             payload = _api(
