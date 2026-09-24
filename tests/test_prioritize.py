@@ -293,3 +293,42 @@ def test_positions_are_total_over_the_set():
     scored = run([a, w], {"w": enr(waiting_on="x")})
     assert sorted(t.position for t in scored.tasks) == [1, 2]
     assert scored.by_gid()["a"].position == 1
+
+
+def test_parent_whose_only_subtask_row_is_completed_is_next():
+    # The parent's stored count is stale (gathered while the subtask was open);
+    # the subtask's own row says it is done.
+    parent = facts("p", points=1, num_open_subtasks=1)
+    sub = facts("s", points=1, parent_gid="p", completed=True)
+    assert run([parent, sub]).by_gid()["p"].bucket == "next"
+
+
+def test_parent_count_comes_from_open_subtask_rows_when_present():
+    parent = facts("p", points=1, num_open_subtasks=0)
+    sub = facts("s", points=1, parent_gid="p")
+    assert run([parent, sub]).by_gid()["p"].bucket == "excluded:parent"
+
+
+def test_parent_without_subtask_rows_keeps_stored_count():
+    parent = facts("p", points=1, num_open_subtasks=2)
+    assert run([parent]).by_gid()["p"].bucket == "excluded:parent"
+
+
+def test_pin_takes_its_position_among_unpinned():
+    us = [facts(f"u{i}", points=1, due_on=TODAY + timedelta(days=i)) for i in (1, 2, 3)]
+    pinned = facts("pin", points=8, due_on=TODAY + timedelta(days=60))
+    scored = run([*us, pinned], overrides={"pin": Overrides(pinned_rank=3)})
+    by = scored.by_gid()
+    order = sorted(("u1", "u2", "u3"), key=lambda g: by[g].position)
+    assert order == ["u1", "u2", "u3"]
+    assert [t.gid for t in sorted(scored.next(), key=lambda t: t.position)] == [
+        "u1",
+        "u2",
+        "pin",
+        "u3",
+    ]
+    assert by["pin"].position == 3
+    assert [t.gid for t in pz.select(scored.next(), CFG)] == [
+        t.gid for t in sorted(scored.next(), key=lambda t: t.rank or 99) if t.rank
+    ]
+    assert by["pin"].rank == 3

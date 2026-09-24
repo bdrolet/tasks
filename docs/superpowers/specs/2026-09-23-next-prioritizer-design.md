@@ -174,8 +174,9 @@ the task is flagged `unenriched`, and the daily heal republishes it (D8).
 On `day_changed`, before rescoring:
 
 1. **Deferrals.** For each task in the previous canonical run's top-N: if
-   `Started at` or `completed_at` ≥ that day, mark it `started` in the run
-   row; otherwise `task_stats.times_deferred += 1`. Interactive `/next`
+   `Started at` is set (any date — an open task with a start date is in
+   progress, not deferred) or `completed_at` ≥ that day, mark it `started`
+   in the run row; otherwise `task_stats.times_deferred += 1`. Interactive `/next`
    calls log a `manual` run but never bump the counter — only the daily run
    is an "offer".
 2. **Heal.** List open tasks per managed project (plus one level of subtasks

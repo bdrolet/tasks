@@ -80,3 +80,15 @@ def test_ensure_creates_missing_and_attaches(monkeypatch):
         ("p-b", "cf-Started at"),
     }
     assert out == {"Story points": "cf-Story points", "Started at": "cf-Started at"}
+
+
+def test_field_gid_refreshes_on_miss_then_raises(monkeypatch):
+    import pytest
+
+    calls = _fields(monkeypatch)
+    assert cf.field_gid("Story points") == "cf-points"
+    assert len(calls) == 1  # cached
+    monkeypatch.setattr(asana, "list_custom_fields", lambda: (calls.append(1), [])[1])
+    cf.gids(refresh=True)
+    with pytest.raises(RuntimeError, match="setup_custom_fields"):
+        cf.field_gid("Story points")

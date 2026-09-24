@@ -44,7 +44,8 @@ def read(task: dict) -> tuple[int | None, date | None]:
     return points, started
 
 
-def _gid(name: str) -> str:
+def field_gid(name: str) -> str:
+    """The field's gid, re-listing once on a miss; RuntimeError when absent."""
     gid = gids().get(name) or gids(refresh=True).get(name)
     if not gid:
         raise RuntimeError(f"custom field {name!r} missing — run scripts/setup_custom_fields.py")
@@ -59,11 +60,11 @@ def date_value(day: date | str | None) -> dict | None:
 
 
 def set_story_points(task_gid: str, points: int | None) -> None:
-    asana.update_task(task_gid, {"custom_fields": {_gid(STORY_POINTS): points}})
+    asana.update_task(task_gid, {"custom_fields": {field_gid(STORY_POINTS): points}})
 
 
 def set_started_at(task_gid: str, day: date | None) -> None:
-    asana.update_task(task_gid, {"custom_fields": {_gid(STARTED_AT): date_value(day)}})
+    asana.update_task(task_gid, {"custom_fields": {field_gid(STARTED_AT): date_value(day)}})
 
 
 def ensure(project_gids: list[str]) -> dict[str, str]:

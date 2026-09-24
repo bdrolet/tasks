@@ -5,7 +5,7 @@ Design: docs/superpowers/specs/2026-09-23-next-prioritizer-design.md"""
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -144,10 +144,22 @@ def score_set(
     today: date,
 ) -> ScoredSet:
     open_gids = {f.gid for f in facts if not f.completed}
+    # A parent's stored num_open_subtasks is only refreshed when the parent
+    # itself is gathered; a subtask completing moves only the subtask's row.
+    # Where any subtask row exists for a parent, the rows are the truth.
+    children_seen: set[str] = set()
+    open_children: dict[str, int] = {}
+    for f in facts:
+        if f.parent_gid:
+            children_seen.add(f.parent_gid)
+            if not f.completed:
+                open_children[f.parent_gid] = open_children.get(f.parent_gid, 0) + 1
     tasks: list[ScoredTask] = []
     pending: list[tuple[TaskFacts, Effective, Overrides, ScoredTask, date | None, bool]] = []
 
     for f in facts:
+        if f.gid in children_seen:
+            f = replace(f, num_open_subtasks=open_children.get(f.gid, 0))
         e = enrichments.get(f.gid, Enrichment.DEFAULT)
         ov = overrides.get(f.gid, Overrides.NONE)
         eff = effective(f, e, ov, config)
@@ -251,19 +263,16 @@ def score_set(
             elif soft and due is not None and due < today:
                 t.stale, t.stale_reason = True, "soft_due_passed"
 
-    # Positions: pinned next tasks first (by rank, then score), then next by score,
-    # then everything else by score. Ranks: the default selection.
+    # Positions: the next list with pins at their pinned_rank (the same
+    # placement select() uses), then everything else by score. Ranks: the
+    # default selection.
     nxt = [t for t in tasks if t.bucket == "next"]
     rest = [t for t in tasks if t.bucket != "next"]
-    pinned = sorted(
-        (t for t in nxt if t.pinned_rank is not None),
-        key=lambda t: (t.pinned_rank, -(t.score or 0)),
-    )
     unpinned = sorted((t for t in nxt if t.pinned_rank is None), key=lambda t: -(t.score or 0))
+    ordered_next = _place_pins(unpinned, _sorted_pins(nxt))
     rest.sort(key=lambda t: -(t.score or 0))
-    for pos, t in enumerate([*pinned, *unpinned, *rest], start=1):
+    for pos, t in enumerate([*ordered_next, *rest], start=1):
         t.position = pos
-    ordered_next = [*pinned, *unpinned]
     for rank, t in enumerate(select(ordered_next, config), start=1):
         t.rank = rank
     return ScoredSet(today=today, tasks=ordered_next + rest)
@@ -275,10 +284,6 @@ def select(
     """Greedy by (penalised) score until capacity or n; pins inserted at their
     rank afterwards and count toward neither (P5)."""
     n = n or config.default_n
-    pinned = sorted(
-        (t for t in candidates if t.pinned_rank is not None),
-        key=lambda t: (t.pinned_rank, -(t.score or 0)),
-    )
     pool = {t.gid: t for t in candidates if t.pinned_rank is None and t.score is not None}
     adjusted = {
         gid: (t.score or 0) * (config.energy_penalty if energy and t.energy != energy else 1.0)
@@ -294,13 +299,30 @@ def select(
         for g, other in pool.items():
             if other.project_name == t.project_name:
                 adjusted[g] *= config.diversity_penalty
+    return _place_pins(picked, _sorted_pins(candidates))
+
+
+def _sorted_pins(tasks: list[ScoredTask]) -> list[ScoredTask]:
+    """Pinned tasks by pinned_rank; two pins on one position keep score order."""
+    return sorted(
+        (t for t in tasks if t.pinned_rank is not None),
+        key=lambda t: (t.pinned_rank, -(t.score or 0)),
+    )
+
+
+def _place_pins(
+    unpinned_sorted: list[ScoredTask], pinned_sorted: list[ScoredTask]
+) -> list[ScoredTask]:
+    """Insert each pin at index pinned_rank - 1 (clamped to the list end);
+    same-position pins stack in the order given."""
+    out = list(unpinned_sorted)
     inserted_at: dict[int, int] = {}
-    for t in pinned:
+    for t in pinned_sorted:
         base = max((t.pinned_rank or 1) - 1, 0)
-        idx = min(base + inserted_at.get(base, 0), len(picked))
-        picked.insert(idx, t)
+        idx = min(base + inserted_at.get(base, 0), len(out))
+        out.insert(idx, t)
         inserted_at[base] = inserted_at.get(base, 0) + 1
-    return picked
+    return out
 
 
 def side_lists(scored: ScoredSet) -> dict[str, list[ScoredTask]]:
