@@ -83,3 +83,19 @@ resource "google_cloud_scheduler_job" "webhook_sync" {
     }
   }
 }
+
+# ---------------------------------------------------------------------------
+# Day changed — 05:45 ET, after webhook-sync (05:30) and before escalation
+# (06:00). Publishes straight to the topic; the subscriber takes today's date
+# from its own clock, so the body is static.
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "day_changed" {
+  name      = "tasks-day-changed"
+  schedule  = "45 5 * * *"
+  time_zone = "America/New_York"
+
+  pubsub_target {
+    topic_name = google_pubsub_topic.task_events.id
+    data       = base64encode(jsonencode({ kind = "day_changed" }))
+  }
+}

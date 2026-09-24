@@ -94,3 +94,48 @@ resource "google_secret_manager_secret_iam_member" "webhook_cf_escalate_token" {
 
 # The email-events topic and inbox-process-cf's publisher binding live in the
 # INBOX repo's terraform (producer owns the stream) — see plan Task 16 Step 2.
+
+# ---------------------------------------------------------------------------
+# tasks-prioritize Cloud Function service account — task-events subscriber.
+# Reads Asana, calls Claude, writes the prioritizer tables; no calendar, no
+# standing context, no webhook secrets.
+# ---------------------------------------------------------------------------
+resource "google_service_account" "tasks_prioritize_cf" {
+  account_id   = "tasks-prioritize-cf"
+  display_name = "Tasks Prioritize Cloud Function"
+}
+
+resource "google_secret_manager_secret_iam_member" "prioritize_cf_shared" {
+  for_each = {
+    for k, v in data.google_secret_manager_secret.shared : k => v
+    if contains(["asana-api-key", "grafana-otlp-endpoint", "grafana-otlp-token"], k)
+  }
+  secret_id = each.value.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "prioritize_cf_db_password" {
+  secret_id = google_secret_manager_secret.tasks_db_password.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "prioritize_cf_anthropic" {
+  secret_id = google_secret_manager_secret.tasks_anthropic_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
+}
+
+resource "google_project_iam_member" "prioritize_cf_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
+}
+
+# The heal step republishes to its own topic.
+resource "google_pubsub_topic_iam_member" "task_events_prioritize_publisher" {
+  topic  = google_pubsub_topic.task_events.name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
+}
