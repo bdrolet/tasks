@@ -202,8 +202,10 @@ def receive(body: bytes, signature: str, project_gid: str | None = None) -> tupl
     for gid in delete_gids:
         task_index.remove(gid)
 
-    for gid in changed_gids:
-        pubsub.publish_task_changed(gid, "webhook")
+    if changed_gids:
+        # One shared deadline for the whole batch, not N sequential 30s
+        # waits — a bulk edit must not overrun Asana's ~10s reply window.
+        pubsub.publish_task_changed_many(list(changed_gids), "webhook")
 
     logger.info(
         "Webhook: %d event(s) received, %d completion(s), %d index refresh(es), "

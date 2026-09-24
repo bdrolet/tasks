@@ -382,7 +382,9 @@ def test_a_delivery_for_an_unmanaged_project_never_reaches_the_database(monkeypa
 
 def _published(monkeypatch):
     out = []
-    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: out.append((gid, source)))
+    monkeypatch.setattr(
+        ps, "publish_task_changed_many", lambda gids, source: out.append((gids, source))
+    )
     return out
 
 
@@ -404,8 +406,8 @@ def test_task_events_publish_once_per_gid(monkeypatch):
             {"action": "deleted", "resource": {"gid": "t2", "resource_type": "task"}},
         ]
     )
-    asana_webhook.receive(body, sig)
-    assert published == [("t1", "webhook"), ("t2", "webhook")]
+    assert asana_webhook.receive(body, sig) == ("", 200)
+    assert published == [(["t1", "t2"], "webhook")]
 
 
 def test_story_event_publishes_parent_task(monkeypatch):
@@ -425,7 +427,7 @@ def test_story_event_publishes_parent_task(monkeypatch):
         ]
     )
     assert asana_webhook.receive(body, sig) == ("", 200)
-    assert published == [("t7", "webhook")]
+    assert published == [(["t7"], "webhook")]
 
 
 def test_story_event_without_parent_is_ignored(monkeypatch):
