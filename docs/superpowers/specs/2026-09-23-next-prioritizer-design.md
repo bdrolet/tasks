@@ -128,8 +128,13 @@ topic also gives the three write paths one consumer.
 overrides, stats, config, today) → ScoredSet`. The subscriber runs it over
 the full set after every message and rewrites `task_scores`; `POST /next`
 reads that table and applies only the read-time knobs (`--energy`, `--n`).
-At ~100 tasks a rescore is milliseconds; concurrent rescores are last-writer-
-wins over near-identical inputs, which is harmless.
+At ~100 tasks a rescore is milliseconds. Rescores are serialised with a
+Postgres advisory lock (`repo.prioritize.lock_rescore`): `replace_scores` is a
+delete-all + insert-all, and two of them interleaving under READ COMMITTED
+collide on the primary key and roll back — which, before the lock, could also
+roll back the enrichment row and the estimate claim after the Asana write-back
+had already happened. Facts, enrichment and the claim now commit in their own
+transaction before the write-back; the rescore runs in a second one.
 
 ### D5 — Enrichment: one schema-constrained call per task per content change
 
