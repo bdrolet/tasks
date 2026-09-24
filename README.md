@@ -61,7 +61,8 @@ handlers/    task_create, label_applied, task_complete, asana_webhook (protocol)
 models/      event payload types
 main.py      CF entry points — transport adapter only (decode, route, flush)
 terraform/   All GCP resources (state prefix: tasks)
-scripts/     fetch-env.sh, migrate_db.py, register_webhook.py, test-task-create.py
+scripts/     fetch-env.sh, migrate_db.py, register_webhook.py, test-task-create.py,
+             setup_custom_fields.py, backfill_prioritize.py, task_next.py
 docs/        architecture, webhook runbook, metrics reference
 ```
 
@@ -121,7 +122,14 @@ Push to `main` touching `main.py`, `clients/`, `services/`, `handlers/`,
      .venv/bin/python scripts/migrate_db.py
    ```
 4. Register the Asana webhook: `docs/asana-webhook-setup.md`.
-5. See `docs/architecture.md` for the full design.
+5. Prioritizer (once per workspace, needs Asana Starter):
+   ```bash
+   .venv/bin/python scripts/setup_custom_fields.py        # "Story points" + "Started at" fields
+   curl -X POST "$WEBHOOK_URL/webhook-sync" -H "Authorization: Bearer $ASANA_ESCALATE_TOKEN" \
+     -d "{\"target\": \"$WEBHOOK_URL\"}"                    # re-register webhooks with the wider filters
+   .venv/bin/python scripts/backfill_prioritize.py --publish   # initial load (~1 Claude call per task)
+   ```
+6. See `docs/architecture.md` for the full design.
 
 ## tasks-api
 
