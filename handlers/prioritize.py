@@ -25,6 +25,9 @@ from services.due_digest import today_local
 logger = logging.getLogger(__name__)
 
 TOP_N_LOGGED = 10
+# Levels of subtask nesting walked: project resolution hops up at most this
+# many parents; gather and heal descend at most this many levels below a task.
+MAX_SUBTASK_DEPTH = 3
 
 
 def handle(message: dict) -> None:
@@ -79,12 +82,51 @@ def _project(task: dict, parent: dict | None) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _resolve_project(task: dict) -> tuple[str | None, str | None, int]:
+    """(gid, name, hops): the task's project, walking up the parent chain — a
+    subtask has no memberships, and neither does a level-1 subtask's child's
+    parent, so a single parent hop leaves a grandchild with no project. Stops
+    at the first managed project, at MAX_SUBTASK_DEPTH hops, or at a parent
+    Asana 404s; falls back to the nearest unmanaged project any hop had.
+
+    `hops` is how far up the walk went (0 for a top-level task): the task's
+    own level in its tree, so gather can measure its descent from the tree
+    top exactly as heal does. Unresolved, it is the hops actually walked."""
+    first_any: tuple[str | None, str | None] = (None, None)
+    current = task
+    depth = 0
+    while True:
+        gid, name = _project(current, None)
+        if gid and gid in managed_projects.gids():
+            return gid, name, depth
+        if gid and first_any[0] is None:
+            first_any = (gid, name)
+        parent_ref = current.get("parent") or {}
+        if not parent_ref.get("gid") or depth >= MAX_SUBTASK_DEPTH:
+            return first_any[0], first_any[1], depth
+        parent = asana.get_task_detail(parent_ref["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS)
+        if parent is None:
+            return first_any[0], first_any[1], depth
+        current = parent
+        depth += 1
+
+
 def facts_from(
-    task: dict, stories: list[dict], *, parent: dict | None = None
+    task: dict,
+    stories: list[dict],
+    *,
+    parent: dict | None = None,
+    inherited: tuple[str | None, str | None] | None = None,
 ) -> tuple[TaskFacts, list[dict]]:
     """The task's project, resolved as managed_projects.project_of does; a
-    subtask with no managed membership of its own takes its parent's."""
+    subtask with no managed membership of its own takes its parent's, and
+    failing that the `inherited` (gid, name) its gathering root resolved."""
     project_gid, project_name = _project(task, parent)
+    if inherited is not None and (
+        project_gid is None or project_gid not in managed_projects.gids()
+    ):
+        if inherited[0] is not None:
+            project_gid, project_name = inherited
     comments = [
         {
             "text": s.get("text"),
@@ -123,33 +165,54 @@ def facts_from(
     return facts, comments
 
 
+def _gather_subtasks(
+    task: dict,
+    project: tuple[str | None, str | None],
+    level: int,
+    out: list[tuple[TaskFacts, dict, list[dict]]],
+) -> int:
+    """Append the open subtasks of `task` (and theirs, while level stays
+    within MAX_SUBTASK_DEPTH) to `out`, each carrying the root's project.
+    Returns the number of open direct subtasks."""
+    if not task.get("num_subtasks") or level > MAX_SUBTASK_DEPTH:
+        return 0
+    open_subs = 0
+    for sub in asana.get_subtasks(task["gid"]):
+        if sub.get("completed"):
+            continue
+        detail = asana.get_task_detail(sub["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS)
+        if detail is None:
+            continue
+        open_subs += 1
+        sub_facts, sub_comments = facts_from(
+            detail, asana.get_stories(sub["gid"]), inherited=project
+        )
+        idx = len(out)
+        out.append((sub_facts, detail, sub_comments))
+        n = _gather_subtasks(detail, project, level + 1, out)
+        out[idx] = (
+            TaskFacts(**(sub_facts.__dict__ | {"num_open_subtasks": n})),
+            detail,
+            sub_comments,
+        )
+    return open_subs
+
+
 def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
     task = asana.get_task_detail(gid, opt_fields=asana.PRIORITIZE_OPT_FIELDS)
     if task is None:
         return None
     stories = asana.get_stories(gid)
-    parent = None
-    if task.get("parent") and managed_projects.project_of(task) not in managed_projects.gids():
-        # gid is itself a subtask (e.g. republished directly by heal) — a
-        # subtask usually carries no memberships (or none in a managed
-        # project), so its project comes from its parent, fetched here rather
-        # than assumed None.
-        parent = asana.get_task_detail(
-            task["parent"]["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS
-        )
-    facts, comments = facts_from(task, stories, parent=parent)
+    # gid may itself be a subtask at any level (e.g. republished directly by
+    # heal); it carries no memberships, so its project comes up the chain.
+    project_gid, project_name, level = _resolve_project(task)
+    facts, comments = facts_from(task, stories, inherited=(project_gid, project_name))
     out: list[tuple[TaskFacts, dict, list[dict]]] = []
-    open_subs = 0
-    if task.get("num_subtasks"):
-        for sub in asana.get_subtasks(gid):
-            if sub.get("completed"):
-                continue
-            detail = asana.get_task_detail(sub["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS)
-            if detail is None:
-                continue
-            open_subs += 1
-            sub_facts, sub_comments = facts_from(detail, asana.get_stories(sub["gid"]), parent=task)
-            out.append((sub_facts, detail, sub_comments))
+    # Depth counts from the tree top, as heal's walk does: gathering a level-1
+    # subtask descends to level MAX_SUBTASK_DEPTH, never beyond, so it cannot
+    # store rows heal never lists (which heal would then republish, fail to
+    # resolve, and delete — an oscillation).
+    open_subs = _gather_subtasks(task, (facts.project_gid, facts.project_name), level + 1, out)
     facts = TaskFacts(**(facts.__dict__ | {"num_open_subtasks": open_subs}))
     return [(facts, task, comments), *out]
 
@@ -339,6 +402,13 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
                 results.append((facts.gid, result))
     # Transaction A has committed: the claim stands whatever Asana does now.
     written = {g for g, points in to_write if write_back(g, points)}
+    if written:
+        # Persist the points now: a subtask never gets the echo event that
+        # would otherwise carry them back, and the rescore below should see them.
+        with get_conn() as conn:
+            for g, points in to_write:
+                if g in written:
+                    repo.set_story_points(conn, g, points)
     for g, result in results:
         if result == "claimed":
             result = "written_back" if g in written else "ok"
@@ -375,6 +445,20 @@ def settle_deferrals(conn, today: date) -> tuple[int, int]:
     return len(deferred), started
 
 
+def _open_descendants(task: dict, level: int) -> list[dict]:
+    """Open subtasks below `task`, down to MAX_SUBTASK_DEPTH levels — one
+    compact get_subtasks listing per parent per level, no detail fetches."""
+    if not task.get("num_subtasks") or level > MAX_SUBTASK_DEPTH:
+        return []
+    found: list[dict] = []
+    for s in asana.get_subtasks(task["gid"], opt_fields=asana.HEAL_OPT_FIELDS):
+        if s.get("completed"):
+            continue
+        found.append(s)
+        found += _open_descendants(s, level + 1)
+    return found
+
+
 def heal() -> int:
     """Spec D8 step 2: republish anything Asana knows that we do not, and
     anything we still hold open that Asana's open-task listing no longer
@@ -401,13 +485,7 @@ def heal() -> int:
         for task in asana.list_project_tasks(
             project_gid, only_open=True, opt_fields=asana.HEAL_OPT_FIELDS
         ):
-            candidates = [task]
-            if task.get("num_subtasks"):
-                candidates += [
-                    s
-                    for s in asana.get_subtasks(task["gid"], opt_fields=asana.HEAL_OPT_FIELDS)
-                    if not s.get("completed")
-                ]
+            candidates = [task, *_open_descendants(task, 1)]
             for t in candidates:
                 seen.add(t["gid"])
                 if needs(t["gid"], t.get("modified_at")):
