@@ -56,12 +56,35 @@ def _day(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
 
 
+def _project_name(task: dict, project_gid: str) -> str | None:
+    for m in task.get("memberships") or []:
+        project = m.get("project") or {}
+        if project.get("gid") == project_gid:
+            return project.get("name")
+    return None
+
+
+def _project(task: dict, parent: dict | None) -> tuple[str | None, str | None]:
+    """(gid, name): the first of task, parent whose project_of() is managed;
+    failing that, the first that has any project at all."""
+    sources = [t for t in (task, parent) if t]
+    managed = managed_projects.gids()
+    resolved = [(t, managed_projects.project_of(t)) for t in sources]
+    for t, gid in resolved:
+        if gid and gid in managed:
+            return gid, _project_name(t, gid)
+    for t, gid in resolved:
+        if gid:
+            return gid, _project_name(t, gid)
+    return None, None
+
+
 def facts_from(
     task: dict, stories: list[dict], *, parent: dict | None = None
 ) -> tuple[TaskFacts, list[dict]]:
-    """A subtask carries no memberships; it inherits its parent's project."""
-    ms = (task.get("memberships") or []) or ((parent or {}).get("memberships") or [])
-    project = (ms[0].get("project") or {}) if ms else {}
+    """The task's project, resolved as managed_projects.project_of does; a
+    subtask with no managed membership of its own takes its parent's."""
+    project_gid, project_name = _project(task, parent)
     comments = [
         {
             "text": s.get("text"),
@@ -75,8 +98,8 @@ def facts_from(
     name = task.get("name") or ""
     facts = TaskFacts(
         gid=task["gid"],
-        project_gid=project.get("gid"),
-        project_name=project.get("name"),
+        project_gid=project_gid,
+        project_name=project_name,
         parent_gid=(task.get("parent") or {}).get("gid"),
         name=name,
         permalink_url=task.get("permalink_url"),
@@ -106,10 +129,11 @@ def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
         return None
     stories = asana.get_stories(gid)
     parent = None
-    if task.get("parent") and not task.get("memberships"):
+    if task.get("parent") and managed_projects.project_of(task) not in managed_projects.gids():
         # gid is itself a subtask (e.g. republished directly by heal) — a
-        # subtask carries no memberships, so its project comes from its
-        # parent, fetched here rather than assumed None.
+        # subtask usually carries no memberships (or none in a managed
+        # project), so its project comes from its parent, fetched here rather
+        # than assumed None.
         parent = asana.get_task_detail(
             task["parent"]["gid"], opt_fields=asana.PRIORITIZE_OPT_FIELDS
         )
@@ -133,9 +157,15 @@ def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
 # ---- enrich + write back ----------------------------------------------------
 
 
-def enrich_one(conn, facts: TaskFacts, raw_task: dict, comments: list[dict], today: date) -> str:
-    if repo.get_enrichment_hash(conn, facts.gid) == facts.content_hash:
-        return "cached"
+def enrich_one(
+    conn, facts: TaskFacts, raw_task: dict, comments: list[dict], today: date
+) -> tuple[Enrichment | None, str]:
+    """(enrichment or None, result label). A cache hit returns the stored
+    enrichment — so a write-back that could not claim last time (e.g. the
+    field was missing) is retried — and None only when the model failed."""
+    stored = repo.get_enrichment(conn, facts.gid)
+    if stored is not None and stored[0] == facts.content_hash:
+        return _enrichment_from_raw(stored[1]), "cached"
     try:
         enrichment = en.extract(
             name=facts.name,
@@ -150,11 +180,9 @@ def enrich_one(conn, facts: TaskFacts, raw_task: dict, comments: list[dict], tod
     except Exception:
         logger.exception("enrichment failed for gid=%s — scoring with defaults", facts.gid)
         otel.errors.add(1, {"handler": "prioritize.enrich"})
-        return "failed"
+        return None, "failed"
     repo.upsert_enrichment(conn, facts.gid, facts.content_hash, _raw(enrichment), en.MODEL)
-    if write_back(conn, facts, enrichment):
-        return "written_back"
-    return "ok"
+    return enrichment, "ok"
 
 
 def _raw(e: Enrichment) -> dict:
@@ -165,18 +193,36 @@ def _raw(e: Enrichment) -> dict:
     return d
 
 
-def write_back(conn, facts: TaskFacts, enrichment: Enrichment) -> bool:
-    """Spec D6: field empty, never estimated before, conditional claim wins."""
+def claim_write_back(conn, facts: TaskFacts, enrichment: Enrichment) -> int | None:
+    """Spec D6, inside the transaction: field empty, a suggestion, the field
+    resolvable, and the conditional claim wins → the points to write back
+    once the transaction has committed. A missing field claims nothing, so
+    the next event retries."""
     points = enrichment.story_points_suggested
-    if facts.story_points is not None or points is None:
-        return False
-    if not repo.claim_estimate(conn, facts.gid, points):
-        return False
+    if facts.story_points is not None or facts.points_estimated is not None or points is None:
+        return None
     try:
-        cf.set_story_points(facts.gid, points)
-        asana.create_story(facts.gid, text=en.estimate_comment(points))
+        cf.field_gid(cf.STORY_POINTS)
+    except RuntimeError as exc:
+        logger.warning(
+            "not claiming an estimate for gid=%s: %s (run scripts/setup_custom_fields.py)",
+            facts.gid,
+            exc,
+        )
+        return None
+    if not repo.claim_estimate(conn, facts.gid, points):
+        return None
+    return points
+
+
+def write_back(gid: str, points: int) -> bool:
+    """After commit: field first, then the comment. A failure logs and keeps
+    the claim — the estimate is never written twice (D6)."""
+    try:
+        cf.set_story_points(gid, points)
+        asana.create_story(gid, text=en.estimate_comment(points))
     except Exception:
-        logger.exception("story-point write-back failed for gid=%s (claim kept)", facts.gid)
+        logger.exception("story-point write-back failed for gid=%s (claim kept)", gid)
         otel.errors.add(1, {"handler": "prioritize.write_back"})
         return False
     return True
@@ -196,6 +242,7 @@ def _enrichment_from_raw(raw: dict) -> Enrichment:
 
 def rescore(conn, *, kind: str, trigger_gid: str | None, today: date) -> ScoredSet:
     t0 = time.monotonic()
+    repo.lock_rescore(conn)  # held to commit: concurrent rescores serialise
     config = prioritize_config.load()
     facts = repo.list_facts(conn)
     enrichments = {
@@ -239,8 +286,19 @@ def rescore(conn, *, kind: str, trigger_gid: str | None, today: date) -> ScoredS
 
 
 def handle_task_changed(gid: str, *, today: date | None = None) -> None:
+    """Transaction A (facts, enrichment, claim) commits before the Asana
+    write-back, so a failed rescore can never roll back a claim whose
+    estimate is already in Asana; transaction B rescores."""
     today = today or today_local()
     gathered = gather(gid)
+    if gathered is not None and gathered[0][0].project_gid not in managed_projects.gids():
+        with get_conn() as conn:
+            repo.delete_task(conn, gid)
+        otel.prioritize_events.add(1, {"kind": "task_changed", "result": "unmanaged"})
+        logger.info("task %s is in no managed project — rows dropped", gid)
+        return
+    to_write: list[tuple[str, int]] = []
+    results: list[tuple[str, str]] = []
     with get_conn() as conn:
         if gathered is None:
             repo.delete_task(conn, gid)
@@ -273,8 +331,19 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
                         | {"points_estimated": previous.points_estimated if previous else None}
                     )
                 )
-                result = enrich_one(conn, merged, raw_task, comments, today)
-                otel.prioritize_enrich.add(1, {"result": result})
+                enrichment, result = enrich_one(conn, merged, raw_task, comments, today)
+                points = claim_write_back(conn, merged, enrichment) if enrichment else None
+                if points is not None:
+                    to_write.append((facts.gid, points))
+                    result = "claimed"
+                results.append((facts.gid, result))
+    # Transaction A has committed: the claim stands whatever Asana does now.
+    written = {g for g, points in to_write if write_back(g, points)}
+    for g, result in results:
+        if result == "claimed":
+            result = "written_back" if g in written else "ok"
+        otel.prioritize_enrich.add(1, {"result": result})
+    with get_conn() as conn:
         rescore(conn, kind="event", trigger_gid=gid, today=today)
 
 
@@ -290,8 +359,9 @@ def settle_deferrals(conn, today: date) -> tuple[int, int]:
     started = 0
     for entry in run["top"]:
         f = facts.get(entry["gid"])
+        # Started at any date and not completed = in progress, not deferred.
         began = f is not None and (
-            (f.started_at is not None and f.started_at >= offered_day)
+            f.started_at is not None
             or (f.completed_at is not None and f.completed_at.date() >= offered_day)
         )
         entry["started"] = bool(began)
@@ -305,12 +375,15 @@ def settle_deferrals(conn, today: date) -> tuple[int, int]:
     return len(deferred), started
 
 
-def heal(conn) -> int:
+def heal() -> int:
     """Spec D8 step 2: republish anything Asana knows that we do not, and
     anything we still hold open that Asana's open-task listing no longer
-    mentions — a completion or deletion whose event was lost."""
-    index = repo.list_facts_index(conn)
-    enrichment = repo.list_enrichment(conn)
+    mentions — a completion or deletion whose event was lost. Reads in its
+    own short transaction, then lists and publishes outside any."""
+    with get_conn() as conn:
+        index = repo.list_facts_index(conn)
+        enrichment = repo.list_enrichment(conn)
+        open_gids = repo.list_open_gids(conn)
 
     def needs(gid: str, modified_at: str | None) -> bool:
         if gid not in index:
@@ -340,7 +413,7 @@ def heal(conn) -> int:
                 if needs(t["gid"], t.get("modified_at")):
                     pubsub.publish_task_changed(t["gid"], "heal")
                     republished += 1
-    for gid in repo.list_open_gids(conn) - seen:
+    for gid in open_gids - seen:
         pubsub.publish_task_changed(gid, "heal")
         republished += 1
     return republished
@@ -350,7 +423,8 @@ def handle_day_changed(*, today: date | None = None) -> dict:
     today = today or today_local()
     with get_conn() as conn:
         deferred, started = settle_deferrals(conn, today)
-        healed = heal(conn)
+    healed = heal()
+    with get_conn() as conn:
         rescore(conn, kind="daily", trigger_gid=None, today=today)
     logger.info(
         "day_changed %s: %d deferred, %d started, %d republished", today, deferred, started, healed

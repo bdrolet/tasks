@@ -133,11 +133,12 @@ def delete_task(conn: Any, gid: str) -> None:
 # ---- task_enrichment -----------------------------------------------------
 
 
-def get_enrichment_hash(conn: Any, gid: str) -> str | None:
+def get_enrichment(conn: Any, gid: str) -> tuple[str, dict] | None:
+    """(content_hash, raw) for one task, or None."""
     row = conn.execute(
-        "SELECT content_hash FROM task_enrichment WHERE task_gid = %s", (gid,)
+        "SELECT content_hash, raw FROM task_enrichment WHERE task_gid = %s", (gid,)
     ).fetchone()
-    return row["content_hash"] if row else None
+    return (row["content_hash"], _as_json(row["raw"], {})) if row else None
 
 
 def upsert_enrichment(conn: Any, gid: str, content_hash: str, raw: dict, model: str) -> None:
@@ -231,6 +232,14 @@ def claim_estimate(conn: Any, gid: str, points: int) -> bool:
 
 
 # ---- task_scores ---------------------------------------------------------
+
+RESCORE_LOCK_KEY = 7231
+
+
+def lock_rescore(conn: Any) -> None:
+    """Serialise rescores: replace_scores is DELETE-all + INSERT-all, so two
+    concurrent ones collide on the primary key. Released at commit/rollback."""
+    conn.execute("SELECT pg_advisory_xact_lock(%s)", (RESCORE_LOCK_KEY,))
 
 
 def replace_scores(conn: Any, scored: ScoredSet) -> None:

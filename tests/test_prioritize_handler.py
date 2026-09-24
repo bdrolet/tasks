@@ -97,9 +97,7 @@ def db(monkeypatch):
     monkeypatch.setattr(repo, "get_facts", lambda c, gid: c.facts.get(gid))
     monkeypatch.setattr(repo, "list_facts", lambda c: list(c.facts.values()))
     monkeypatch.setattr(repo, "delete_task", lambda c, gid: c.deleted.append(gid))
-    monkeypatch.setattr(
-        repo, "get_enrichment_hash", lambda c, gid: (c.enrichment.get(gid) or (None,))[0]
-    )
+    monkeypatch.setattr(repo, "get_enrichment", lambda c, gid: c.enrichment.get(gid))
     monkeypatch.setattr(
         repo,
         "upsert_enrichment",
@@ -114,6 +112,9 @@ def db(monkeypatch):
     )
     monkeypatch.setattr(repo, "replace_scores", lambda c, s: c.scores.append(s))
     monkeypatch.setattr(repo, "insert_run", lambda c, **kw: (c.runs.append(kw), len(c.runs))[1])
+    monkeypatch.setattr(
+        repo, "lock_rescore", lambda c: c.__dict__.setdefault("locks", []).append(1)
+    )
 
     def claim(c, gid, pts):
         if gid in c.estimated:
@@ -144,6 +145,8 @@ def asana_fake(monkeypatch):
     )
     monkeypatch.setattr(cf, "set_story_points", lambda gid, pts: calls["points"].append((gid, pts)))
     monkeypatch.setattr(cf, "read", lambda task: (None, None))
+    monkeypatch.setattr(cf, "field_gid", lambda name: "cf-points")
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
     return calls
 
 
@@ -366,7 +369,7 @@ def _facts(gid, **kw):
 
 def test_day_changed_first_run_has_nothing_to_defer(db, monkeypatch):
     monkeypatch.setattr(repo, "last_daily_run", lambda c: None)
-    monkeypatch.setattr(h, "heal", lambda c: 0)
+    monkeypatch.setattr(h, "heal", lambda: 0)
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
     out = h.handle_day_changed(today=TODAY)
@@ -392,7 +395,7 @@ def test_day_changed_bumps_unstarted_offers_and_marks_started(db, monkeypatch):
     monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: tops.append((rid, top)))
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
-    monkeypatch.setattr(h, "heal", lambda c: 0)
+    monkeypatch.setattr(h, "heal", lambda: 0)
     out = h.handle_day_changed(today=TODAY)
     assert bumped == ["a"] and out == {"deferred": 1, "started": 2, "healed": 0}
     assert [t["started"] for t in tops[0][1]] == [False, True, True]
@@ -450,6 +453,111 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
     monkeypatch.setattr(
         ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
     )
-    assert h.heal(db) == 5
+    assert h.heal() == 5
     assert {g for g, _ in published} == {"newer", "missing", "stale-enrich", "child", "vanished"}
     assert all(s == "heal" for _, s in published)
+
+
+# ---- final-review fixes -----------------------------------------------------
+
+
+def test_claim_commits_before_write_back_and_rescore_is_its_own_transaction(
+    db, asana_fake, model, monkeypatch
+):
+    log = []
+
+    class LoggingConn:
+        def __enter__(self):
+            log.append("begin")
+            return db
+
+        def __exit__(self, *a):
+            log.append("commit")
+
+    monkeypatch.setattr(h, "get_conn", lambda: LoggingConn())
+    monkeypatch.setattr(cf, "set_story_points", lambda gid, pts: log.append("write"))
+    h.handle_task_changed("t1", today=TODAY)
+    assert log == ["begin", "commit", "write", "begin", "commit"]
+    assert "t1" in db.estimated and db.locks == [1]
+
+
+def test_missing_story_points_field_claims_nothing(db, asana_fake, model, monkeypatch):
+    def missing(name):
+        raise RuntimeError("custom field 'Story points' missing")
+
+    claims = []
+    monkeypatch.setattr(cf, "field_gid", missing)
+    monkeypatch.setattr(repo, "claim_estimate", lambda c, gid, pts: claims.append(gid))
+    h.handle_task_changed("t1", today=TODAY)
+    assert claims == [] and asana_fake["points"] == [] and asana_fake["comments"] == []
+    assert len(db.scores) == 1
+
+
+def test_unmanaged_task_is_deleted_not_upserted(db, asana_fake, model, monkeypatch):
+    elsewhere = dict(TASK, memberships=[{"project": {"gid": "p-other", "name": "Someone else's"}}])
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(elsewhere))
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.deleted == ["t1"] and db.facts == {} and model == []
+    assert asana_fake["points"] == []
+
+
+def test_facts_prefer_the_managed_project_of_a_multi_homed_task(monkeypatch):
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
+    monkeypatch.delenv("ASANA_PROJECT_ID", raising=False)
+    multi = dict(
+        TASK,
+        memberships=[
+            {"project": {"gid": "p-other", "name": "Other"}},
+            {"project": {"gid": "p1", "name": "Inbox"}},
+        ],
+    )
+    facts, _ = h.facts_from(multi, [])
+    assert (facts.project_gid, facts.project_name) == ("p1", "Inbox")
+
+
+def test_subtask_in_unmanaged_project_takes_its_managed_parents(db, asana_fake, model, monkeypatch):
+    parent = dict(TASK, num_subtasks=1)
+    sub = dict(
+        TASK,
+        gid="t1-sub",
+        name="child",
+        parent={"gid": "t1"},
+        memberships=[{"project": {"gid": "p-other", "name": "Other"}}],
+    )
+    monkeypatch.setattr(
+        asana, "get_task_detail", lambda gid, opt_fields=None: sub if gid == "t1-sub" else parent
+    )
+    h.handle_task_changed("t1-sub", today=TODAY)
+    assert db.facts["t1-sub"].project_gid == "p1" and db.deleted == []
+
+
+def test_in_progress_task_started_before_the_offer_is_not_deferred(db, monkeypatch):
+    yesterday = TODAY - timedelta(days=1)
+    db.facts["a"] = _facts(
+        "a",
+        custom_fields=[
+            {"name": "Started at", "date_value": {"date": (TODAY - timedelta(days=9)).isoformat()}}
+        ],
+    )
+    run = {"run_id": 4, "today": yesterday, "top": [{"gid": "a", "rank": 1, "started": None}]}
+    monkeypatch.setattr(repo, "last_daily_run", lambda c: run)
+    monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: None)
+    bumped = []
+    monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
+    monkeypatch.setattr(h, "heal", lambda: 0)
+    assert h.handle_day_changed(today=TODAY) == {"deferred": 0, "started": 1, "healed": 0}
+    assert bumped == []
+
+
+def test_missing_field_is_retried_on_the_next_cached_event(db, asana_fake, model, monkeypatch):
+    def missing(name):
+        raise RuntimeError("custom field 'Story points' missing")
+
+    monkeypatch.setattr(cf, "field_gid", missing)
+    h.handle_task_changed("t1", today=TODAY)
+    assert asana_fake["points"] == [] and "t1" not in db.estimated
+
+    monkeypatch.setattr(cf, "field_gid", lambda name: "cf-points")  # setup script has run
+    h.handle_task_changed("t1", today=TODAY)
+    assert len(model) == 1  # cached — no second model call
+    assert asana_fake["points"] == [("t1", 3)] and "t1" in db.estimated

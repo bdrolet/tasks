@@ -60,6 +60,14 @@ def test_upsert_facts_writes_every_column():
     q, params = conn.executed[0]
     assert "INSERT INTO task_facts" in q and "ON CONFLICT (task_gid) DO UPDATE" in q
     assert params[0] == "t1" and '["a"]' in params and '["d"]' in params
+    assert "points_estimated = EXCLUDED" not in q  # D6: only claim_estimate writes it
+
+
+def test_lock_rescore_takes_the_advisory_xact_lock():
+    conn = FakeConn()
+    repo.lock_rescore(conn)
+    q, params = conn.executed[0]
+    assert "pg_advisory_xact_lock(%s)" in q and params == (repo.RESCORE_LOCK_KEY,)
 
 
 def test_row_to_facts_roundtrip():
@@ -157,3 +165,9 @@ def test_snapshot_completion_computes_cycle_days():
     q, params = conn.executed[0]
     assert "INSERT INTO task_stats" in q
     assert params[-3:] == (3, 5, 2.5)  # points_at_completion, points_estimated, cycle_days
+
+
+def test_get_enrichment_returns_hash_and_parsed_raw():
+    conn = RowsConn(row={"content_hash": "h", "raw": '{"impact": "high"}'})
+    assert repo.get_enrichment(conn, "t1") == ("h", {"impact": "high"})
+    assert repo.get_enrichment(RowsConn(row=None), "t1") is None
