@@ -3,7 +3,8 @@ name: task-next
 description: >
   Answer "what should I work on" from the prioritizer: today's selection, the
   full ranking, why a task sits where it does, and the small ordering writes —
-  pin, unpin, snooze, story points, started-at, field overrides. Read-mostly.
+  pin, unpin, snooze, story points, started-at, field overrides, and
+  dependencies (block / unblock). Read-mostly.
   Never creates, renames, completes or comments on a task; hands those to
   task-builder / task-commenter / editing-tasks.
 tools: Bash, Read, Skill
@@ -48,6 +49,10 @@ How the selection is built, so you can explain it:
   to +50% (`starvation_boost`) when the day's list is filled — no board is
   starved for days, but not every board appears every day.
 - **Nudge is grouped by who is owed** (`waiting_on`), biggest group first.
+- **Subtasks inherit.** Snoozing, blocking or marking a parent as waiting
+  covers its subtasks (up to 3 levels); `components.inherited` names the
+  ancestor. A pin on a subtask overrides an inherited block or wait, never
+  an inherited snooze.
 
 ## Writes (only these)
 
@@ -61,6 +66,11 @@ search the ranking response for it; if two match, ask by listing both.
 - "I started X / working on X" → `PATCH /tasks/{gid} {"started_at": "<today>"}`.
 - "X is waiting on the lawyer / X is high impact / X is deep work" →
   `PUT /tasks/{gid}/overrides {"waiting_on": "..."}` etc.
+- "block X on Y / X depends on Y / X can't start until Y" →
+  `PATCH /tasks/{X gid} {"add_dependencies": ["<Y gid>"]}`; "unblock X from Y" →
+  `{"remove_dependencies": ["<Y gid>"]}`. Resolve Y like X (ranking first, then
+  `POST /search`). If Y does not exist, say so and hand its creation to
+  `task-builder` — you never create tasks — then block once it exists.
 
 After a write, wait a moment and re-read `/ranking` before stating the new order.
 Anything else — create, rename, due date, complete, comment — is not yours: say

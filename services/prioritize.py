@@ -114,34 +114,93 @@ def _effective_due(facts: TaskFacts, eff: Effective, config: Config) -> tuple[da
     return _local_date(facts.created_at) + timedelta(days=horizon), "horizon"
 
 
+MAX_SUBTASK_DEPTH = 3
+
+
+@dataclass(frozen=True)
+class _State:
+    """A task's OWN inheritable state (D16)."""
+
+    snoozed: bool
+    blocked: bool
+    waiting_on: str | None
+    completed: bool
+
+
+@dataclass(frozen=True)
+class _Bucketed:
+    bucket: str
+    pinned_despite: str | None
+    inherited: dict | None  # {"state": ..., "from": ancestor gid} when inheritance decided
+    waiting_on: str | None  # effective, after inheritance
+
+
+def _own_state(
+    facts: TaskFacts, eff: Effective, ov: Overrides, open_gids: set[str], today: date
+) -> _State:
+    return _State(
+        snoozed=bool(ov.snooze_until and ov.snooze_until > today),
+        blocked=any(d in open_gids for d in facts.dependencies),
+        waiting_on=eff.waiting_on,
+        completed=facts.completed,
+    )
+
+
+def _ancestors(
+    gid: str, parent_of: dict[str, str | None], states: dict[str, _State]
+) -> list[tuple[str, _State]]:
+    """(gid, state) nearest-first, at most MAX_SUBTASK_DEPTH levels, stopping
+    at the first ancestor with no row in the set or that is completed — a
+    done parent's leftover snooze, wait or dependency binds nothing."""
+    out: list[tuple[str, _State]] = []
+    cur = parent_of.get(gid)
+    while cur and len(out) < MAX_SUBTASK_DEPTH and cur in states and not states[cur].completed:
+        out.append((cur, states[cur]))
+        cur = parent_of.get(cur)
+    return out
+
+
 def _bucket(
     facts: TaskFacts,
-    eff: Effective,
+    own: _State,
     ov: Overrides,
-    open_gids: set[str],
-    today: date,
+    ancestors: list[tuple[str, _State]],
     config: Config,
-) -> tuple[str, str | None]:
-    """(bucket, pinned_despite). Order: completed, snoozed, excluded project,
-    blocked, parent, waiting. A pin overrides only the last three (D15)."""
+) -> _Bucketed:
+    """Order: completed, snoozed (own, then inherited), excluded project,
+    blocked (own, then inherited), parent, waiting (own, then inherited).
+    A pin overrides only the last three, own or inherited (D15, D16)."""
+    waiting_on = own.waiting_on
+
+    def first(attr: str) -> str | None:
+        return next((gid for gid, st in ancestors if getattr(st, attr)), None)
+
     if facts.completed:
-        return "excluded:completed", None
-    if ov.snooze_until and ov.snooze_until > today:
-        return "snoozed", None
+        return _Bucketed("excluded:completed", None, None, waiting_on)
+    if own.snoozed:
+        return _Bucketed("snoozed", None, None, waiting_on)
+    if src := first("snoozed"):
+        return _Bucketed("snoozed", None, {"state": "snoozed", "from": src}, waiting_on)
     if facts.project_name in config.excluded_projects:
-        return "excluded:project", None
-    reason = None
-    if any(d in open_gids for d in facts.dependencies):
+        return _Bucketed("excluded:project", None, None, waiting_on)
+    reason, inherited = None, None
+    if own.blocked:
         reason = "blocked"
+    elif src := first("blocked"):
+        reason, inherited = "blocked", {"state": "blocked", "from": src}
     elif facts.num_open_subtasks > 0:
         reason = "parent"
-    elif eff.waiting_on:
+    elif own.waiting_on:
         reason = "waiting"
+    elif src := first("waiting_on"):
+        reason, inherited = "waiting", {"state": "waiting", "from": src}
+        waiting_on = dict(ancestors)[src].waiting_on
     if reason is None:
-        return "next", None
+        return _Bucketed("next", None, None, waiting_on)
     if ov.pinned_rank is not None:
-        return "next", reason
-    return ("nudge" if reason == "waiting" else f"excluded:{reason}"), None
+        return _Bucketed("next", reason, inherited, waiting_on)
+    bucket = "nudge" if reason == "waiting" else f"excluded:{reason}"
+    return _Bucketed(bucket, None, inherited, waiting_on)
 
 
 def score_set(
@@ -171,13 +230,22 @@ def score_set(
     tasks: list[ScoredTask] = []
     pending: list[tuple[TaskFacts, Effective, ScoredTask, date | None, str]] = []
 
+    prepared: list[tuple[TaskFacts, Enrichment, Overrides, Effective]] = []
     for f in facts:
         if f.gid in children_seen:
             f = replace(f, num_open_subtasks=open_children.get(f.gid, 0))
         e = enrichments.get(f.gid, Enrichment.DEFAULT)
         ov = overrides.get(f.gid, Overrides.NONE)
-        eff = effective(f, e, ov, config)
-        bucket, despite = _bucket(f, eff, ov, open_gids, today, config)
+        prepared.append((f, e, ov, effective(f, e, ov, config)))
+    # D16: a subtask inherits snoozed / blocked / waiting from its ancestors.
+    parent_of = {f.gid: f.parent_gid for f in facts}
+    states = {f.gid: _own_state(f, eff, ov, open_gids, today) for f, _, ov, eff in prepared}
+
+    for f, e, ov, eff in prepared:
+        bk = _bucket(f, states[f.gid], ov, _ancestors(f.gid, parent_of, states), config)
+        bucket, despite = bk.bucket, bk.pinned_despite
+        if bk.waiting_on != eff.waiting_on:
+            eff = replace(eff, waiting_on=bk.waiting_on)
         due, source = _effective_due(f, eff, config)
         effort = eff.points / config.points_per_day
         if eff.points_source != "field" and eff.points_confidence == "low":
@@ -221,6 +289,7 @@ def score_set(
                     "fields": sorted(ov.fields),
                 },
                 "pinned_despite": despite,
+                "inherited": bk.inherited,
                 "starvation_boost": boost,
                 "days_since_project_offered": days_offered,
             },

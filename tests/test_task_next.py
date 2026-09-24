@@ -214,3 +214,21 @@ def test_empty_nudge_still_renders_a_dash():
     payload = {"today": "x", "next": [], "overcommitted": [], "stale": [], "nudge": []}
     out = tn.render_lists(payload).splitlines()
     assert out[out.index("## Nudge") + 1] == "—"
+
+
+def test_block_and_unblock_patch_dependencies(api, capsys):
+    gid, blocker = "1218118170820306", "1218118170820999"
+    assert tn.main(["block", gid, blocker]) == 0
+    assert tn.main(["unblock", gid, blocker]) == 0
+    writes = [c for c in api if c[0] == "PATCH"]
+    assert writes[0] == ("PATCH", f"/tasks/{gid}", {"add_dependencies": [blocker]}, None)
+    assert writes[1] == ("PATCH", f"/tasks/{gid}", {"remove_dependencies": [blocker]}, None)
+    out = capsys.readouterr().out
+    assert f"{gid} blocked by {blocker}" in out and f"{gid} no longer blocked by {blocker}" in out
+
+
+def test_block_resolves_both_refs(api):
+    ref_a, ref_c = tn.task_ref.ref("a"), tn.task_ref.ref("c")
+    tn.main(["block", ref_a, ref_c])
+    writes = [c for c in api if c[0] == "PATCH"]
+    assert writes == [("PATCH", "/tasks/a", {"add_dependencies": ["c"]}, None)]

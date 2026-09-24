@@ -295,7 +295,10 @@ resource "google_cloudfunctions2_function" "tasks_prioritize" {
   service_config {
     service_account_email = google_service_account.tasks_prioritize_cf.email
     min_instance_count    = 0
-    max_instance_count    = 3
+    # The backfill burst hit "no available instance" at 3; idle costs nothing.
+    # Concurrent rescores serialise on pg_advisory_xact_lock, so a burst queues
+    # on the lock and can hold up to 10 DB connections meanwhile — fine, but known.
+    max_instance_count    = 10
     timeout_seconds       = 120 # one task: 2-4 Asana calls + ≤1 Claude call + a rescore
     available_memory      = "512Mi"
     environment_variables = local.common_env

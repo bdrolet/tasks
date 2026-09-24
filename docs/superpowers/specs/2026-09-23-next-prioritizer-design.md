@@ -184,8 +184,8 @@ On `day_changed`, before rescoring:
    in the run row; otherwise `task_stats.times_deferred += 1`. Interactive `/next`
    calls log a `manual` run but never bump the counter — only the daily run
    is an "offer".
-2. **Heal.** List open tasks per managed project (plus one level of subtasks
-   for parents with `num_subtasks > 0`) and publish `task_changed` for any
+2. **Heal.** List open tasks per managed project (plus subtasks down to
+   `MAX_SUBTASK_DEPTH` (3) levels for parents with `num_subtasks > 0`) and publish `task_changed` for any
    task whose `modified_at` is newer than `task_facts.fetched_at`, that has
    no facts row, or whose enrichment hash ≠ its current content hash.
 3. Rescore for the new date and write the canonical run (kind `daily`, full
@@ -194,18 +194,21 @@ On `day_changed`, before rescoring:
 ### D9 — Candidate set and "actionable"
 
 Candidates are the open tasks of every project in `ASANA_MANAGED_PROJECTS`,
-plus their subtasks one level down (in the parent's project). A task is
+plus their subtasks down to `MAX_SUBTASK_DEPTH` (3) levels (in the root's
+project) — gather and heal descend that far, and D16's inheritance walks the
+same bound. A task is
 excluded from "do next", with a reason, when:
 
 | Reason | Rule |
 |---|---|
-| `blocked` | any native dependency is open |
+| `blocked` | any native dependency is open — its own, or an ancestor's (D16) |
 | `parent` | it has open subtasks (its subtasks are the work) |
-| `waiting` | `waiting_on` is set → **nudge** list instead |
+| `waiting` | `waiting_on` is set — its own, or an ancestor's (D16) → **nudge** list instead |
 | `completed` | completed (kept in facts for calibration) |
 | `project` | its project is in `[projects].excluded` (Inbox) — gathered and stored, never ranked or selected; a pin does not override it (D15) |
 
-There is no other status: Asana has none.
+There is no other status: Asana has none. `snoozed` (D11) is likewise
+inherited from an ancestor (D16).
 
 ### D10 — Priority comes from the title; no prefix means P2
 
@@ -294,6 +297,45 @@ not override this — unlike blocked/parent/waiting, the exclusion is about
 where the task lives, not its state, and moving it is the explicit act. The
 subscriber also skips enrichment and the story-point write-back for them;
 a task moved out of an excluded project enriches on that move's event.
+
+### D16 — Subtasks inherit blocked, snoozed and waiting from their ancestors
+
+*Added 2026-09-24.* "I don't want to do the passport stuff now, but I will
+if I plan to go out of the country" is a dependency: the passport parent is
+blocked by a "Plan international travel" task. But a parent with open
+subtasks is `excluded:parent` — its subtasks are the candidates — and the
+scorer read only a task's *own* dependencies, snooze and `waiting_on`, so
+blocking, snoozing or marking the parent as waiting reached none of the
+work under it.
+
+So `score_set` builds `parent_of` and each task's own state (snoozed, open
+dependency, effective `waiting_on`) from facts + overrides + effective
+enrichment, and a subtask walks its parent chain — nearest first, at most
+`MAX_SUBTASK_DEPTH` (3) levels, the same bound gather and heal use,
+stopping at the first ancestor with no row in the set or that is completed
+(a done parent's leftover snooze, wait or open dependency binds nothing, nor
+does anything above it). Bucketing order:
+
+1. own completed → `excluded:completed`
+2. own snoozed → `snoozed`; else any ancestor snoozed → `snoozed`
+3. own project excluded → `excluded:project` (children already carry the
+   parent's project)
+4. own blocked → `excluded:blocked`; else any ancestor blocked (an ancestor
+   with an open dependency) → `excluded:blocked`
+5. own open subtasks → `excluded:parent`
+6. own waiting → `nudge`; else any ancestor waiting → `nudge`, with the
+   task's effective `waiting_on` taken from that ancestor so it groups under
+   the same person in the nudge list
+
+Own state always wins over inherited. A pin on the child still overrides
+blocked / parent / waiting, own or inherited (flagged `pinned_despite`),
+never completed / snoozed / project — a snoozed parent is a deliberate
+"not now" for the whole subtree. `components["inherited"]` records
+`{"state": "snoozed"|"blocked"|"waiting", "from": <ancestor gid>}` when
+inheritance decided the bucket (including a pinned-despite), else `null`.
+
+Dependencies are set through `PATCH /tasks/{gid}` `add_dependencies` /
+`remove_dependencies` (§Read side), and `task-next block` / `unblock`.
 
 ## Components
 
@@ -637,6 +679,13 @@ materialised within seconds. Rejects unknown fields (422), as
 **`GET /tasks/{gid}`** gains `story_points`, `started_at`, `start_on`,
 `dependencies` (gid + name + completed).
 
+*Amended 2026-09-24 (D16).* **`PATCH /tasks/{gid}`** also takes
+`add_dependencies` / `remove_dependencies` (lists of task GIDs; the task
+itself → 400) through Asana's `addDependencies` / `removeDependencies`, and
+publishes `task_changed` for the task **and** each dependency (whose
+`dependents`, and so unblock bonus, changed). **`GET /tasks/{gid}`** gains
+`dependents` alongside `dependencies`.
+
 **`task-next`** (`scripts/task_next.py`, stdlib, on PATH via
 `scripts/link-skills.sh`):
 
@@ -648,6 +697,8 @@ task-next points <ref|gid> <n>
 task-next pin <ref|gid> <position> | unpin <ref|gid>
 task-next snooze <ref|gid> <YYYY-MM-DD> | unsnooze <ref|gid>
 task-next override <ref|gid> field=value [field=…]      # field= clears
+task-next block <ref|gid> <blocker ref|gid>             # add_dependencies (D16)
+task-next unblock <ref|gid> <blocker ref|gid>           # remove_dependencies
 task-next calibrate
 ```
 
@@ -663,7 +714,8 @@ the agent translates "what should I work on / what's next / why is X there /
 pin X / snooze X till Friday / X is 3 points / I started X" into the calls
 above, resolves refs and names against `/ranking`, and returns the ref-first
 listing. It is read-mostly: its only writes are `PUT /tasks/{gid}/overrides`
-and the `story_points` / `started_at` fields on `PATCH /tasks/{gid}`. It
+and the `story_points` / `started_at` / `add_dependencies` /
+`remove_dependencies` fields on `PATCH /tasks/{gid}`. It
 does not create, rename, complete or comment — it hands those to the
 existing agents. CLAUDE.md's standing dispatch gains: a request to **rank
 or choose** work ("what should I do next", "what's my day look like",
@@ -799,6 +851,9 @@ the existing `claude_tokens` counter.
 - a hard date due today is selected first, beyond `n`, and consumes
   capacity; the longer-unpicked project wins a tie (D14)
 - an excluded-project task is `excluded:project`, pinned or not (D15)
+- a subtask inherits an ancestor's snooze, open dependency and `waiting_on`
+  (up to 3 levels); a pin overrides inherited blocked/waiting, never an
+  inherited snooze (D16)
 - blocked and parent tasks are excluded with the right reason; a
   waiting-on task lands in `nudge`
 - diversity penalty: a set of eight tasks in one project and two in another

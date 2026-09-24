@@ -68,6 +68,7 @@ class TaskDetail(BaseModel):
     started_at: str | None = None
     start_on: str | None = None
     dependencies: list[DependencySummary] = []
+    dependents: list[DependencySummary] = []
 
 
 class CreateTaskRequest(BaseModel):
@@ -114,6 +115,8 @@ class UpdateTaskRequest(BaseModel):
     assignee: str | None = None  # explicit null unassigns
     story_points: int | None = Field(default=None, ge=1)
     started_at: str | None = None  # explicit null clears
+    add_dependencies: list[str] = []  # task GIDs this task is blocked by
+    remove_dependencies: list[str] = []
 
 
 def wrap_html_body(html: str) -> str:
@@ -213,7 +216,8 @@ def get_task(gid: str) -> TaskDetail:
     with translate_asana_errors():
         task = asana.get_task_detail(
             gid,
-            opt_fields=asana.PRIORITIZE_OPT_FIELDS + ",dependencies.name,dependencies.completed",
+            opt_fields=asana.PRIORITIZE_OPT_FIELDS
+            + ",dependencies.name,dependencies.completed,dependents.name,dependents.completed",
         )
         if task is None:
             raise HTTPException(status_code=404, detail=f"unknown task: {gid}")
@@ -275,6 +279,10 @@ def get_task(gid: str) -> TaskDetail:
             DependencySummary(gid=d["gid"], name=d.get("name"), completed=bool(d.get("completed")))
             for d in task.get("dependencies") or []
         ],
+        dependents=[
+            DependencySummary(gid=d["gid"], name=d.get("name"), completed=bool(d.get("completed")))
+            for d in task.get("dependents") or []
+        ],
     )
 
 
@@ -323,6 +331,8 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
     if body.priority is not None and body.name is None:
         raise HTTPException(status_code=400, detail="priority requires name in the same request")
     _validate_repeat_tags(body.add_tags)
+    if gid in body.add_dependencies or gid in body.remove_dependencies:
+        raise HTTPException(status_code=400, detail="a task cannot depend on itself")
 
     with translate_asana_errors():
         # Resolve the custom-field gids before any mutation, so a missing
@@ -392,6 +402,11 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
                 if tag_gid_opt:  # unknown removes are ignored (idempotent)
                     asana.remove_tag(gid, tag_gid_opt)
 
+        if body.add_dependencies:
+            asana.add_dependencies(gid, body.add_dependencies)
+        if body.remove_dependencies:
+            asana.remove_dependencies(gid, body.remove_dependencies)
+
         custom: dict = {}
         if "story_points" in field_gids:
             custom[field_gids["story_points"]] = body.story_points
@@ -401,5 +416,8 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
             asana.update_task(gid, {"custom_fields": custom})
     task_index.refresh(gid)
     pubsub.publish_task_changed(gid, "api")
+    # Each dependency's `dependents` changed too, which feeds its unblock bonus.
+    for dep_gid in dict.fromkeys([*body.add_dependencies, *body.remove_dependencies]):
+        pubsub.publish_task_changed(dep_gid, "api")
 
     return {"status": "updated", "task_gid": gid}

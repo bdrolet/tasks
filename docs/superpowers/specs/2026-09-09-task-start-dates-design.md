@@ -1,425 +1,288 @@
 # Task start dates — scheduling work backward from the deadline
 
-Status: designed
-Date: 2026-09-09
+Status: designed (v2, 2026-09-24 — rewritten after the prioritizer shipped)
+Date: 2026-09-09 (v1), 2026-09-24 (v2)
+
+## What changed since v1
+
+v1 was written before the service had any notion of effort. It asked a
+Sonnet call to *guess* lead time ("gathering three years of returns takes a
+few days, so start the 17th") and to write `start_on` once, at creation,
+never to be recomputed. Three of its premises are now false:
+
+- **Effort exists.** Every task carries a story-point estimate (`Story
+  points` custom field; `docs/superpowers/specs/2026-09-23-next-prioritizer-design.md`
+  D1, D5), and `config/prioritize.toml` states the daily capacity. Lead time
+  is arithmetic, not judgment.
+- **The scorer already computes when work must begin.** The feasibility pass
+  produces `simulated_start` and `effective_slack` for every hard-dated task
+  on every rescore. A stored, model-guessed `start_on` would duplicate that
+  and drift from it the moment an estimate or a due date changed.
+- **Actual starts are recorded.** The `Started at` custom field is the day
+  work really began. v1 had no such thing, so "a start date that has passed
+  is a fact, not a trigger" was the only honest stance. Now the gap between
+  planned and actual start is a signal.
+
+The `due_at` half of v1 was right and is kept as written. The `start_on`
+half is replaced: **`start_on` is derived by the prioritizer from the due
+date and the points, written back to Asana with an ownership guard, and a
+passed planned start with no actual start is a late-start signal.** No new
+model call.
 
 ## Problem
 
-A task today carries one date: `due_on`, the day it must be finished. That
-answers "what is late" and nothing else. Two gaps follow.
+A task carries `due_on`, the day it must be finished. That answers "what is
+late" and nothing else.
 
 **No time of day.** The pharmacy refill tasks of 6–8 Sep all carried
 `due_on: 2026-09-09` while their actual cutoff — *"confirm by 11:00am"* —
-lived only in the description prose. A task due at 11am and a task due at
-11pm are indistinguishable to every consumer in the service. Asana has
-carried `due_at` since forever; `services/deadline.py` has only ever
-returned a bare `YYYY-MM-DD`, and `clients/asana.py::create_task` only ever
-sets `due_on`.
+lived only in the description prose. `services/deadline.py` returns a bare
+`YYYY-MM-DD`; `clients/asana.py::create_task` only ever sets `due_on`.
 
-**No sense of when to begin.** A task due in three weeks that needs three
-days of document-gathering is invisible until it is nearly late. The
-due-day digest shows it on one day — the last one. There is no answer to
-"what should I be working on today" that is distinct from "what is due
-today."
+**No visible start.** The prioritizer knows a 5-point task due in ten days
+must begin in eight, but that knowledge lives in a `components` JSON blob.
+Asana's Timeline view (Starter) can draw it; the due-day digest could say
+"starts today"; neither can, because `start_on` is never written.
 
-Asana models both. `start_on`/`start_at` express the day work begins, and
-appear nowhere in this repo.
+**No late-start signal.** When a planned start passes and `Started at` is
+still empty, the task is quietly becoming a crisis. Today the only pressure
+is the deferral counter, which needs the task to have been *offered* first.
 
 ## Goals
 
-- Set `due_at` when a source states a real clock time, so the 11am cutoff
-  lands on the task instead of in its prose.
-- Set `start_on` when a task has a real deadline and implied lead time, so
-  work surfaces when it should begin rather than when it is due.
-- Surface start dates in the two places tasks are already consumed: the
-  due-day digest and `POST /search`.
-- Keep all four fields readable and writable through tasks-api.
+- Set `due_at` when a source states a real clock time (unchanged from v1).
+- Write `start_on = due − lead` for every hard-dated, pointed task, and keep
+  it true as points and due dates change.
+- Never overwrite a start date a person set.
+- Surface starts where tasks are already consumed: Asana Timeline (for
+  free, once the field is written), the due-day digest, `POST /search`,
+  and `--explain`.
+- Treat a passed planned start with no actual start as a stale signal.
 
 ## Non-goals
 
-- **Escalation stays due-only.** A missed start date does not escalate. The
-  Overdue section keeps meaning "past due", and `escalated_at` keeps its
-  one-shot semantics. Revisit only if missed starts turn out to predict
-  overdue tasks.
-- **No effort estimates, no duration field.** Start and due bound a range;
-  the service takes no position on how many hours sit inside it.
-- **No rescheduling.** Nothing recomputes a start date after creation. A
-  start date that has passed is a fact, not a trigger.
+- **Escalation stays due-only.** A missed start does not move a task to
+  Overdue; `escalated_at` keeps its one-shot semantics.
+- **No `start_at`.** v1 allowed callers to write a start *time*; nothing
+  ever produced or consumed one. Dropped from the write surface. `due_at`
+  remains.
 - **No new calendar events for starts.** Starts fold into the existing
-  due-day event (D5), not a second event series.
+  due-day event (D5).
+- **No start for soft-dated tasks.** A horizon or inferred due date is a
+  scoring device (prioritizer D13); writing a start date derived from it
+  would put an invented commitment on the Timeline.
 
 ## Decisions
 
-### D1 — Due may be timed; pipeline-set start never is
+### D1 — Due may be timed; start never is *(unchanged)*
 
-`due_at` is written only when the source states a clock time. Everything
-else stays `due_on`. No default hour is invented — an end-of-day default
-would make every task a timed event and assert precision the email never
-gave.
+`due_at` is written only when the source states a clock time. No default
+hour is invented. Start dates are always `start_on`.
 
-Start dates written by the pipeline are always `start_on`. "Begin working
-on this Monday" has no meaningful clock time, and inventing one would put
-start entries on the calendar as timed events.
+Asana permits the mix (`start_on` + `due_at` is legal; `start_on` requires a
+due field in the same request; `due_on`/`due_at` are mutually exclusive on
+write).
 
-Asana permits the mix. Per the `createTask` schema:
+### D2 — `start_on` is derived, not inferred
 
-> `start_on`: *"Note: `due_on` or `due_at` must be present in the request
-> when setting or unsetting the `start_on` parameter."*
->
-> `start_at`: *"Note: `due_at` must be present in the request when setting
-> or unsetting the `start_at` parameter."*
+For a task with a hard `due_on` (or `due_at`) and a points value:
 
-So `start_on` + `due_at` is legal. `due_on` and `due_at` are mutually
-exclusive on write, as are `start_on` and `start_at`.
-
-### D2 — `start_at` is writable by callers, never by the pipeline
-
-tasks-api accepts `start_at` and passes it through, rejecting a request
-that sets it without `due_at` (400, before any Asana I/O — a clearer error
-than Asana's, and the same status the router already returns for an invalid
-priority or a malformed `repeat:` tag). Claude inference only ever produces
-`start_on`.
-
-This keeps all four fields writable without any code path inventing a start
-time. A caller who genuinely means "start this at 9am" can say so; nothing
-guesses it.
-
-### D3 — No due date means no start date
-
-Start inference runs only where deadline extraction found an explicit
-deadline. This is enforced structurally, not by prompt: `extract_schedule`
-discards `start_on` when the response carries no due value. It matches the
-existing rule that a task gets a date only when a real external deadline
-exists, and it satisfies Asana's constraint for free — the service can
-never emit a `start_on` with no due field beside it.
-
-### D4 — One scheduling call, not two
-
-`services/deadline.py::extract_deadline` becomes `extract_schedule` and
-returns due and start together from a single Sonnet call.
-
-The reasoning is joint: *"due the 20th, gathering three years of returns
-takes a few days, so start the 17th."* A second call would re-read the same
-email to re-derive the same facts at double the cost. It also puts the
-P0/P1 gate, the exclusivity normalization and the clamp in one place.
-
-The file keeps its name and its "called only for P0/P1" contract; only its
-return type widens.
-
-### D5 — Starts join the day's existing event, in their own section
-
-One all-day event per (day, calendar) is unchanged. Its body gains a
-"Starting" group below the due tasks, and the title becomes
-`"2 due · 1 starting"`.
-
-The alternative — a second event series for starts — needs a discriminator
-column in `due_day_events`, whose primary key is `(day, calendar_id)`. That
-is a schema migration and a doubling of calendar events to buy a visual
-separation that a section already provides.
-
-**Consequence:** `handlers/due_digest.py::_DIGEST_TITLE_RE`
-(`^\d+ tasks? due$`) is what `_adopt` uses to reclaim an orphaned event
-when its DB row is lost. A new title format that the old regex does not
-match would orphan every event created before this change. The regex must
-accept both forms — see D6.
-
-### D6 — The title regex accepts old and new formats
-
-```python
-_DIGEST_TITLE_RE = re.compile(r"^(?:\d+ tasks? due|\d+ due(?: · \d+ starting)?|\d+ starting)$")
+```
+lead_days = ceil(effort_days)           # effort_days = components["effort_days"]
+start_on  = due_on − lead_days
 ```
 
-Adoption is a recovery path, not a hot path; a regex that matches one
-retired format costs nothing and prevents duplicate events on any day whose
-row was lost before the deploy.
+`effort_days` is the scorer's own figure — effective points (field >
+override > estimate > default) ÷ `capacity.points_per_day`, **including the
+`low_confidence_multiplier`** for unconfirmed estimates — so the planned
+start and the daily selection cannot disagree about how long a task takes.
+Computed inside `services/prioritize.score_set` as
+`components["planned_start"]`; pure, no clamp to today (that belongs to the
+writer, D3).
 
-### D7 — The digest window admits a task on either date
+No model call. `services/deadline.py` keeps its v1 widening to
+`extract_schedule` **only for `due_at`** — the start half of v1's D3/D4 is
+gone.
 
-`in_window` currently requires `due_on` inside `[today, today + 30]`. A
-task that starts inside the window and is due outside it must appear on its
-start day; a task due inside the window keeps appearing on its due day.
+### D3 — The prioritizer writes `start_on`, with an ownership guard
 
-A task can therefore contribute to two days' events — its start day and its
-due day — which is the intent. `build_events` groups by
-`(day, calendar_id)` already; the change is that a task now yields up to two
-`(day, kind)` entries rather than exactly one.
+After each rescore, `handlers/prioritize.py` compares `planned_start` with
+the task's stored `start_on` and writes when they differ, subject to:
 
-### D8 — Recurrence carries the lead forward, and re-infers nothing
+`task_facts` gains `start_on_written DATE` — the value this service last
+wrote, `NULL` meaning never (the same shape as `points_estimated`: written
+only by the guard below, never by `upsert_facts`, and never by the gather).
+"Ours" is `start_on IS NOT DISTINCT FROM start_on_written`.
 
-If the finished occurrence had `start_on` three days before its `due_on`,
-the successor gets `start_on` three days before its new `due_on`. The
-offset is computed in whole days from the two dates on the completed task.
+| Stored `start_on` | vs `start_on_written` | Action |
+|---|---|---|
+| empty | any | write `max(planned_start, today)`, record it |
+| equal to `start_on_written` | ours | write the new `planned_start`, record it |
+| anything else | not ours — a person set it | **leave it** |
+| ours | task lost its hard due date or points | clear `start_on`, set `start_on_written = NULL` |
 
-Recurrence stays fully deterministic — no Claude call ever runs on a
-successor. Consistent with the existing rule that recurrence copies neither
-time-of-day nor comments, the successor never carries `due_at` or
-`start_at`; a timed occurrence yields a date-only successor, and the lead is
-computed from the derived `due_on` Asana returns.
+The write is claimed with a conditional update, mirroring `claim_estimate`:
+`UPDATE task_facts SET start_on_written = %s WHERE task_gid = %s AND
+start_on_written IS NOT DISTINCT FROM %s` (the previous value) — whoever
+wins the row writes to Asana. A start date typed in Asana therefore sticks
+until the person clears it; a start date we wrote tracks the estimate.
 
-If either date is missing on the completed task, the successor gets no
-start date.
+`sync_start_dates` runs **after** the rescore transaction has committed and
+outside `lock_rescore`, the same A/B split `handle_task_changed` already
+uses for the points write-back: the Asana `PUT` never holds the scoring
+lock. Writes are idempotent and bounded: one `PUT` per task per change of
+`planned_start`, each including the due field Asana requires; the webhook
+echo gathers, finds the content hash unchanged, and only rescores.
+Failures log and retry on the next rescore.
+
+**Side effect on aging.** Every `start_on` write bumps the task's Asana
+`modified_at`, which is `days_stale` → the `A` term and the `aged` stale
+reason. The first rollout writes a start on every hard-dated pointed task
+at once, resetting their aging together; after that a write happens only
+when an estimate or due date changes, which is itself activity.
+
+### D4 — A passed planned start with no actual start is stale
+
+`stale_reason = "late_start"` when `start_on < today`, `Started at` is
+empty, and the task is not completed. It is evaluated **last** in the stale
+precedence (`aged`, then `deferred`, then `soft_due_passed`, then
+`late_start`) and joins them in the stale side list and in `--explain`. It does not
+change the score: the scorer's urgency already reflects slack, and a second
+push would double-count. It is a *label* for the person.
+
+### D5 — Starts join the day's existing digest event *(unchanged)*
+
+One all-day event per (day, calendar). Its body gains a "Starting" group
+below the due tasks; the title becomes `"2 due · 1 starting"` (`2 tasks
+due` when nothing starts, so existing events keep their content hash). The
+title regex `handlers/due_digest.py::_DIGEST_TITLE_RE`, which `_adopt` uses
+to reclaim an orphaned event, is widened to
+`^(?:\d+ tasks? due|\d+ due(?: · \d+ starting)?|\d+ starting)$` so events
+created before the change still adopt. A task can contribute to two days —
+its start day and its due day.
+
+### D6 — Recurrence recomputes; it does not carry the lead
+
+v1 copied the lead offset onto the successor. Under D2 the successor's
+`start_on` is simply recomputed on its first rescore from its own due date
+and its copied points, so `services/recurrence.py` sets **no** start field.
+One rule, one place.
+
+### D7 — `Started at` and `start_on` are different facts
+
+`start_on` is when work *must* begin; `Started at` is when it *did*. The
+difference, aggregated in `GET /calibrate` as `mean_start_lag_days` per
+project, is the calibration signal for whether the point scale or the
+capacity is off — a systematic late start means the plan is too optimistic
+before any task is late.
 
 ## Architecture
 
-### `models/schedule.py` (new)
+### `services/prioritize.py`
+- `score_set`: `components["planned_start"]` (ISO date or `None`) for
+  hard-dated tasks with points; `components["late_start"]` boolean; stale
+  reason `late_start` per D4.
 
-```python
-class Schedule(NamedTuple):
-    due_on: str | None    # YYYY-MM-DD
-    due_at: str | None    # ISO 8601 UTC
-    start_on: str | None  # YYYY-MM-DD
+### `handlers/prioritize.py`
+- After `rescore`, `sync_start_dates(conn, scored, facts)` applies D3 for
+  tasks whose `planned_start` differs from stored `start_on`; one
+  `asana.update_task(gid, {"start_on": ...})` per change (with the due field
+  echoed, as Asana requires). Metric `asana.prioritize.start_writes{result=written|cleared|kept_manual|failed}`.
 
+### `repo/prioritize.py` / `repo/schema.sql`
+- `task_facts.start_on_set_by_us`; `claim_start(conn, gid, start_on) ->
+  bool` and `release_start(conn, gid)`, mirroring `claim_estimate`.
 
-EMPTY = Schedule(None, None, None)
-```
+### `services/deadline.py`, `handlers/task_create.py`, `clients/asana.py::create_task`
+- `extract_schedule(event) -> Schedule(due_on, due_at)` replaces
+  `extract_deadline`; same Sonnet call, same P0/P1 gate, same 3000-char
+  window. Normalized in code, never trusted to the model: unparseable →
+  empty; both `due_on` and `due_at` → keep `due_at`; malformed → that field
+  `None`. `create_task` writes the due field that is set. **No `start_on`
+  at creation** — the first rescore writes it.
 
-Pure type, no imports from other layers. `EMPTY` is a module constant, not a
-class attribute: `typing.NamedTuple` treats every annotation in the class
-body as a field, and a `ClassVar` annotation there raises `TypeError` at
-class-creation time.
+### `services/due_digest.py`, `handlers/due_digest.py`, `models/digest.py`
+- `in_window` becomes `days_in_window(task, today, days=30) -> list[(day,
+  kind)]`, `kind ∈ {due, start}`; `DigestTask.due_on` is renamed `day` and
+  joined by `kind` (grouping on a field called `due_on` that sometimes holds
+  a start date is a quiet lie); `build_events` splits each day into a due
+  run then a starting run; `title_for(due, start)`; the widened title regex
+  (D5); bullets condensed once per gid, before the pairs are expanded.
 
-### `services/deadline.py` (modified)
+### `api/routers/tasks.py`, `api/routers/search.py`, `services/task_search.py`
+- `TaskDetail.start_on` already exists. `CreateTaskRequest`/`UpdateTaskRequest`
+  gain `start_on` (nullable; explicit null clears). A person's write needs
+  no bookkeeping: the next gather stores the new `start_on`, which no
+  longer equals `start_on_written`, so the guard reads it as not ours.
+  Validation: `start_on` without any due field → 400; `due_on` and `due_at`
+  both set → 400. No `start_at`.
+- `SearchRequest`: `start_before`, `start_after`, `startable` (sugar for
+  `start_before = today`); `SearchResult.start_on`, `due_at`.
+- `GET /calibrate`: `mean_start_lag_days` per project (D7).
 
-`extract_schedule(event) -> Schedule` replaces `extract_deadline`.
-
-The prompt keeps its `Calendar` standing-context preamble and its 3000-char
-body window (matching `services/email_summary.py`, so the schedule pass and
-the summary pass see identical context). It asks for a JSON object rather
-than a bare date:
-
-```json
-{"due_on": "2026-09-20", "due_at": null, "start_on": "2026-09-17"}
-```
-
-Normalization, in code, after parsing — none of it trusted to the model:
-
-1. Unparseable response, or any exception → `schedule.EMPTY`.
-2. Both `due_on` and `due_at` present → keep `due_at`, drop `due_on`
-   (Asana derives the date from the timestamp anyway).
-3. Malformed date or timestamp → that field becomes `None`.
-4. No due value → `start_on` is dropped (D3).
-5. `start_on` outside `[today, due date]` → dropped, not corrected. A start
-   date after its own due date is a model error; a wrong date is worse than
-   none.
-
-Fail-open throughout: every failure path yields a task with fewer dates,
-never a crashed event.
-
-### `clients/asana.py` (modified)
-
-`create_task` takes `schedule: Schedule` in place of `due_date: str | None`.
-It writes only the fields that are set, and writes them as a unit — Asana
-rejects `start_on` in a request carrying no due field, so an internally
-inconsistent `Schedule` yields no date fields at all rather than a 400.
-
-`DETAIL_OPT_FIELDS` gains `start_on,start_at`.
-`SEARCH_OPT_FIELDS` gains `due_at,start_on`.
-`DIGEST_OPT_FIELDS` gains `start_on`.
-
-`get_incomplete_tasks_past_due` is untouched — its `opt_fields` and its
-`due_on < today` comparison stay as they are. Asana returns a derived
-`due_on` for timed tasks, so a `due_at` task still escalates on the right
-day. Escalation ignores start dates entirely (non-goals).
-
-### `handlers/task_create.py` (modified)
-
-The `due_date` local becomes `schedule`, defaulting to `schedule.EMPTY`:
-
-```python
-schedule = models.schedule.EMPTY
-if verdict.priority in ("P0", "P1"):
-    try:
-        schedule = deadline.extract_schedule(event)
-    except Exception:
-        logger.exception("Schedule extraction failed for message_id=%s", event["message_id"])
-```
-
-Unchanged in shape from today's deadline block — same gate, same fail-open,
-same one call.
-
-### `services/due_digest.py` (modified)
-
-`in_window` becomes `days_in_window(task, today, days=30) -> list[tuple[str, str]]`,
-returning the `(day, kind)` pairs a task contributes, `kind` in
-`{"due", "start"}`. Empty list for a completed or undated task.
-
-`DigestTask.due_on` is **renamed to `day`** and joined by `kind: str`. The
-rename is not cosmetic: `build_events` currently groups on `task.due_on`,
-and a start entry's day is its start date, not its due date. Leaving the
-field called `due_on` while it sometimes holds a start date is exactly the
-kind of quiet lie that survives review and fails in production.
-
-`build_events` then groups by `(day, calendar_id)` as now, splits each group
-by `kind` into two ordered runs — due first, starting second — and emits one
-`sections` list with a group header before each non-empty run. `order`
-sorts within a run, not across, so a P0 start never jumps above a P3 due.
-
-`title_for(due_count, start_count) -> str`:
-
-| due | start | title |
-|---|---|---|
-| 2 | 0 | `2 tasks due` |
-| 2 | 1 | `2 due · 1 starting` |
-| 0 | 1 | `1 starting` |
-
-The pure due-only case keeps today's exact wording, so the overwhelming
-majority of existing events do not churn their content hash on deploy.
-
-`content_hash` is unchanged in mechanism — it hashes title plus sections, so
-the new grouping participates automatically.
-
-### `handlers/due_digest.py` (modified)
-
-`_digest_tasks` iterates `days_in_window`'s pairs instead of testing a
-single membership, emitting one `DigestTask` per pair.
-
-Bullet condensing runs **once per gid**, before the pairs are expanded, and
-both entries share the resulting `points` list. Relying on the
-`task_bullets` cache to absorb the second call would work only if the first
-`put` were visible to the second `get` on the same connection mid-rebuild —
-true today, but a silent dependency on transaction visibility that would
-double the model spend the moment it stopped holding. Condensing once and
-reusing makes the ≤40-calls-per-rebuild budget count tasks rather than
-entries by construction, not by luck.
-
-### `services/recurrence.py` (modified)
-
-`spawn_next` computes the lead:
-
-```python
-def lead_days(detail: dict) -> int | None:
-    """Whole days between start_on and due_on on the completed task."""
-```
-
-`None` when either is absent. When set, the successor's fields carry
-`start_on = next_due - lead_days`. Never `start_at` (D8).
-
-### `api/routers/tasks.py` (modified)
-
-- `TaskDetail` gains `start_on`, `start_at`.
-- `SubtaskSummary` gains `start_on`.
-- `CreateTaskRequest` and `UpdateTaskRequest` gain `start_on`, `start_at`;
-  both are nullable, and on PATCH an explicit null clears, joining the
-  existing `for field in ("due_on", "due_at", "assignee")` loop.
-- New validation, before any Asana I/O:
-  - `start_at` without `due_at` in the same request → 400 with the Asana
-    rule quoted.
-  - `start_on` without any due field in the same request → 400.
-  - `due_on` and `due_at` both set → 400.
-  - `start_on` and `start_at` both set → 400.
-
-On PATCH these are evaluated against the merged result of the request and
-the task's current state, not the request alone — clearing `due_at` on a
-task that has `start_at` is an error, and setting `start_on` on a task that
-already has a due date is fine.
-
-### `api/routers/search.py` and `services/task_search.py` (modified)
-
-`SearchRequest` gains:
-
-- `start_before: str | None` — inclusive `YYYY-MM-DD`
-- `start_after: str | None` — inclusive
-- `startable: bool = False` — sugar for `start_before = today`, the
-  "what can I work on now" query
-
-`SearchResult` gains `due_at`, `start_on`.
-
-`filter_tasks` grows the same shape of bound test it applies to due dates,
-against `start_on`. Start filters drop tasks with no start date, matching
-how due filters drop undated tasks today. Sort order is unchanged — due
-date ascending, undated last, then name.
-
-## Consumer skills
-
-`searching-tasks`, `fetching-task`, `editing-tasks` and `creating-tasks`
-document the new fields; `task-lister` learns `startable` for "what should I
-be working on". The listing format gains a start date only where one is
-set — a task with no start reads exactly as it does today.
-
-`scripts/task_ref.py` is untouched; refs stay hashed from the GID.
+### `.claude/skills/*`, `task-next`
+- `--explain` shows `planned_start` and `late_start`; the stale block shows
+  `stale:late_start`. `searching-tasks` documents `startable`. `task-lister`
+  learns "what can I start now".
 
 ## Observability
 
-`tasks_created` gains attributes `dated` (`none`/`due_on`/`due_at`) and
-`has_start` (`true`/`false`), so the share of tasks receiving each kind of
-date is visible without a new metric.
-
-A new counter `asana_schedule_extractions` with a `result` attribute
-(`ok` / `no_due` / `clamped` / `parse_error` / `exception`) makes the
-normalization rules in D4 measurable — particularly how often the model
-proposes a start date the clamp rejects, which is the signal for whether the
-prompt needs work.
+`asana.prioritize.start_writes{result}` (above). `tasks_created` gains
+`dated` (`none`/`due_on`/`due_at`) as in v1; `has_start` is dropped (starts
+are no longer created at creation time).
 
 ## Testing
 
 Unit, no network:
 
-- `Schedule` normalization — every rule in D4, each in its own test:
-  both due fields set, malformed date, start with no due, start after due,
-  start before today, unparseable JSON, exception from the client.
-- `days_in_window` — due-only in window, start-only in window, both in
-  window (two pairs), both outside, completed, undated, exact boundaries at
-  day 0 and day 30 for each of start and due.
-- `title_for` — the three rows of the D5 table, plus the singular/plural
-  boundary at 1.
-- `_DIGEST_TITLE_RE` — matches both retired and current title formats,
-  rejects a user-authored event title (D6).
-- `lead_days` — normal lead, zero lead, missing start, missing due, and a
-  completed occurrence with `due_at` (successor gets date-only, lead
-  computed from the derived `due_on`).
-- API validation — each of the four 400 cases, and the PATCH-against-merged-
-  state cases from the API section.
-- `filter_tasks` — start bounds inclusive, undated dropped, `startable`.
+- `planned_start` arithmetic: 1p/5p/8p against capacity 5; ceil at
+  boundaries; no start for soft-dated or unpointed tasks; never before today
+  on first write.
+- D3 table: each row, including "manual value untouched" and "we clear what
+  we wrote when the due date is removed"; the claim is conditional in SQL.
+- D4: `late_start` fires only with a past `start_on`, empty `Started at`,
+  not completed.
+- Digest: as v1 (`days_in_window`, `title_for`, regex).
+- API validation: the two 400 cases; PATCH evaluated against merged state.
+- `filter_tasks` start bounds and `startable`.
+- Recurrence: successor carries no start field.
 
-End-to-end, against real Asana, via `scripts/test-task-create.py` and
-`scripts/test-api-local.py --write`: a task created with `due_at` +
-`start_on` round-trips all four fields through `GET /tasks/{gid}`.
-
-`scripts/test-digest.py --dry-run` shows a day with both due and starting
-tasks before anything writes to a calendar.
+End-to-end: create a hard-dated 3-point task via `POST /tasks`; after the
+event rescore, `GET /tasks/{gid}` shows `start_on = due − 1`; change points
+to 8 → `start_on = due − 2`; type a different `start_on` in Asana → it
+sticks across a rescore; `scripts/test-digest.py --dry-run` shows a day
+with both due and starting tasks.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `models/schedule.py` | new — `Schedule` |
-| `services/deadline.py` | `extract_schedule` replaces `extract_deadline` |
-| `clients/asana.py` | `create_task(schedule=…)`; three opt_fields constants |
-| `handlers/task_create.py` | schedule local, same P0/P1 gate |
-| `services/due_digest.py` | `days_in_window`, `kind`, grouped sections, `title_for` |
-| `handlers/due_digest.py` | one `DigestTask` per pair; title regex |
-| `models/digest.py` | `DigestTask.due_on` → `day`; new `kind` |
-| `services/recurrence.py` | `lead_days`, successor `start_on` |
-| `api/routers/tasks.py` | four fields, four validation rules |
-| `api/routers/search.py` | start filters, `startable`, new result fields |
-| `services/task_search.py` | start bound filtering |
-| `clients/otel.py` | `schedule_extractions` counter |
-| `.claude/skills/*` | document the new fields |
-| `docs/task-content-standard.md` | note that a stated cutoff belongs in `due_at`, not only prose |
+| `services/prioritize.py` | `planned_start`, `late_start`, stale reason |
+| `handlers/prioritize.py` | `sync_start_dates` after rescore |
+| `repo/prioritize.py`, `repo/schema.sql` | `start_on_written`, `claim_start`, `release_start` |
+| `services/deadline.py` | `extract_schedule` (due half only) |
+| `clients/asana.py` | `create_task` writes `due_at`; opt_fields already carry `start_on` |
+| `handlers/task_create.py` | schedule local (due only) |
+| `services/due_digest.py`, `handlers/due_digest.py`, `models/digest.py` | as v1 |
+| `api/routers/tasks.py`, `api/routers/search.py`, `services/task_search.py`, `api/routers/next.py` | `start_on` write + validation; start filters; `mean_start_lag_days` |
+| `clients/otel.py` | `prioritize.start_writes` |
+| `.claude/skills/*`, `.claude/agents/task-next.md` | document `startable`, `planned_start`, `late_start` |
 
-No database migration. No Terraform change. No new secret or env var.
+One schema migration (a column with a default — `migrate_db.py` re-runs the
+file; add `ALTER TABLE task_facts ADD COLUMN IF NOT EXISTS ...`). No
+Terraform change. No new secret.
 
 ## Risks
 
-**The model proposes bad start dates.** Mitigated by the clamp (D4 rule 5)
-and measured by the `clamped` result attribute. A start date is dropped, not
-corrected — the failure mode is a task with no start date, which is exactly
-today's behaviour.
+**Write churn.** Every points edit on a hard-dated task moves `start_on`
+one write. Bounded to one `PUT` per real change, and the webhook echo does
+not re-enrich (hash unchanged). Acceptable; measured by `start_writes`.
 
-**Digest churn on deploy.** Every day whose event gains a starting task
-re-renders once. Days with only due tasks keep their exact title and
-sections, so their content hash is stable and they are not touched. Bounded,
-one-time, and visible in `digest_events{op="update"}`.
+**A start date typed in Asana that happens to equal ours.** The guard reads
+"equals the last value we wrote" as ours, so a person who types the same
+date we computed will see it move when the estimate changes. The
+alternative — never touching a field a person has ever edited — needs
+Asana's story history and is not worth it for a coincidence.
 
-**Two entries for one task read as duplication.** A task that starts on the
-3rd and is due on the 20th appears on both days. This is the intent, but it
-is the change most likely to read as a bug on the calendar. The section
-headers ("Due" / "Starting") are what disambiguate; if they prove
-insufficient in use, the fallback is prefixing the task name in the start
-group rather than adding an event series.
-
-**`start_at` is write-only in practice.** No code path produces it and
-nothing consumes it specially — it round-trips and shows in fetches. If it
-stays unused after a few months, the honest move is to drop it from the
-write surface rather than keep a field that only ever holds hand-entered
-values.
+**Two digest entries for one task** — as v1: intended, disambiguated by the
+section headers.

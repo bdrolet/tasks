@@ -4,8 +4,9 @@ version: 1.0.0
 description: >
   Use when the user asks what to work on — "what should I do next", "what's my
   day look like", "why is X ranked there", "bump X to the top", "snooze that
-  till Friday", "that's a 3-pointer", "I started X". Reads the prioritizer's
-  ranking from tasks-api and applies pins, snoozes, points and started-at.
+  till Friday", "that's a 3-pointer", "I started X", "block X on Y". Reads the
+  prioritizer's ranking from tasks-api and applies pins, snoozes, points,
+  started-at and dependencies.
   For creating, editing, completing or commenting on tasks use the other
   task skills.
 ---
@@ -26,11 +27,13 @@ curl -s -XPUT "$BASE/tasks/<gid>/overrides" -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{"pinned_rank": 1}'
 curl -s -XPATCH "$BASE/tasks/<gid>" -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{"story_points": 3, "started_at": "2026-09-23"}'
+curl -s -XPATCH "$BASE/tasks/<gid>" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"add_dependencies": ["<blocker gid>"]}'   # or remove_dependencies
 ```
 
 Or the CLI, which does the same and prints ref-first TSV: `task-next`,
 `task-next ranking`, `task-next start|points|pin|unpin|snooze|unsnooze|override <ref|gid> …`,
-`task-next calibrate`.
+`task-next block|unblock <ref|gid> <blocker ref|gid>`, `task-next calibrate`.
 
 ## Meaning
 
@@ -44,6 +47,13 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
   - Starvation boost: a project not in a recent daily pick gets up to +50%
     at selection (`starvation_boost`), so no board goes days unpicked.
   - Nudge is presented grouped by `waiting_on` (who is owed), largest first.
+  - Subtasks inherit: snoozing, blocking or marking a parent as waiting
+    covers its subtasks (`components.inherited` names the ancestor); a pin
+    overrides an inherited block or wait, never an inherited snooze.
+- Dependencies ("block X on Y" / "X depends on Y" / "unblock X from Y"):
+  `PATCH /tasks/{gid}` `add_dependencies` / `remove_dependencies` (GIDs). This
+  skill never creates a task — if Y does not exist, say so and hand creation
+  to `task-builder`.
 - `GET /ranking` — every task in score order. `bucket` = `next` (default) |
   `nudge` | `snoozed` | `excluded`; or `list` = `overcommitted` | `stale` |
   `nudge`. `explain=true` adds `components` (P, U, I, B, A, C, points,

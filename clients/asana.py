@@ -481,6 +481,27 @@ def remove_tag(task_gid: str, tag_gid: str) -> None:
     resp.raise_for_status()
 
 
+def add_dependencies(task_gid: str, dependency_gids: list[str]) -> None:
+    """Mark `task_gid` as blocked by each of `dependency_gids`."""
+    resp = _request(
+        "POST",
+        f"/tasks/{task_gid}/addDependencies",
+        operation="add_dependencies",
+        json={"data": {"dependencies": dependency_gids}},
+    )
+    resp.raise_for_status()
+
+
+def remove_dependencies(task_gid: str, dependency_gids: list[str]) -> None:
+    resp = _request(
+        "POST",
+        f"/tasks/{task_gid}/removeDependencies",
+        operation="remove_dependencies",
+        json={"data": {"dependencies": dependency_gids}},
+    )
+    resp.raise_for_status()
+
+
 def _story_data(text: str | None, html_text: str | None) -> dict:
     return {"text": text} if text is not None else {"html_text": html_text}
 

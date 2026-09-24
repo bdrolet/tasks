@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 TOP_N_LOGGED = 10
 # Levels of subtask nesting walked: project resolution hops up at most this
 # many parents; gather and heal descend at most this many levels below a task.
-MAX_SUBTASK_DEPTH = 3
+# The scorer's ancestor inheritance (D16) walks the same bound.
+MAX_SUBTASK_DEPTH = pz.MAX_SUBTASK_DEPTH
 
 
 def handle(message: dict) -> None:
