@@ -3,7 +3,8 @@
 Field gids are workspace-scoped and stable, so one listing per process is
 enough; `gids(refresh=True)` re-reads after the setup script creates them.
 Values cross the Asana API as {field_gid: value} under `custom_fields`;
-a number field takes a number, a date field takes 'YYYY-MM-DD' or null."""
+a number field takes a bare number, a date field takes {"date": "YYYY-MM-DD"}
+or null."""
 
 import logging
 from datetime import date
@@ -50,14 +51,19 @@ def _gid(name: str) -> str:
     return gid
 
 
+def date_value(day: date | str | None) -> dict | None:
+    """Asana's wire shape for a date custom field: {"date": "YYYY-MM-DD"} or null to clear."""
+    if day is None:
+        return None
+    return {"date": day.isoformat() if isinstance(day, date) else str(day)}
+
+
 def set_story_points(task_gid: str, points: int | None) -> None:
     asana.update_task(task_gid, {"custom_fields": {_gid(STORY_POINTS): points}})
 
 
 def set_started_at(task_gid: str, day: date | None) -> None:
-    asana.update_task(
-        task_gid, {"custom_fields": {_gid(STARTED_AT): day.isoformat() if day else None}}
-    )
+    asana.update_task(task_gid, {"custom_fields": {_gid(STARTED_AT): date_value(day)}})
 
 
 def ensure(project_gids: list[str]) -> dict[str, str]:

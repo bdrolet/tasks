@@ -47,9 +47,15 @@ def test_setters_send_the_field_map(monkeypatch):
     cf.set_started_at("t1", None)
     assert sent == [
         ("t1", {"custom_fields": {"cf-points": 5}}),
-        ("t1", {"custom_fields": {"cf-started": "2026-09-23"}}),
+        ("t1", {"custom_fields": {"cf-started": {"date": "2026-09-23"}}}),
         ("t1", {"custom_fields": {"cf-started": None}}),
     ]
+
+
+def test_date_value():
+    assert cf.date_value(date(2026, 9, 23)) == {"date": "2026-09-23"}
+    assert cf.date_value("2026-09-23") == {"date": "2026-09-23"}
+    assert cf.date_value(None) is None
 
 
 def test_ensure_creates_missing_and_attaches(monkeypatch):

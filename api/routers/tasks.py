@@ -386,7 +386,7 @@ def patch_task(gid: str, body: UpdateTaskRequest) -> dict:
         if "story_points" in body.model_fields_set:
             custom[cf.gids()[cf.STORY_POINTS]] = body.story_points
         if "started_at" in body.model_fields_set:
-            custom[cf.gids()[cf.STARTED_AT]] = body.started_at
+            custom[cf.gids()[cf.STARTED_AT]] = cf.date_value(body.started_at)
         if custom:
             asana.update_task(gid, {"custom_fields": custom})
     task_index.refresh(gid)

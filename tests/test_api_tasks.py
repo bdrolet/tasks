@@ -593,7 +593,7 @@ def test_patch_sets_points_and_started_and_publishes(monkeypatch, fields):
         "/tasks/t1", headers=AUTH, json={"story_points": 5, "started_at": "2026-09-23"}
     )
     assert resp.status_code == 200
-    assert {"custom_fields": {"cf-points": 5, "cf-started": "2026-09-23"}} in sent
+    assert {"custom_fields": {"cf-points": 5, "cf-started": {"date": "2026-09-23"}}} in sent
     assert fields == [("t1", "api")]
 
 
