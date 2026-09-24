@@ -124,6 +124,7 @@ class _State:
     snoozed: bool
     blocked: bool
     waiting_on: str | None
+    completed: bool
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def _own_state(
         snoozed=bool(ov.snooze_until and ov.snooze_until > today),
         blocked=any(d in open_gids for d in facts.dependencies),
         waiting_on=eff.waiting_on,
+        completed=facts.completed,
     )
 
 
@@ -148,10 +150,11 @@ def _ancestors(
     gid: str, parent_of: dict[str, str | None], states: dict[str, _State]
 ) -> list[tuple[str, _State]]:
     """(gid, state) nearest-first, at most MAX_SUBTASK_DEPTH levels, stopping
-    at the first ancestor with no row in the set."""
+    at the first ancestor with no row in the set or that is completed — a
+    done parent's leftover snooze, wait or dependency binds nothing."""
     out: list[tuple[str, _State]] = []
     cur = parent_of.get(gid)
-    while cur and len(out) < MAX_SUBTASK_DEPTH and cur in states:
+    while cur and len(out) < MAX_SUBTASK_DEPTH and cur in states and not states[cur].completed:
         out.append((cur, states[cur]))
         cur = parent_of.get(cur)
     return out

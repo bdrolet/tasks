@@ -184,8 +184,8 @@ On `day_changed`, before rescoring:
    in the run row; otherwise `task_stats.times_deferred += 1`. Interactive `/next`
    calls log a `manual` run but never bump the counter — only the daily run
    is an "offer".
-2. **Heal.** List open tasks per managed project (plus one level of subtasks
-   for parents with `num_subtasks > 0`) and publish `task_changed` for any
+2. **Heal.** List open tasks per managed project (plus subtasks down to
+   `MAX_SUBTASK_DEPTH` (3) levels for parents with `num_subtasks > 0`) and publish `task_changed` for any
    task whose `modified_at` is newer than `task_facts.fetched_at`, that has
    no facts row, or whose enrichment hash ≠ its current content hash.
 3. Rescore for the new date and write the canonical run (kind `daily`, full
@@ -194,7 +194,9 @@ On `day_changed`, before rescoring:
 ### D9 — Candidate set and "actionable"
 
 Candidates are the open tasks of every project in `ASANA_MANAGED_PROJECTS`,
-plus their subtasks one level down (in the parent's project). A task is
+plus their subtasks down to `MAX_SUBTASK_DEPTH` (3) levels (in the root's
+project) — gather and heal descend that far, and D16's inheritance walks the
+same bound. A task is
 excluded from "do next", with a reason, when:
 
 | Reason | Rule |
@@ -310,7 +312,9 @@ So `score_set` builds `parent_of` and each task's own state (snoozed, open
 dependency, effective `waiting_on`) from facts + overrides + effective
 enrichment, and a subtask walks its parent chain — nearest first, at most
 `MAX_SUBTASK_DEPTH` (3) levels, the same bound gather and heal use,
-stopping at the first ancestor with no row in the set. Bucketing order:
+stopping at the first ancestor with no row in the set or that is completed
+(a done parent's leftover snooze, wait or open dependency binds nothing, nor
+does anything above it). Bucketing order:
 
 1. own completed → `excluded:completed`
 2. own snoozed → `snoozed`; else any ancestor snoozed → `snoozed`

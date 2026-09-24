@@ -615,12 +615,23 @@ def test_inheritance_walks_at_most_three_levels():
 
 
 def test_inheritance_stops_at_a_missing_ancestor_row():
+    # gp (snoozed) -> p (no facts row) -> c: the walk stops at p, mid-chain.
     gp = facts("gp", points=1)
-    c = facts("c", points=1, parent_gid="missing")
-    missing_child_of_gp = facts("x", points=1, parent_gid="gp")
-    s = run(
-        [gp, c, missing_child_of_gp],
-        overrides={"gp": Overrides(snooze_until=TODAY + timedelta(days=3))},
-    ).by_gid()
+    c = facts("c", points=1, parent_gid="p")
+    s = run([gp, c], overrides={"gp": Overrides(snooze_until=TODAY + timedelta(days=3))}).by_gid()
     assert s["c"].bucket == "next"
-    assert s["x"].bucket == "snoozed"
+    assert s["c"].components["inherited"] is None
+
+
+def test_completed_ancestor_passes_no_state_down():
+    dep = facts("dep", points=1)
+    gp = facts("gp", points=1, dependencies=("dep",))
+    p = facts("p", points=1, parent_gid="gp", completed=True)
+    c = facts("c", points=1, parent_gid="p")
+    s = run(
+        [dep, gp, p, c],
+        {"p": enr(waiting_on="someone")},
+        overrides={"p": Overrides(snooze_until=TODAY + timedelta(days=3))},
+    ).by_gid()["c"]
+    assert s.bucket == "next"
+    assert s.components["inherited"] is None
