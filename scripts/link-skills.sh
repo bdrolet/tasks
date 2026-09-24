@@ -53,6 +53,16 @@ if [[ -e "$BIN_DEST/task-sessions" && ! -L "$BIN_DEST/task-sessions" ]]; then
 fi
 ln -sfn "$REPO_ROOT/scripts/task_sessions.py" "$BIN_DEST/task-sessions"
 echo "linked $BIN_DEST/task-sessions -> $(readlink "$BIN_DEST/task-sessions")"
+
+# task_next.py onto PATH as `task-next` — the prioritizer CLI. Imports
+# task_ref from its own directory, so it has to be symlinked (not copied)
+# to keep that sibling resolvable.
+if [[ -e "$BIN_DEST/task-next" && ! -L "$BIN_DEST/task-next" ]]; then
+  echo "error: $BIN_DEST/task-next exists and is not a symlink — remove the old copy first" >&2
+  exit 1
+fi
+ln -sfn "$REPO_ROOT/scripts/task_next.py" "$BIN_DEST/task-next"
+echo "linked $BIN_DEST/task-next -> $(readlink "$BIN_DEST/task-next")"
 case ":$PATH:" in
   *":$BIN_DEST:"*) ;;
   *) echo "warning: $BIN_DEST is not on PATH — task listings will fail to find task-ref" >&2 ;;
