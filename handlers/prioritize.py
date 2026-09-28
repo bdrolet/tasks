@@ -342,7 +342,16 @@ def rescore(conn, *, kind: str, trigger_gid: str | None, today: date) -> ScoredS
     ]
     if kind != "daily":
         top = top[:TOP_N_LOGGED]
-    repo.insert_run(conn, kind=kind, today=today, trigger_gid=trigger_gid, top=top)
+    run_id = repo.insert_run(
+        conn,
+        kind=kind,
+        today=today,
+        trigger_gid=trigger_gid,
+        top=top,
+        config_hash=config.fingerprint,
+    )
+    if kind == "daily":
+        repo.snapshot_scores(conn, run_id)
     counts: dict[str, int] = {}
     for t in scored.tasks:
         counts[t.bucket] = counts.get(t.bucket, 0) + 1

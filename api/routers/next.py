@@ -220,6 +220,7 @@ def next_today(body: NextRequest) -> NextResponse:
             today=scored_today,
             trigger_gid=None,
             top=top,
+            config_hash=config.fingerprint,
         )
     return NextResponse(
         today=today,
