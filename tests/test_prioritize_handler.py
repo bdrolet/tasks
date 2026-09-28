@@ -122,6 +122,11 @@ def db(monkeypatch):
     monkeypatch.setattr(repo, "replace_scores", lambda c, s: c.scores.append(s))
     monkeypatch.setattr(repo, "insert_run", lambda c, **kw: (c.runs.append(kw), len(c.runs))[1])
     monkeypatch.setattr(
+        repo,
+        "snapshot_scores",
+        lambda c, run_id: c.__dict__.setdefault("snapshots", []).append(run_id),
+    )
+    monkeypatch.setattr(
         repo, "lock_rescore", lambda c: c.__dict__.setdefault("locks", []).append(1)
     )
 
@@ -359,6 +364,14 @@ def test_event_run_is_capped_while_daily_keeps_full_selection(db, monkeypatch):
     assert len(ranked) > h.TOP_N_LOGGED
     assert len(db.runs[-2]["top"]) == min(len(ranked), h.TOP_N_LOGGED)
     assert len(db.runs[-1]["top"]) == len(ranked)
+
+
+def test_daily_run_snapshots_the_full_ranking_and_every_run_stamps_config(db, monkeypatch):
+    h.rescore(db, kind="event", trigger_gid=None, today=TODAY)
+    h.rescore(db, kind="daily", trigger_gid=None, today=TODAY)
+    assert db.snapshots == [2]  # the daily run's id only; event runs are not snapshotted
+    fp = h.prioritize_config.load().fingerprint
+    assert fp and [r["config_hash"] for r in db.runs] == [fp, fp]
 
 
 def test_changed_hash_with_empty_field_does_not_write_back_twice(

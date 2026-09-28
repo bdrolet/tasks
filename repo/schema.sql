@@ -154,8 +154,10 @@ CREATE TABLE IF NOT EXISTS task_scores (
     stale_reason  TEXT
 );
 
--- Run log. Event runs keep the top-N; the daily run keeps the full set and
--- is the one deferrals are counted against (D8).
+-- Run log. `top` is the default selection (the ranked picks) — capped at
+-- TOP_N_LOGGED for event runs, uncapped for the daily run, which is the one
+-- deferrals are counted against (D8); a manual run is what POST /next
+-- returned. The full ranking of a daily run is in task_scores_history.
 CREATE TABLE IF NOT EXISTS prioritize_runs (
     run_id      BIGSERIAL PRIMARY KEY,
     kind        TEXT NOT NULL,               -- 'event' | 'daily' | 'manual'
@@ -164,6 +166,41 @@ CREATE TABLE IF NOT EXISTS prioritize_runs (
     trigger_gid TEXT,
     top         JSONB NOT NULL               -- [{gid, rank, score, components, started}]
 );
+-- Fingerprint of config/prioritize.toml in effect, so a shift in scores can
+-- be told apart from a retune. NULL on runs older than the column.
+ALTER TABLE prioritize_runs ADD COLUMN IF NOT EXISTS config_hash TEXT;
+
+-- Audit: the whole of task_scores as each daily run left it — every bucket,
+-- not just the picks — so a task's position can be traced day by day.
+-- Append-only; a few hundred rows a day.
+CREATE TABLE IF NOT EXISTS task_scores_history (
+    run_id        BIGINT NOT NULL REFERENCES prioritize_runs (run_id),
+    task_gid      TEXT NOT NULL,
+    scored_at     TIMESTAMPTZ NOT NULL,
+    today         DATE NOT NULL,
+    bucket        TEXT NOT NULL,
+    score         DOUBLE PRECISION,
+    position      INTEGER NOT NULL,
+    rank          INTEGER,
+    components    JSONB NOT NULL,
+    overcommitted BOOLEAN NOT NULL,
+    stale         BOOLEAN NOT NULL,
+    stale_reason  TEXT,
+    PRIMARY KEY (run_id, task_gid)
+);
+CREATE INDEX IF NOT EXISTS task_scores_history_gid_idx ON task_scores_history (task_gid, today);
+
+-- Audit: every change to task_overrides, append-only. `patch` is what was
+-- asked for (null = cleared), `result` the row it left behind.
+CREATE TABLE IF NOT EXISTS task_override_events (
+    event_id  BIGSERIAL PRIMARY KEY,
+    task_gid  TEXT NOT NULL,
+    at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    patch     JSONB NOT NULL,
+    result    JSONB NOT NULL,              -- {overrides, pinned_rank, snooze_until}
+    source    TEXT NOT NULL                -- 'api' | 'completion'
+);
+CREATE INDEX IF NOT EXISTS task_override_events_gid_idx ON task_override_events (task_gid, at);
 
 -- Feedback: deferrals and the completion snapshot calibrate reads.
 CREATE TABLE IF NOT EXISTS task_stats (

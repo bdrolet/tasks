@@ -189,8 +189,31 @@ def list_overrides(conn: Any) -> dict[str, Overrides]:
     return {r["task_gid"]: _row_to_overrides(r) for r in rows}
 
 
-def merge_overrides(conn: Any, gid: str, patch: dict) -> Overrides:
-    """None clears a key. Column keys go to columns; the rest merge into JSONB."""
+def _record_override_event(
+    conn: Any, gid: str, patch: dict, result: Overrides, source: str
+) -> None:
+    """Append-only audit of task_overrides; written in the caller's transaction."""
+    conn.execute(
+        "INSERT INTO task_override_events (task_gid, patch, result, source) VALUES (%s, %s, %s, %s)",
+        (
+            gid,
+            json.dumps(patch, default=str),
+            json.dumps(
+                {
+                    "overrides": result.fields,
+                    "pinned_rank": result.pinned_rank,
+                    "snooze_until": result.snooze_until,
+                },
+                default=str,
+            ),
+            source,
+        ),
+    )
+
+
+def merge_overrides(conn: Any, gid: str, patch: dict, *, source: str = "api") -> Overrides:
+    """None clears a key. Column keys go to columns; the rest merge into JSONB.
+    Every call is also appended to task_override_events."""
     current = get_overrides(conn, gid)
     fields = dict(current.fields)
     pinned, snooze = current.pinned_rank, current.snooze_until
@@ -213,14 +236,25 @@ def merge_overrides(conn: Any, gid: str, patch: dict) -> Overrides:
         """,
         (gid, json.dumps(fields), pinned, snooze),
     )
-    return Overrides(fields=fields, pinned_rank=pinned, snooze_until=snooze)
+    result = Overrides(fields=fields, pinned_rank=pinned, snooze_until=snooze)
+    _record_override_event(conn, gid, patch, result, source)
+    return result
 
 
 def clear_pin(conn: Any, gid: str) -> None:
-    conn.execute(
-        "UPDATE task_overrides SET pinned_rank = NULL, updated_at = now() WHERE task_gid = %s",
+    """Called on every completion; audited only when a pin was actually cleared."""
+    row = conn.execute(
+        """
+        UPDATE task_overrides SET pinned_rank = NULL, updated_at = now()
+        WHERE task_gid = %s AND pinned_rank IS NOT NULL
+        RETURNING overrides, pinned_rank, snooze_until
+        """,
         (gid,),
-    )
+    ).fetchone()
+    if row:
+        _record_override_event(
+            conn, gid, {"pinned_rank": None}, _row_to_overrides(row), "completion"
+        )
 
 
 def claim_estimate(conn: Any, gid: str, points: int) -> bool:
@@ -279,6 +313,22 @@ def replace_scores(conn: Any, scored: ScoredSet) -> None:
         )
 
 
+def snapshot_scores(conn: Any, run_id: int) -> None:
+    """Copy the live task_scores into task_scores_history under `run_id` —
+    call after replace_scores, in the same transaction."""
+    conn.execute(
+        """
+        INSERT INTO task_scores_history
+            (run_id, task_gid, scored_at, today, bucket, score, position, rank, components,
+             overcommitted, stale, stale_reason)
+        SELECT %s, task_gid, scored_at, today, bucket, score, position, rank, components,
+               overcommitted, stale, stale_reason
+        FROM task_scores
+        """,
+        (run_id,),
+    )
+
+
 def list_scores(conn: Any) -> list[dict]:
     rows = conn.execute(
         """
@@ -308,11 +358,20 @@ def list_scores(conn: Any) -> list[dict]:
 
 
 def insert_run(
-    conn: Any, *, kind: str, today: date, trigger_gid: str | None, top: list[dict]
+    conn: Any,
+    *,
+    kind: str,
+    today: date,
+    trigger_gid: str | None,
+    top: list[dict],
+    config_hash: str | None = None,
 ) -> int:
     row = conn.execute(
-        "INSERT INTO prioritize_runs (kind, today, trigger_gid, top) VALUES (%s, %s, %s, %s) RETURNING run_id",
-        (kind, today, trigger_gid, json.dumps(top, default=str)),
+        """
+        INSERT INTO prioritize_runs (kind, today, trigger_gid, top, config_hash)
+        VALUES (%s, %s, %s, %s, %s) RETURNING run_id
+        """,
+        (kind, today, trigger_gid, json.dumps(top, default=str), config_hash),
     ).fetchone()
     return int(row["run_id"])
 

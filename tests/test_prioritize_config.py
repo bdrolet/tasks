@@ -65,3 +65,14 @@ def test_missing_section_is_an_error(tmp_path: Path):
         assert "weights" in str(e)
     else:
         raise AssertionError("expected KeyError")
+
+
+def test_fingerprint_tracks_the_file_bytes(tmp_path):
+    src = Path(pc.DEFAULT_PATH).read_bytes()
+    a = tmp_path / "a.toml"
+    a.write_bytes(src)
+    b = tmp_path / "b.toml"
+    b.write_bytes(src + b"\n# retuned\n")
+    fa, fb = pc.load(str(a)).fingerprint, pc.load(str(b)).fingerprint
+    assert len(fa) == 12 and fa == pc.load(str(a)).fingerprint
+    assert fa != fb

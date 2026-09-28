@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, timezone
 
 from models.prioritize import ScoredSet, ScoredTask, TaskFacts
@@ -129,6 +130,48 @@ def test_merge_overrides_splits_columns_and_json():
     assert out.pinned_rank == 2 and out.fields == {"impact": "high"}
 
 
+def test_merge_overrides_appends_an_audit_event():
+    conn = RowsConn(row={"overrides": {}, "pinned_rank": None, "snooze_until": None})
+    repo.merge_overrides(conn, "t1", {"snooze_until": "2026-10-01", "impact": None})
+    q, params = conn.executed[2]
+    assert "INSERT INTO task_override_events" in q
+    gid, patch, result, source = params
+    assert gid == "t1" and source == "api"
+    assert json.loads(patch) == {"snooze_until": "2026-10-01", "impact": None}
+    assert json.loads(result) == {
+        "overrides": {},
+        "pinned_rank": None,
+        "snooze_until": "2026-10-01",
+    }
+
+
+def test_clear_pin_appends_a_completion_event_only_when_a_pin_was_cleared():
+    conn = RowsConn(
+        row={"overrides": {"impact": "high"}, "pinned_rank": None, "snooze_until": None}
+    )
+    repo.clear_pin(conn, "t1")
+    q0 = conn.executed[0][0]
+    assert "UPDATE task_overrides SET pinned_rank = NULL" in q0
+    assert "pinned_rank IS NOT NULL" in q0 and "RETURNING" in q0
+    q, params = conn.executed[1]
+    assert "INSERT INTO task_override_events" in q
+    assert params[0] == "t1" and json.loads(params[1]) == {"pinned_rank": None}
+    assert json.loads(params[2])["overrides"] == {"impact": "high"}
+    assert params[3] == "completion"
+
+    unpinned = FakeConn()  # UPDATE matched nothing: no pin, no event
+    repo.clear_pin(unpinned, "t2")
+    assert len(unpinned.executed) == 1
+
+
+def test_snapshot_scores_copies_the_live_set_under_the_run():
+    conn = FakeConn()
+    repo.snapshot_scores(conn, 7)
+    q, params = conn.executed[0]
+    assert q.startswith("INSERT INTO task_scores_history")
+    assert "FROM task_scores" in q and params == (7,)
+
+
 def test_replace_scores_deletes_then_inserts():
     conn = FakeConn()
     scored = ScoredSet(
@@ -146,10 +189,17 @@ def test_insert_run_returns_id_and_last_daily_run_parses_top():
     conn = RowsConn(row={"run_id": 7})
     assert (
         repo.insert_run(
-            conn, kind="daily", today=date(2026, 9, 23), trigger_gid=None, top=[{"gid": "a"}]
+            conn,
+            kind="daily",
+            today=date(2026, 9, 23),
+            trigger_gid=None,
+            top=[{"gid": "a"}],
+            config_hash="abc123",
         )
         == 7
     )
+    q, params = conn.executed[0]
+    assert "config_hash" in q and params[-1] == "abc123"
     conn2 = RowsConn(row={"run_id": 7, "today": date(2026, 9, 22), "top": '[{"gid": "a"}]'})
     assert repo.last_daily_run(conn2)["top"] == [{"gid": "a"}]
     assert repo.last_daily_run(RowsConn(row=None)) is None

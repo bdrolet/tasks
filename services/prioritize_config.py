@@ -2,6 +2,7 @@
 PRIORITIZE_CONFIG_PATH overrides the path. Every section is required —
 a missing one is a KeyError naming it, not a silent default."""
 
+import hashlib
 import os
 import tomllib
 from dataclasses import dataclass
@@ -39,12 +40,15 @@ class Config:
     hard_due_window_days: int
     starvation_boost_per_day: float
     starvation_max_boost: float
+    # sha256 of the file's bytes, first 12 hex — stamped on every run so an
+    # audit can tell a retune from a change in the tasks themselves.
+    fingerprint: str = ""
 
 
 def load(path: str | None = None) -> Config:
     p = Path(path or os.environ.get("PRIORITIZE_CONFIG_PATH") or DEFAULT_PATH)
-    with p.open("rb") as fh:
-        raw = tomllib.load(fh)
+    data = p.read_bytes()
+    raw = tomllib.loads(data.decode())
     cap, weights, prio = raw["capacity"], raw["weights"], raw["priority"]
     urg, cat, sel, stale = raw["urgency"], raw["category"], raw["selection"], raw["stale"]
     starve = raw["starvation"]
@@ -76,4 +80,5 @@ def load(path: str | None = None) -> Config:
         hard_due_window_days=int(sel["hard_due_window_days"]),
         starvation_boost_per_day=float(starve["boost_per_day"]),
         starvation_max_boost=float(starve["max_boost"]),
+        fingerprint=hashlib.sha256(data).hexdigest()[:12],
     )

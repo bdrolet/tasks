@@ -7,6 +7,7 @@ import clients.pubsub as ps
 from api.main import app
 from api.routers import next as next_router
 from repo import prioritize as repo
+from services import prioritize_config as pc
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer x"}
@@ -129,6 +130,7 @@ def test_next_selects_and_logs_manual_run(db):
     assert [t["task_gid"] for t in body["overcommitted"]] == ["c"]
     assert [t["task_gid"] for t in body["nudge"]] == ["w"]
     assert body["run_id"] == 42 and db[0]["kind"] == "manual"
+    assert db[0]["config_hash"] == pc.load().fingerprint
 
 
 def test_next_n_and_energy_reselect():
