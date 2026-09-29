@@ -50,6 +50,8 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
   - Subtasks inherit: snoozing, blocking or marking a parent as waiting
     covers its subtasks (`components.inherited` names the ancestor); a pin
     overrides an inherited block or wait, never an inherited snooze.
+  - An undated subtask takes its nearest ancestor's due date as a hard date
+    (`components.due_from` names the ancestor), so it can be a must-do.
 - Dependencies ("block X on Y" / "X depends on Y" / "unblock X from Y"):
   `PATCH /tasks/{gid}` `add_dependencies` / `remove_dependencies` (GIDs). This
   skill never creates a task — if Y does not exist, say so and hand creation

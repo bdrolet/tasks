@@ -334,6 +334,17 @@ never completed / snoozed / project — a snoozed parent is a deliberate
 `{"state": "snoozed"|"blocked"|"waiting", "from": <ancestor gid>}` when
 inheritance decided the bucket (including a pinned-despite), else `null`.
 
+**Due dates too** (*added 2026-09-28*). A subtask with no `due_on` of its
+own takes the nearest ancestor's `due_on` — same walk, same stops — as a
+**hard** date (`due_source: "hard"`, `components["due_from"]` = that
+ancestor's gid), ahead of its own inferred or horizon date. Otherwise the
+deadline sits on a parent that is `excluded:parent` and the work under it
+ranks on a horizon: the Tasca return's 30-day window was on the parent,
+12 days overdue, while its one open subtask ("ship the return") ranked #65
+on an inferred November date. An inherited hard date makes the subtask a
+must-do and puts it in the feasibility queue like any other hard date. A
+child's own `due_on` always wins.
+
 Dependencies are set through `PATCH /tasks/{gid}` `add_dependencies` /
 `remove_dependencies` (§Read side), and `task-next block` / `unblock`.
 

@@ -101,17 +101,28 @@ def _local_date(ts: datetime) -> date:
     return ts.astimezone(ZoneInfo(LOCAL_TZ)).date()
 
 
-def _effective_due(facts: TaskFacts, eff: Effective, config: Config) -> tuple[date | None, str]:
-    """(date, source): hard due_on; else a medium/high-confidence inferred
-    date; else the horizon created_at + horizon[priority]; else none."""
+def _effective_due(
+    facts: TaskFacts,
+    eff: Effective,
+    config: Config,
+    ancestors: list[tuple[str, "_State"]],
+) -> tuple[date | None, str, str | None]:
+    """(date, source, from): hard due_on; else the nearest ancestor's hard
+    due_on, still "hard" (D16 — the parent's deadline binds the work under
+    it); else a medium/high-confidence inferred date; else the horizon
+    created_at + horizon[priority]; else none. `from` names the ancestor
+    whose date was taken, else None."""
     if facts.due_on:
-        return facts.due_on, "hard"
+        return facts.due_on, "hard", None
+    for gid, st in ancestors:
+        if st.due_on:
+            return st.due_on, "hard", gid
     if eff.due_date_inferred and eff.due_date_inferred_confidence in ("medium", "high"):
-        return eff.due_date_inferred, "inferred"
+        return eff.due_date_inferred, "inferred", None
     horizon = config.horizon_days.get(facts.priority or config.default_priority)
     if horizon is None:
-        return None, "none"
-    return _local_date(facts.created_at) + timedelta(days=horizon), "horizon"
+        return None, "none", None
+    return _local_date(facts.created_at) + timedelta(days=horizon), "horizon", None
 
 
 MAX_SUBTASK_DEPTH = 3
@@ -125,6 +136,7 @@ class _State:
     blocked: bool
     waiting_on: str | None
     completed: bool
+    due_on: date | None
 
 
 @dataclass(frozen=True)
@@ -143,6 +155,7 @@ def _own_state(
         blocked=any(d in open_gids for d in facts.dependencies),
         waiting_on=eff.waiting_on,
         completed=facts.completed,
+        due_on=facts.due_on,
     )
 
 
@@ -237,16 +250,18 @@ def score_set(
         e = enrichments.get(f.gid, Enrichment.DEFAULT)
         ov = overrides.get(f.gid, Overrides.NONE)
         prepared.append((f, e, ov, effective(f, e, ov, config)))
-    # D16: a subtask inherits snoozed / blocked / waiting from its ancestors.
+    # D16: a subtask inherits snoozed / blocked / waiting, and a hard due
+    # date when it has none of its own, from its ancestors.
     parent_of = {f.gid: f.parent_gid for f in facts}
     states = {f.gid: _own_state(f, eff, ov, open_gids, today) for f, _, ov, eff in prepared}
 
     for f, e, ov, eff in prepared:
-        bk = _bucket(f, states[f.gid], ov, _ancestors(f.gid, parent_of, states), config)
+        ancestors = _ancestors(f.gid, parent_of, states)
+        bk = _bucket(f, states[f.gid], ov, ancestors, config)
         bucket, despite = bk.bucket, bk.pinned_despite
         if bk.waiting_on != eff.waiting_on:
             eff = replace(eff, waiting_on=bk.waiting_on)
-        due, source = _effective_due(f, eff, config)
+        due, source, due_from = _effective_due(f, eff, config, ancestors)
         effort = eff.points / config.points_per_day
         if eff.points_source != "field" and eff.points_confidence == "low":
             effort *= config.low_confidence_multiplier
@@ -275,6 +290,7 @@ def score_set(
                 "effort_days": effort,
                 "effective_due": due.isoformat() if due else None,
                 "due_source": source,
+                "due_from": due_from,
                 "soft": source != "hard",
                 "days_until_due": (due - today).days if due else None,
                 "days_stale": days_stale,
