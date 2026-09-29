@@ -635,3 +635,55 @@ def test_completed_ancestor_passes_no_state_down():
     ).by_gid()["c"]
     assert s.bucket == "next"
     assert s.components["inherited"] is None
+
+
+def test_undated_child_inherits_the_parents_hard_due_date():
+    # The Tasca return: the 30-day deadline sat on the parent, excluded as
+    # `parent`; its one open subtask had no date and ranked on a horizon.
+    parent = facts("p", due_on=TODAY - timedelta(days=7), points=1)
+    child = facts("c", points=1, parent_gid="p")
+    scored = run([parent, child])
+    c = scored.by_gid()["c"].components
+    assert c["effective_due"] == (TODAY - timedelta(days=7)).isoformat()
+    assert c["due_source"] == "hard"
+    assert c["due_from"] == "p"
+    assert scored.by_gid()["c"].overcommitted
+    assert "c" in {t.gid for t in pz.select(scored.next(), CFG)}
+
+
+def test_childs_own_due_date_wins_over_the_parents():
+    parent = facts("p", due_on=TODAY + timedelta(days=1), points=1)
+    child = facts("c", due_on=TODAY + timedelta(days=10), points=1, parent_gid="p")
+    c = run([parent, child]).by_gid()["c"].components
+    assert c["effective_due"] == (TODAY + timedelta(days=10)).isoformat()
+    assert c["due_from"] is None
+
+
+def test_parents_hard_date_beats_the_childs_inferred_date():
+    parent = facts("p", due_on=TODAY + timedelta(days=2), points=1)
+    child = facts("c", points=1, parent_gid="p")
+    inferred = enr(
+        due_date_inferred=TODAY + timedelta(days=20), due_date_inferred_confidence="high"
+    )
+    c = run([parent, child], {"c": inferred}).by_gid()["c"].components
+    assert c["effective_due"] == (TODAY + timedelta(days=2)).isoformat()
+    assert c["due_source"] == "hard"
+
+
+def test_grandchild_takes_the_nearest_dated_ancestor():
+    gp = facts("gp", due_on=TODAY + timedelta(days=9), points=1)
+    p = facts("p", due_on=TODAY + timedelta(days=4), points=1, parent_gid="gp")
+    c = facts("c", points=1, parent_gid="p")
+    skip = facts("s", points=1, parent_gid="u")
+    u = facts("u", points=1, parent_gid="gp")
+    by = run([gp, p, c, u, skip]).by_gid()
+    assert by["c"].components["due_from"] == "p"
+    assert by["s"].components["due_from"] == "gp"
+
+
+def test_completed_parent_passes_no_due_date_down():
+    parent = facts("p", due_on=TODAY - timedelta(days=3), points=1, completed=True)
+    child = facts("c", points=1, parent_gid="p")
+    c = run([parent, child]).by_gid()["c"].components
+    assert c["due_source"] != "hard"
+    assert c["due_from"] is None
