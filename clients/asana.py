@@ -24,7 +24,7 @@ SEARCH_OPT_FIELDS = (
 )
 DETAIL_OPT_FIELDS = (
     "name,notes,html_notes,completed,due_on,due_at,created_at,modified_at,"
-    "permalink_url,tags.gid,tags.name,assignee.gid,assignee.name,"
+    "completed_at,permalink_url,tags.gid,tags.name,assignee.gid,assignee.name,"
     "parent.gid,parent.name,num_subtasks,"
     "memberships.project.gid,memberships.project.name,"
     "memberships.section.gid,memberships.section.name"
@@ -38,7 +38,7 @@ DIGEST_OPT_FIELDS = (
 )
 # Prioritizer gather (handlers/prioritize.py): everything the scorer reads.
 PRIORITIZE_OPT_FIELDS = (
-    DETAIL_OPT_FIELDS + ",completed_at,start_on,custom_fields.gid,custom_fields.name,"
+    DETAIL_OPT_FIELDS + ",start_on,custom_fields.gid,custom_fields.name,"
     "custom_fields.number_value,custom_fields.date_value,"
     "dependencies.gid,dependents.gid"
 )
