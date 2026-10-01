@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import clients.otel as otel
 import clients.pubsub as pubsub
@@ -21,6 +22,12 @@ from services import managed_projects, task_index, webhook_registry
 logger = logging.getLogger(__name__)
 
 _MAX_REFRESH_PER_DELIVERY = 20
+
+# Completions are handled concurrently: each is a few sequential Asana calls
+# (~430ms apiece), so a 17-completion batch run serially overran Asana's 10s
+# reply window and was redelivered hourly forever. task_complete.handle is
+# idempotent and verifies live state, so order across gids does not matter.
+_COMPLETION_WORKERS = 8
 
 # Steady state does no database read on the delivery path. Correctness never
 # depends on the cache: a miss falls through to Postgres, and a miss during a
@@ -143,6 +150,21 @@ def _mark_digest_dirty() -> None:
         )
 
 
+def _complete_all(gids: list[str]) -> None:
+    """Run task_complete.handle for every gid concurrently. Every gid is
+    attempted even if one fails; the first failure is then re-raised so the
+    delivery 500s and Asana redelivers (handle is idempotent)."""
+    if not gids:
+        return
+    if len(gids) == 1:
+        task_complete.handle(gids[0])
+        return
+    with ThreadPoolExecutor(max_workers=min(_COMPLETION_WORKERS, len(gids))) as pool:
+        futures = [pool.submit(task_complete.handle, gid) for gid in gids]
+    for future in futures:
+        future.result()  # pool exit already joined; raises the first failure
+
+
 def receive(body: bytes, signature: str, project_gid: str | None = None) -> tuple:
     """Validate and dispatch one webhook delivery.
 
@@ -154,7 +176,7 @@ def receive(body: bytes, signature: str, project_gid: str | None = None) -> tupl
         return "", 401
 
     payload = json.loads(body or b"{}")
-    handled = 0
+    complete_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     refresh_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     delete_gids: dict[str, None] = {}  # insertion-ordered de-dupe
     changed_gids: dict[str, None] = {}  # insertion-ordered de-dupe
@@ -172,8 +194,7 @@ def receive(body: bytes, signature: str, project_gid: str | None = None) -> tupl
         action = event.get("action")
         field = (event.get("change") or {}).get("field")
         if action == "changed" and field == "completed":
-            task_complete.handle(resource["gid"])
-            handled += 1
+            complete_gids[resource["gid"]] = None
             digest_relevant = True
         elif action in ("deleted", "removed"):
             delete_gids[resource["gid"]] = None
@@ -185,6 +206,9 @@ def receive(body: bytes, signature: str, project_gid: str | None = None) -> tupl
     # delete wins: a gid deleted in this delivery is never also refreshed
     for gid in delete_gids:
         refresh_gids.pop(gid, None)
+
+    _complete_all(list(complete_gids))
+    handled = len(complete_gids)
 
     if digest_relevant:
         _mark_digest_dirty()

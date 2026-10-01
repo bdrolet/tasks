@@ -436,3 +436,30 @@ def test_story_event_without_parent_is_ignored(monkeypatch):
     body, sig = _signed([{"action": "added", "resource": {"gid": "s1", "resource_type": "story"}}])
     assert asana_webhook.receive(body, sig) == ("", 200)
     assert published == []
+
+
+def test_completions_run_concurrently_and_all_attempted(monkeypatch):
+    import threading
+
+    _capture(monkeypatch)
+    _published(monkeypatch)
+    monkeypatch.setattr(asana_webhook, "_mark_digest_dirty", lambda: None)
+    barrier = threading.Barrier(4, timeout=5)  # only passes if 4 run at once
+    seen = []
+
+    def handle(gid):
+        seen.append(gid)
+        barrier.wait()
+
+    monkeypatch.setattr(asana_webhook.task_complete, "handle", handle)
+    events = [
+        {
+            "action": "changed",
+            "resource": {"gid": f"c{i}", "resource_type": "task"},
+            "change": {"field": "completed"},
+        }
+        for i in range(4)
+    ]
+    body, sig = _signed(events)
+    assert asana_webhook.receive(body, sig) == ("", 200)
+    assert sorted(seen) == ["c0", "c1", "c2", "c3"]
