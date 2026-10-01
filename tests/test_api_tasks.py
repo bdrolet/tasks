@@ -83,6 +83,22 @@ def test_get_task_detail_with_comments(monkeypatch):
     assert body["comments"][0]["created_by"] == "Ben"
 
 
+def test_get_task_includes_completed_at(monkeypatch):
+    done = dict(DETAIL, completed=True, completed_at="2026-07-16T12:00:00Z")
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: done)
+    monkeypatch.setattr(asana, "get_stories", lambda gid: [])
+
+    body = client.get("/tasks/t1", headers=AUTH).json()
+    assert body["completed_at"] == "2026-07-16T12:00:00Z"
+
+
+def test_get_task_completed_at_null_when_open(monkeypatch):
+    monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: dict(DETAIL))
+    monkeypatch.setattr(asana, "get_stories", lambda gid: [])
+
+    assert client.get("/tasks/t1", headers=AUTH).json()["completed_at"] is None
+
+
 def test_get_task_404(monkeypatch):
     monkeypatch.setattr(asana, "get_task_detail", lambda gid, opt_fields=None: None)
     assert client.get("/tasks/nope", headers=AUTH).status_code == 404

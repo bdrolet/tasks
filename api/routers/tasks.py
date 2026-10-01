@@ -53,6 +53,7 @@ class TaskDetail(BaseModel):
     due_at: str | None = None
     created_at: str | None = None
     modified_at: str | None = None
+    completed_at: str | None = None
     permalink_url: str | None = None
     project: str | None = None
     section: str | None = None
@@ -248,6 +249,7 @@ def get_task(gid: str) -> TaskDetail:
         due_at=task.get("due_at"),
         created_at=task.get("created_at"),
         modified_at=task.get("modified_at"),
+        completed_at=task.get("completed_at"),
         permalink_url=task.get("permalink_url"),
         project=project_name,
         section=section_name,
