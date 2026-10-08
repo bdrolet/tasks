@@ -142,7 +142,8 @@ def test_blocked_parent_and_waiting_are_excluded():
     done_dep = facts("dd", points=1, completed=True)
     unblocked = facts("u", points=1, dependencies=("dd",))
     s = run(
-        [dep, blocked, parent, waiting, done_dep, unblocked], {"w": enr(waiting_on="the lawyer", waiting_confidence="high")}
+        [dep, blocked, parent, waiting, done_dep, unblocked],
+        {"w": enr(waiting_on="the lawyer", waiting_confidence="high")},
     ).by_gid()
     assert s["b"].bucket == "excluded:blocked"
     assert s["p"].bucket == "excluded:parent"
@@ -295,7 +296,13 @@ def test_stale_rules_each_trigger():
 def test_nudge_sorted_by_days_stale_desc():
     a = facts("a", points=1, modified_at=TS - timedelta(days=1))
     b = facts("b", points=1, modified_at=TS - timedelta(days=10))
-    scored = run([a, b], {"a": enr(waiting_on="x", waiting_confidence="high"), "b": enr(waiting_on="y", waiting_confidence="high")})
+    scored = run(
+        [a, b],
+        {
+            "a": enr(waiting_on="x", waiting_confidence="high"),
+            "b": enr(waiting_on="y", waiting_confidence="high"),
+        },
+    )
     assert [t.gid for t in pz.side_lists(scored)["nudge"]] == ["b", "a"]
 
 
@@ -564,7 +571,13 @@ def test_child_of_waiting_parent_is_a_nudge_under_the_parents_person():
 def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
     parent = facts("p", points=1)
     child = facts("c", points=1, parent_gid="p")
-    s = run([parent, child], {"p": enr(waiting_on="A", waiting_confidence="high"), "c": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
+    s = run(
+        [parent, child],
+        {
+            "p": enr(waiting_on="A", waiting_confidence="high"),
+            "c": enr(waiting_on="B", waiting_confidence="high"),
+        },
+    ).by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "B"
     assert s.components["inherited"] is None

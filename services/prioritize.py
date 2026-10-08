@@ -454,9 +454,7 @@ def select(
 def _is_must(t: ScoredTask, config: Config) -> bool:
     c = t.components
     days = c.get("days_until_due")
-    return (
-        c.get("due_source") == "hard" and days is not None and days <= config.hard_due_slack_days
-    )
+    return c.get("due_source") == "hard" and days is not None and days <= config.hard_due_slack_days
 
 
 def _sorted_pins(tasks: list[ScoredTask]) -> list[ScoredTask]:
