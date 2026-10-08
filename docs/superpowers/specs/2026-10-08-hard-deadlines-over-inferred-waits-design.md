@@ -87,7 +87,9 @@ is re-enriched (§Rollout).
 `null` keeps its meaning: clear the override, fall back to the model.
 `Effective.pick` already treats `""` as a value, so `own.waiting_on` is
 falsy and the task never buckets as waiting; `waiting_source` is
-`override`. A `waiting:` tag still wins over everything, including this.
+`override`. An own `waiting:` tag still wins over it; an ancestor's
+hand-set wait does not — the child's explicit answer is the more specific
+one.
 
 `task-next override <ref> waiting_on=-` sends `""` (`waiting_on=` with
 nothing after it already means clear and keeps meaning that; `-` is the
@@ -100,8 +102,14 @@ anyone" / "I'm not waiting on that" to this call.
 waiting takes the first ancestor whose `waiting_on` is set **and** whose
 `waiting_source` is `tag` or `override`. A model wait on a parent stays on
 the parent — which is `excluded:parent` anyway — and never reaches a
-child. Own state still wins over inherited, and a child's own model wait
-still buckets the child (subject to D4).
+child. Precedence across levels: a hand-set wait beats a model wait at any
+level, and among hand-set waits the nearer wins. A task's own `tag` or
+`override` decides outright and the ancestor walk is never consulted — an
+own `""` override (D2) means not waiting and stops the walk. Otherwise the
+nearest hand-set ancestor wait is inherited, even over the task's own model
+wait (and, being hand-set, it is never released by D4). Only when no
+hand-set wait exists at any level does a task's own model wait bucket it
+(subject to D4).
 
 Snooze, blocked and hard-due inheritance are unchanged.
 `components["inherited"]` keeps its shape and fires less often.
@@ -115,14 +123,20 @@ After `_bucket` and `_effective_due`, in `score_set`: a task bucketed
 re-bucketed to `next`. Its `waiting_on` stays on the row, and
 `components["wait_released"] = {"waiting_on": <who>, "slack": <days>}`
 records why it is there. A `tag` or `override` wait is never released. Snooze
-and blocked are untouched by this rule.
+and blocked are untouched by this rule. A task whose hard date has already
+passed (`days_until_due < 0`) is not released: the rule exists so a deadline
+surfaces *before* it passes, and a past-dated model wait is a stale nudge
+(an old meeting, a closed registration), not an imminent deadline —
+releasing those floods the EDF queue with overdue must-dos. One still
+genuinely needed is rescued with `waiting_on=-` or a pin. Due today is not
+past and is released.
 
 Raw slack, not EDF `effective_slack`, because the task was not in the
 feasibility queue when bucketed; once released it joins the queue like any
 other hard-dated `next` task and gets an `effective_slack` of its own.
 
 The CLI and the agent render a released row in **Next** with the flag
-`waiting? <who>` — a question mark because the system is saying "the model
+`waiting?<who>` — a question mark because the system is saying "the model
 thought this was waiting, but the deadline is close; decide." Ben's
 answers are the existing moves: `waiting_on=-` (not waiting; D2), or
 `waiting_on=<who>` (it really is; the override holds and the task returns to
@@ -164,12 +178,15 @@ are must-dos. Before this change the first notice would have been 10-14.
 ### D6 — Schema changes invalidate the enrichment cache
 
 `services/enrichment.py` prefixes the content hash with a schema version:
-`sha256("v2\n" + name + "\n" + notes + "\n" + comments)`. Bumping the
-version makes every stored hash stale, so the next `day_changed` heal (D8
-of the original spec) republishes every candidate and re-enriches it with
-the new prompt and schema — ~200 Opus calls once, a few dollars, no
-backfill script. Until a task is re-enriched, D1's default (`medium`)
-keeps its current wait; D3 and D4 protect hard-dated tasks regardless.
+`sha256("v2\n" + name + "\n" + notes + "\n" + comments)`. The version is
+in the hash so that a re-gathered task computes a new hash, finds it ≠ the
+stored one, and re-enriches. The bump alone does not reach an untouched
+task — the heal (D8 of the original spec) compares two stored values, both
+written under v1 — so `heal` also republishes any task whose stored
+enrichment `raw` lacks a key the current `SCHEMA` requires. The next
+`day_changed` therefore re-enriches every pre-v2 row with the new prompt
+and schema — ~200 Opus calls once, a few dollars, no backfill script.
+Until a task is re-enriched, D1's default (`medium`) keeps its current wait; D3 and D4 protect hard-dated tasks regardless.
 
 ## Changes by component
 
@@ -180,7 +197,7 @@ keeps its current wait; D3 and D4 protect hard-dated tasks regardless.
 | `services/prioritize.py` | `Effective.waiting_source`; low-confidence model wait dropped in `effective()`; `_State.waiting_source`; `_bucket` inherits tag/override waits only (D3); release step in `score_set` (D4); `_is_must` on `effective_slack` (D5); new `components` keys `waiting_source`, `waiting_confidence`, `wait_released` |
 | `services/prioritize_config.py`, `config/prioritize.toml` | `hard_due_slack_days` replaces `hard_due_window_days` (a config still naming the old key fails to load — it is a rename, not an alias) |
 | `api/routers/next.py` | `OverridesRequest.waiting_on` accepts `""`; `TaskRow` gains `wait_released: bool` (from `components`) so callers need not ask for `explain` |
-| `scripts/task_next.py` | `waiting_on=-` → `""` (D2); `waiting? <who>` flag on released rows; must-do flag reads `due in N days` / `due today` / `due tomorrow` / `overdue` from `days_until_due` |
+| `scripts/task_next.py` | `waiting_on=-` → `""` (D2); `waiting?<who>` flag on released rows; must-do flag reads `due in Nd` / `due today` / `due tomorrow` / `overdue` from `days_until_due` (flag tokens space-joined) |
 | `.claude/agents/task-next.md`, `.claude/skills/prioritizing-tasks/SKILL.md` | the `waiting?` flag and what to do with it; "not waiting" phrasing → `waiting_on=-`; must-do wording; inheritance note (hand-set waits only) |
 | `docs/superpowers/specs/2026-09-23-next-prioritizer-design.md` | one-line "amended by this spec" pointers under D9, D11, D14, D16 |
 | `docs/prioritize-audit.md` | mention `wait_released` in the components list if it enumerates them |
@@ -239,8 +256,8 @@ from the pre-version hash for the same content.
 it; `null` clears; rows carry `wait_released`.
 
 `tests/test_task_next.py`: `waiting_on=-` sends `""`; `waiting_on=` sends
-`null`; a released row renders `waiting? <who>`; a must-do five days out
-renders `due in 5 days`.
+`null`; a released row renders `waiting?<who>`; a must-do five days out
+renders `due in 5d`.
 
 `tests/test_prioritize_config.py`: `hard_due_slack_days` loads; a config
 with only `hard_due_window_days` fails.
@@ -250,7 +267,9 @@ with only `hard_due_window_days` fails.
 1. Deploy (`tasks-prioritize` CF and `tasks-api`), with the config rename
    in the same change.
 2. The next `day_changed` tick (05:45 ET) heals every task whose stored
-   hash no longer matches (all of them, D6) and re-enriches. Until then,
+   enrichment lacks a field the v2 schema requires (all of them, D6) and
+   re-enriches it — ~200 calls once; a re-gathered task re-enriches anyway
+   because its v2 hash differs from the stored v1 one. Until then,
    stored waits read as `medium` and D3/D4 already apply to the next
    rescore, so the filings surface on the first event after deploy — or
    `scripts/backfill_prioritize.py` forces it.

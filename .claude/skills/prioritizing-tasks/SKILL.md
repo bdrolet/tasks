@@ -50,9 +50,11 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
   - Nudge is presented grouped by `waiting_on` (who is owed), largest first.
   - Subtasks inherit: snoozing or blocking a parent, or a wait Ben set on
     it (`waiting:` tag or override), covers its subtasks
-    (`components.inherited` names the ancestor); a model-inferred wait on a
-    parent does not. A pin overrides an inherited block or wait, never an
-    inherited snooze.
+    (`components.inherited` names the ancestor) unless the subtask has its
+    own `waiting:` tag or override (including `""`, not waiting); a subtask's
+    model guess never overrides a parent's hand-set wait, and a
+    model-inferred wait on a parent does not inherit. A pin overrides an
+    inherited block or wait, never an inherited snooze.
   - A model-inferred wait counts only at medium/high `waiting_confidence`,
     and is set aside on a hard-dated task once slack ≤ 5 days
     (`wait_released: true`, shown as `waiting? <who>`).

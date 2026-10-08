@@ -594,11 +594,43 @@ def test_child_of_model_waiting_parent_is_not_waiting():
 def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
     parent = facts("p", points=1, tags=("waiting:A",))
     child = facts("c", points=1, parent_gid="p")
-    s = run([parent, child], {"c": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
+    s = run([parent, child], overrides={"c": Overrides(fields={"waiting_on": "B"})}).by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "B"
-    assert s.components["waiting_source"] == "model"
+    assert s.components["waiting_source"] == "override"
     assert s.components["inherited"] is None
+
+
+def test_hand_set_parent_wait_beats_childs_model_wait():
+    parent = facts("p", points=1, tags=("waiting:A",))
+    child = facts("c", points=1, parent_gid="p", due_on=TODAY + timedelta(days=3))
+    s = run([parent, child], {"c": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
+    assert s.bucket == "nudge"
+    assert s.components["waiting_on"] == "A"
+    assert s.components["waiting_source"] == "tag"
+    assert s.components["inherited"] == {"state": "waiting", "from": "p"}
+    assert s.components["wait_released"] is None  # never released past a hand-set wait
+
+
+def test_childs_not_waiting_override_stops_inherited_wait():
+    parent = facts("p", points=1, tags=("waiting:A",))
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], overrides={"c": Overrides(fields={"waiting_on": ""})}).by_gid()["c"]
+    assert s.bucket == "next"
+    assert s.components["waiting_on"] is None
+    assert s.components["waiting_source"] == "override"
+    assert s.components["inherited"] is None
+
+
+def test_tag_grandparent_behind_model_parent_is_inherited():
+    gp = facts("gp", points=1, tags=("waiting:A",))
+    p = facts("p", points=1, parent_gid="gp")
+    c = facts("c", points=1, parent_gid="p")
+    s = run([gp, p, c], {"p": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
+    assert s.bucket == "nudge"
+    assert s.components["waiting_on"] == "A"
+    assert s.components["waiting_source"] == "tag"
+    assert s.components["inherited"] == {"state": "waiting", "from": "gp"}
 
 
 def test_grandchild_inherits_through_two_levels():
@@ -738,7 +770,8 @@ def test_low_confidence_model_wait_is_not_a_wait():
     for conf, bucket in (("low", "next"), ("medium", "nudge"), ("high", "nudge")):
         s = run([a], {"a": enr(waiting_on="someone", waiting_confidence=conf)}).by_gid()["a"]
         assert s.bucket == bucket, conf
-        assert s.components["waiting_confidence"] == conf
+        # reported only when the model's wait is the one in force (low = no wait)
+        assert s.components["waiting_confidence"] == (None if conf == "low" else conf)
     low = run([a], {"a": enr(waiting_on="someone", waiting_confidence="low")}).by_gid()["a"]
     assert low.components["waiting_on"] is None and low.components["waiting_source"] == "none"
 
@@ -788,6 +821,17 @@ def test_model_wait_holds_outside_the_slack_window():
     a = facts("a", points=5, due_on=TODAY + timedelta(days=7))  # raw slack 6.0 > N
     s = run([a], {"a": _model_wait()}).by_gid()["a"]
     assert s.bucket == "nudge" and s.components["wait_released"] is None
+
+
+def test_overdue_model_wait_is_not_released():
+    late = facts("l", points=5, due_on=TODAY - timedelta(days=1))  # raw slack -2
+    s = run([late], {"l": _model_wait()}).by_gid()["l"]
+    assert s.bucket == "nudge" and s.components["wait_released"] is None
+    # boundary: due today (raw slack -1) has not passed and IS released
+    today = facts("t", points=5, due_on=TODAY)
+    s = run([today], {"t": _model_wait()}).by_gid()["t"]
+    assert s.bucket == "next"
+    assert s.components["wait_released"] == {"waiting_on": "Michael", "slack": -1.0}
 
 
 def test_override_wait_is_never_released():
@@ -855,8 +899,8 @@ def test_edf_queue_makes_the_second_of_two_same_day_tasks_a_must_do_first():
     scored = run([a, b])
     slacks = sorted(t.components["effective_slack"] for t in scored.next())
     assert slacks == [5.0, 6.0]
-    musts = [t.gid for t in pz.select(scored.next(), CFG, n=1)]
-    assert len(musts) == 1 and scored.by_gid()[musts[0]].components["effective_slack"] == 5.0
+    lo, hi = sorted(scored.next(), key=lambda t: t.components["effective_slack"])
+    assert pz._is_must(lo, CFG) and not pz._is_must(hi, CFG)
 
 
 def test_overdue_hard_task_is_a_must_do():

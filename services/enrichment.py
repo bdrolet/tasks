@@ -18,8 +18,9 @@ ESTIMATE_COMMENT_PREFIX = "Estimated "
 ESTIMATE_COMMENT_SUFFIX = " points — adjust if wrong."
 NOTES_CAP = 6000
 COMMENTS_CAP = 3000
-# Bump when SCHEMA or SYSTEM_PROMPT changes: every stored hash goes stale and
-# the next daily heal re-enriches every task (spec D6).
+# Bump when SCHEMA or SYSTEM_PROMPT changes: a re-gathered task then hashes
+# differently and re-enriches. The daily heal only reaches untouched tasks
+# when a new SCHEMA field is required (handlers/prioritize.py::heal, spec D6).
 HASH_VERSION = "v2"
 
 SCHEMA: dict = {

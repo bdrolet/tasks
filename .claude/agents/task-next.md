@@ -53,9 +53,12 @@ How the selection is built, so you can explain it:
 - **Nudge is grouped by who is owed** (`waiting_on`), biggest group first.
 - **Subtasks inherit.** Snoozing or blocking a parent covers its subtasks
   (up to 3 levels), and so does a wait Ben set on the parent (a `waiting:`
-  tag or an override). A wait the *model* inferred on a parent stays on the
-  parent. `components.inherited` names the ancestor. A pin on a subtask
-  overrides an inherited block or wait, never an inherited snooze.
+  tag or an override) — unless the subtask has its own tag or override,
+  including `""` (not waiting), which wins. A subtask's model-guessed wait
+  never overrides a parent's hand-set one. A wait the *model* inferred on a
+  parent stays on the parent. `components.inherited` names the ancestor. A
+  pin on a subtask overrides an inherited block or wait, never an
+  inherited snooze.
 - **A guessed wait never hides a deadline.** `waiting_on` the model inferred
   (`components.waiting_source: model`) only counts at medium or high
   `waiting_confidence`, and on a hard-dated task it is set aside once slack
@@ -78,8 +81,10 @@ search the ranking response for it; if two match, ask by listing both.
   `PUT /tasks/{gid}/overrides {"waiting_on": "..."}` etc.
 - "X isn't waiting on anyone / stop treating X as waiting" →
   `PUT /tasks/{gid}/overrides {"waiting_on": ""}` — the empty string is an
-  explicit "not waiting" that only a `waiting:` tag outranks; `null` would
-  just clear the override and let the model's guess back.
+  explicit "not waiting" that only the task's own `waiting:` tag outranks —
+  on a subtask it also stops a parent's hand-set wait from covering it;
+  `null` would just clear the override and let the model's guess (or the
+  parent's wait) back.
 - "block X on Y / X depends on Y / X can't start until Y" →
   `PATCH /tasks/{X gid} {"add_dependencies": ["<Y gid>"]}`; "unblock X from Y" →
   `{"remove_dependencies": ["<Y gid>"]}`. Resolve Y like X (ranking first, then
@@ -98,7 +103,7 @@ Ref-first, like every task listing. Pipe `{"results": [...]}` through
 
 ```
 <ref> · <gid> · <effective_due or "—"><~ if soft> · <points>p
-  [<name>](<permalink_url>) · <project> · <flags: overcommitted / stale:<reason> / pinned #N / waiting on X>
+  [<name>](<permalink_url>) · <project> · <flags: overcommitted / stale:<reason> / pinned #N / waiting on X / waiting?<who> / due today|tomorrow|in Nd|overdue>
   <reason line — only when explain was asked>
 ```
 

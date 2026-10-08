@@ -197,10 +197,13 @@ def _bucket(
     config: Config,
 ) -> _Bucketed:
     """Order: completed, snoozed (own, then inherited), excluded project,
-    blocked (own, then inherited), parent, waiting (own, then inherited —
-    but only a tag or override wait inherits; a model's guess about the
-    parent says nothing about the work under it). A pin overrides only the
-    last three, own or inherited (D15, D16)."""
+    blocked (own, then inherited), parent, waiting. For waiting, a hand-set
+    (tag or override) wait beats a model wait at any level and the nearer
+    hand-set wait wins: an own tag/override decides outright (a "" override
+    means not waiting and stops the walk); otherwise the nearest hand-set
+    ancestor wait; otherwise the task's own model wait. A model's guess
+    about a parent never inherits. A pin overrides only the last three, own
+    or inherited (D15, D16)."""
     waiting_on, waiting_source = own.waiting_on, own.waiting_source
 
     def first(attr: str) -> str | None:
@@ -233,12 +236,18 @@ def _bucket(
         reason, inherited = "blocked", {"state": "blocked", "from": src}
     elif facts.num_open_subtasks > 0:
         reason = "parent"
-    elif own.waiting_on:
-        reason = "waiting"
+    elif own.waiting_source in ("tag", "override"):
+        # An own hand-set answer wins outright — including a "" override,
+        # which says "not waiting" and stops the ancestor walk.
+        if own.waiting_on:
+            reason = "waiting"
     elif src := first_hand_set_wait():
+        # A hand-set ancestor wait beats this task's own model guess.
         reason, inherited = "waiting", {"state": "waiting", "from": src}
         waiting_on = dict(ancestors)[src].waiting_on
         waiting_source = dict(ancestors)[src].waiting_source
+    elif own.waiting_on:
+        reason = "waiting"
     if reason is None:
         return _Bucketed("next", None, None, waiting_on, waiting_source)
     if ov.pinned_rank is not None:
@@ -299,11 +308,12 @@ def score_set(
         # A model's guess may not hide a hard deadline: inside the slack
         # window the task comes back to `next`, wait kept and flagged. A tag
         # or override wait is an instruction and holds. Raw slack here — the
-        # task was outside the EDF queue when it was bucketed.
+        # task was outside the EDF queue when it was bucketed. A date already
+        # past is a stale nudge, not an imminent deadline: it stays put.
         released = None
         if bucket == "nudge" and eff.waiting_source == "model" and source == "hard" and due:
             raw_slack = (due - today).days - effort
-            if raw_slack <= config.hard_due_slack_days:
+            if raw_slack <= config.hard_due_slack_days and (due - today).days >= 0:
                 bucket = "next"
                 released = {"waiting_on": eff.waiting_on, "slack": raw_slack}
         days_stale = max(0, (today - _local_date(f.modified_at)).days)
@@ -339,7 +349,9 @@ def score_set(
                 "energy": eff.energy,
                 "waiting_on": eff.waiting_on,
                 "waiting_source": eff.waiting_source,
-                "waiting_confidence": e.waiting_confidence,
+                "waiting_confidence": (
+                    e.waiting_confidence if eff.waiting_source == "model" else None
+                ),
                 "unenriched": e.unenriched,
                 "reason": e.reason,
                 "override": {

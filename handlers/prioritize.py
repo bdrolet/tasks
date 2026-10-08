@@ -498,6 +498,7 @@ def heal() -> int:
         index = repo.list_facts_index(conn)
         enrichment = repo.list_enrichment(conn)
         open_gids = repo.list_open_gids(conn)
+    required = set(en.SCHEMA["required"])
 
     def needs(gid: str, modified_at: str | None) -> bool:
         if gid not in index:
@@ -507,7 +508,11 @@ def heal() -> int:
         if modified and modified > fetched_at:
             return True
         stored = enrichment.get(gid)
-        return stored is None or stored[0] != content_hash
+        if stored is None or stored[0] != content_hash:
+            return True
+        # Schema drift: a row written before a field became required is
+        # re-enriched even though nothing about the task changed (spec D6).
+        return not required <= set(stored[1])
 
     republished = 0
     seen: set[str] = set()
