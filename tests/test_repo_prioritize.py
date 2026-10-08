@@ -145,6 +145,21 @@ def test_merge_overrides_appends_an_audit_event():
     }
 
 
+def test_merge_overrides_stores_empty_waiting_on_and_none_clears():
+    conn = RowsConn(row={"overrides": {}, "pinned_rank": None, "snooze_until": None})
+    out = repo.merge_overrides(conn, "t1", {"waiting_on": ""})
+    q, params = conn.executed[1]  # [0] is the SELECT behind get_overrides
+    assert "INSERT INTO task_overrides" in q
+    assert json.loads(params[1]) == {"waiting_on": ""}
+    assert out.fields == {"waiting_on": ""}
+    stored = {"overrides": {"waiting_on": ""}, "pinned_rank": None, "snooze_until": None}
+    conn = RowsConn(row=stored)
+    out = repo.merge_overrides(conn, "t1", {"waiting_on": None})
+    q, params = conn.executed[1]
+    assert json.loads(params[1]) == {}
+    assert out.fields == {}
+
+
 def test_clear_pin_appends_a_completion_event_only_when_a_pin_was_cleared():
     conn = RowsConn(
         row={"overrides": {"impact": "high"}, "pinned_rank": None, "snooze_until": None}

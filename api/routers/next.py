@@ -47,6 +47,7 @@ class RankedTask(BaseModel):
     stale: bool = False
     stale_reason: str | None = None
     waiting_on: str | None = None
+    wait_released: bool = False  # a model wait set aside because a hard deadline is near
     summary: str | None = None
     override: dict = {}
     components: dict | None = None
@@ -114,6 +115,7 @@ def _to_ranked(r: dict, *, explain: bool) -> RankedTask:
         stale=bool(r["stale"]),
         stale_reason=r["stale_reason"],
         waiting_on=c.get("waiting_on"),
+        wait_released=bool(c.get("wait_released")),
         summary=None,
         override=c.get("override") or {},
         components=c if explain else None,

@@ -40,19 +40,32 @@ BASE=https://tasks-api.drolet.cloud
 
 How the selection is built, so you can explain it:
 
-- **Must-dos first.** A hard due date (`due_on`, `due_source: hard`) today or
-  tomorrow is placed at the top of **Next** whatever its score, even past `n`
-  and the 5-point capacity — and it uses up capacity.
+- **Must-dos first.** A hard due date (`due_on`, `due_source: hard`) whose
+  slack — days until due, minus the work it needs, minus hard-dated work
+  queued ahead of it — is 5 days or less is placed at the top of **Next**
+  whatever its score, even past `n` and the 5-point capacity, and uses up
+  capacity. A day of work surfaces about a week out; an hour's a few days out.
 - **Inbox is not ranked.** Inbox tasks are triage, not work: bucket
   `excluded:project`, never in **Next**, and a pin cannot put one there.
 - **Starvation boost.** A project with no task in a recent daily pick gets up
   to +50% (`starvation_boost`) when the day's list is filled — no board is
   starved for days, but not every board appears every day.
 - **Nudge is grouped by who is owed** (`waiting_on`), biggest group first.
-- **Subtasks inherit.** Snoozing, blocking or marking a parent as waiting
-  covers its subtasks (up to 3 levels); `components.inherited` names the
-  ancestor. A pin on a subtask overrides an inherited block or wait, never
-  an inherited snooze.
+- **Subtasks inherit.** Snoozing or blocking a parent covers its subtasks
+  (up to 3 levels), and so does a wait Ben set on the parent (a `waiting:`
+  tag or an override) — unless the subtask has its own tag or override,
+  including `""` (not waiting), which wins. A subtask's model-guessed wait
+  never overrides a parent's hand-set one. A wait the *model* inferred on a
+  parent stays on the parent. `components.inherited` names the ancestor. A
+  pin on a subtask overrides an inherited block or wait, never an
+  inherited snooze.
+- **A guessed wait never hides a deadline.** `waiting_on` the model inferred
+  (`components.waiting_source: model`) only counts at medium or high
+  `waiting_confidence`, and on a hard-dated task it is set aside once slack
+  is within 5 days: the task is back in **Next** with `wait_released: true`.
+  Render it as `waiting? <who>` and, when asked, say the model thought it was
+  waiting and the deadline overruled that. Ben resolves it with "X isn't
+  waiting on anyone" or "X really is waiting on Y".
 
 ## Writes (only these)
 
@@ -66,6 +79,12 @@ search the ranking response for it; if two match, ask by listing both.
 - "I started X / working on X" → `PATCH /tasks/{gid} {"started_at": "<today>"}`.
 - "X is waiting on the lawyer / X is high impact / X is deep work" →
   `PUT /tasks/{gid}/overrides {"waiting_on": "..."}` etc.
+- "X isn't waiting on anyone / stop treating X as waiting" →
+  `PUT /tasks/{gid}/overrides {"waiting_on": ""}` — the empty string is an
+  explicit "not waiting" that only the task's own `waiting:` tag outranks —
+  on a subtask it also stops a parent's hand-set wait from covering it;
+  `null` would just clear the override and let the model's guess (or the
+  parent's wait) back.
 - "block X on Y / X depends on Y / X can't start until Y" →
   `PATCH /tasks/{X gid} {"add_dependencies": ["<Y gid>"]}`; "unblock X from Y" →
   `{"remove_dependencies": ["<Y gid>"]}`. Resolve Y like X (ranking first, then
@@ -84,12 +103,13 @@ Ref-first, like every task listing. Pipe `{"results": [...]}` through
 
 ```
 <ref> · <gid> · <effective_due or "—"><~ if soft> · <points>p
-  [<name>](<permalink_url>) · <project> · <flags: overcommitted / stale:<reason> / pinned #N / waiting on X>
+  [<name>](<permalink_url>) · <project> · <flags: overcommitted / stale:<reason> / pinned #N / waiting on X / waiting?<who> / due today|tomorrow|in Nd|overdue>
   <reason line — only when explain was asked>
 ```
 
-In **Next**, mark a must-do with `due today` / `due tomorrow` / `overdue` in
-its flags. In **Nudge**, group the rows under a heading per person owed —
+In **Next**, mark every hard-dated row with `due today` / `due tomorrow` /
+`overdue` / `due in Nd` in its flags, and a released wait with
+`waiting? <who>` (from `wait_released` + `waiting_on`). In **Nudge**, group the rows under a heading per person owed —
 `waiting_on` compared case-insensitively, `—` for none — largest group first,
 then by name; drop the redundant `waiting on X` flag inside a group:
 

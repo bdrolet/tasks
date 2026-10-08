@@ -58,7 +58,8 @@ excluded = ["Inbox"]          # gathered and stored, never ranked or selected (b
 default_n = 5
 diversity_penalty = 0.95      # same-day, per pick in the same project
 energy_penalty = 0.7
-hard_due_window_days = 1      # hard due_on <= today + N is selected first, beyond n and capacity
+hard_due_slack_days = 5       # hard due_on with effective_slack <= N is a must-do (beyond n and capacity);
+                              # the same N releases a model-inferred wait on a hard-dated task back into next
 
 [starvation]                  # cross-day fairness: boost a project's tasks the longer it has gone without a daily pick
 boost_per_day = 0.1

@@ -13,6 +13,8 @@ from services import enrichment as en
 from services import managed_projects
 
 TODAY = date(2026, 9, 23)
+# A stored enrichment `raw` carrying every key the current schema requires.
+FULL_RAW = {k: None for k in en.SCHEMA["required"]}
 TASK = {
     "gid": "t1",
     "name": "[P1] Reply to lawyer",
@@ -56,6 +58,7 @@ GOOD = {
     "story_points_suggested": 3,
     "points_confidence": "medium",
     "waiting_on": None,
+    "waiting_confidence": "medium",
     "due_date_inferred": None,
     "due_date_inferred_confidence": "low",
     "impact": "high",
@@ -463,12 +466,12 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
         repo,
         "list_enrichment",
         lambda c: {
-            "fresh": ("h1", {}),
-            "newer": ("h2", {}),
-            "stale-enrich": ("OLD", {}),
-            "parent": ("h4", {}),
-            "child": ("h5", {}),
-            "vanished": ("h6", {}),
+            "fresh": ("h1", FULL_RAW),
+            "newer": ("h2", FULL_RAW),
+            "stale-enrich": ("OLD", FULL_RAW),
+            "parent": ("h4", FULL_RAW),
+            "child": ("h5", FULL_RAW),
+            "vanished": ("h6", FULL_RAW),
         },
     )
     monkeypatch.setattr(
@@ -483,6 +486,32 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
     assert h.heal() == 5
     assert {g for g, _ in published} == {"newer", "missing", "stale-enrich", "child", "vanished"}
     assert all(s == "heal" for _, s in published)
+
+
+def test_heal_republishes_enrichment_missing_a_required_field(db, monkeypatch):
+    # Same facts hash as the stored enrichment and not modified since: only
+    # the pre-v2 raw (no waiting_confidence) marks "v1" stale (spec D6).
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    listing = [
+        {"gid": "v1", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0},
+        {"gid": "v2", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0},
+    ]
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing
+    )
+    monkeypatch.setattr(repo, "list_facts_index", lambda c: {"v1": (old, "h1"), "v2": (old, "h2")})
+    pre_v2 = {k: v for k, v in FULL_RAW.items() if k != "waiting_confidence"}
+    monkeypatch.setattr(
+        repo, "list_enrichment", lambda c: {"v1": ("h1", pre_v2), "v2": ("h2", FULL_RAW)}
+    )
+    monkeypatch.setattr(repo, "list_open_gids", lambda c: {"v1", "v2"})
+    published = []
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: published.append((gid, source))
+    )
+    assert h.heal() == 1
+    assert published == [("v1", "heal")]
 
 
 # ---- final-review fixes -----------------------------------------------------
@@ -723,7 +752,7 @@ def test_heal_republishes_a_modified_grandchild(db, monkeypatch):
     index = {g: (old, f"h-{g}") for g in ("top", "child", "grandchild")}
     monkeypatch.setattr(repo, "list_facts_index", lambda c: index)
     monkeypatch.setattr(
-        repo, "list_enrichment", lambda c: {g: (hsh, {}) for g, (_, hsh) in index.items()}
+        repo, "list_enrichment", lambda c: {g: (hsh, FULL_RAW) for g, (_, hsh) in index.items()}
     )
     monkeypatch.setattr(repo, "list_open_gids", lambda c: set(index))
     published = []
@@ -848,3 +877,12 @@ def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkey
     # only today's run exists: the project reads as never offered, not 0 days
     assert event.by_gid()["a"].components["days_since_project_offered"] is None
     assert event.by_gid()["a"].components["starvation_boost"] == 0.5
+
+
+def test_stored_enrichment_without_waiting_confidence_reads_as_medium():
+    from handlers.prioritize import _enrichment_from_raw
+
+    old_row = {k: v for k, v in GOOD.items() if k != "waiting_confidence"}
+    assert _enrichment_from_raw(old_row).waiting_confidence == "medium"
+    assert _enrichment_from_raw(GOOD).waiting_confidence == "medium"
+    assert _enrichment_from_raw({**GOOD, "waiting_confidence": "low"}).waiting_confidence == "low"

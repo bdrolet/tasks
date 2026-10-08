@@ -30,7 +30,7 @@ def test_repo_config_loads_with_spec_defaults():
     assert cfg.category_weight == {"Consulting": 1.0, "Ben's Board": 0.7}
     assert (cfg.default_n, cfg.diversity_penalty, cfg.energy_penalty) == (5, 0.95, 0.7)
     assert cfg.excluded_projects == ("Inbox",)
-    assert cfg.hard_due_window_days == 1
+    assert cfg.hard_due_slack_days == 5
     assert (cfg.starvation_boost_per_day, cfg.starvation_max_boost) == (0.1, 0.5)
     assert (cfg.stale_after_days, cfg.deferred_limit) == (45, 5)
     assert cfg.low_confidence_multiplier == 1.5 and cfg.min_effort_days == 0.25
@@ -76,3 +76,12 @@ def test_fingerprint_tracks_the_file_bytes(tmp_path):
     fa, fb = pc.load(str(a)).fingerprint, pc.load(str(b)).fingerprint
     assert len(fa) == 12 and fa == pc.load(str(a)).fingerprint
     assert fa != fb
+
+
+def test_old_window_key_no_longer_loads(tmp_path: Path):
+    p = tmp_path / "p.toml"
+    p.write_text(
+        pc.DEFAULT_PATH.read_text().replace("hard_due_slack_days = 5", "hard_due_window_days = 1")
+    )
+    with pytest.raises(KeyError):
+        pc.load(str(p))
