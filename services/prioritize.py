@@ -88,6 +88,7 @@ def effective(
         if "due_date_inferred" in o and o["due_date_inferred"]
         else enrichment.due_date_inferred_confidence
     )
+    waiting_on: str | None
     if tags.get("waiting"):
         waiting_on, waiting_source = tags["waiting"], "tag"
     elif o.get("waiting_on") is not None:
