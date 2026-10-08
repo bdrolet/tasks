@@ -148,6 +148,7 @@ class _State:
     snoozed: bool
     blocked: bool
     waiting_on: str | None
+    waiting_source: str  # tag | override | model | none
     completed: bool
     due_on: date | None
 
@@ -158,6 +159,7 @@ class _Bucketed:
     pinned_despite: str | None
     inherited: dict | None  # {"state": ..., "from": ancestor gid} when inheritance decided
     waiting_on: str | None  # effective, after inheritance
+    waiting_source: str  # effective, after inheritance
 
 
 def _own_state(
@@ -167,6 +169,7 @@ def _own_state(
         snoozed=bool(ov.snooze_until and ov.snooze_until > today),
         blocked=any(d in open_gids for d in facts.dependencies),
         waiting_on=eff.waiting_on,
+        waiting_source=eff.waiting_source,
         completed=facts.completed,
         due_on=facts.due_on,
     )
@@ -194,21 +197,35 @@ def _bucket(
     config: Config,
 ) -> _Bucketed:
     """Order: completed, snoozed (own, then inherited), excluded project,
-    blocked (own, then inherited), parent, waiting (own, then inherited).
-    A pin overrides only the last three, own or inherited (D15, D16)."""
-    waiting_on = own.waiting_on
+    blocked (own, then inherited), parent, waiting (own, then inherited —
+    but only a tag or override wait inherits; a model's guess about the
+    parent says nothing about the work under it). A pin overrides only the
+    last three, own or inherited (D15, D16)."""
+    waiting_on, waiting_source = own.waiting_on, own.waiting_source
 
     def first(attr: str) -> str | None:
         return next((gid for gid, st in ancestors if getattr(st, attr)), None)
 
+    def first_hand_set_wait() -> str | None:
+        return next(
+            (
+                gid
+                for gid, st in ancestors
+                if st.waiting_on and st.waiting_source in ("tag", "override")
+            ),
+            None,
+        )
+
     if facts.completed:
-        return _Bucketed("excluded:completed", None, None, waiting_on)
+        return _Bucketed("excluded:completed", None, None, waiting_on, waiting_source)
     if own.snoozed:
-        return _Bucketed("snoozed", None, None, waiting_on)
+        return _Bucketed("snoozed", None, None, waiting_on, waiting_source)
     if src := first("snoozed"):
-        return _Bucketed("snoozed", None, {"state": "snoozed", "from": src}, waiting_on)
+        return _Bucketed(
+            "snoozed", None, {"state": "snoozed", "from": src}, waiting_on, waiting_source
+        )
     if facts.project_name in config.excluded_projects:
-        return _Bucketed("excluded:project", None, None, waiting_on)
+        return _Bucketed("excluded:project", None, None, waiting_on, waiting_source)
     reason, inherited = None, None
     if own.blocked:
         reason = "blocked"
@@ -218,15 +235,16 @@ def _bucket(
         reason = "parent"
     elif own.waiting_on:
         reason = "waiting"
-    elif src := first("waiting_on"):
+    elif src := first_hand_set_wait():
         reason, inherited = "waiting", {"state": "waiting", "from": src}
         waiting_on = dict(ancestors)[src].waiting_on
+        waiting_source = dict(ancestors)[src].waiting_source
     if reason is None:
-        return _Bucketed("next", None, None, waiting_on)
+        return _Bucketed("next", None, None, waiting_on, waiting_source)
     if ov.pinned_rank is not None:
-        return _Bucketed("next", reason, inherited, waiting_on)
+        return _Bucketed("next", reason, inherited, waiting_on, waiting_source)
     bucket = "nudge" if reason == "waiting" else f"excluded:{reason}"
-    return _Bucketed(bucket, None, inherited, waiting_on)
+    return _Bucketed(bucket, None, inherited, waiting_on, waiting_source)
 
 
 def score_set(
@@ -272,8 +290,8 @@ def score_set(
         ancestors = _ancestors(f.gid, parent_of, states)
         bk = _bucket(f, states[f.gid], ov, ancestors, config)
         bucket, despite = bk.bucket, bk.pinned_despite
-        if bk.waiting_on != eff.waiting_on:
-            eff = replace(eff, waiting_on=bk.waiting_on)
+        if (bk.waiting_on, bk.waiting_source) != (eff.waiting_on, eff.waiting_source):
+            eff = replace(eff, waiting_on=bk.waiting_on, waiting_source=bk.waiting_source)
         due, source, due_from = _effective_due(f, eff, config, ancestors)
         effort = eff.points / config.points_per_day
         if eff.points_source != "field" and eff.points_confidence == "low":

@@ -557,29 +557,47 @@ def test_child_of_blocked_parent_is_blocked_until_the_dependency_completes():
     assert done.components["inherited"] is None
 
 
-def test_child_of_waiting_parent_is_a_nudge_under_the_parents_person():
-    parent = facts("p", points=1)
+def test_child_of_tag_waiting_parent_is_a_nudge_under_the_parents_person():
+    parent = facts("p", points=1, tags=("waiting:the consulate",))
     child = facts("c", points=1, parent_gid="p")
-    scored = run([parent, child], {"p": enr(waiting_on="the consulate", waiting_confidence="high")})
+    scored = run([parent, child])
     s = scored.by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "the consulate"
+    assert s.components["waiting_source"] == "tag"
     assert s.components["inherited"] == {"state": "waiting", "from": "p"}
     assert "c" in {t.gid for t in pz.side_lists(scored)["nudge"]}
 
 
-def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
+def test_child_of_override_waiting_parent_is_a_nudge():
     parent = facts("p", points=1)
     child = facts("c", points=1, parent_gid="p")
-    s = run(
-        [parent, child],
-        {
-            "p": enr(waiting_on="A", waiting_confidence="high"),
-            "c": enr(waiting_on="B", waiting_confidence="high"),
-        },
-    ).by_gid()["c"]
+    s = run([parent, child], overrides={"p": Overrides(fields={"waiting_on": "FTB"})}).by_gid()["c"]
+    assert s.bucket == "nudge" and s.components["waiting_on"] == "FTB"
+    assert s.components["waiting_source"] == "override"
+    assert s.components["inherited"] == {"state": "waiting", "from": "p"}
+
+
+def test_child_of_model_waiting_parent_is_not_waiting():
+    parent = facts("p", points=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], {"p": enr(waiting_on="FTB", waiting_confidence="high")}).by_gid()
+    # the parent's own wait still holds on the parent (it buckets excluded:parent
+    # because it has an open child, but its own wait is recorded)
+    assert s["p"].components["waiting_on"] == "FTB"
+    assert s["p"].components["waiting_source"] == "model"
+    assert s["c"].bucket == "next"
+    assert s["c"].components["waiting_on"] is None
+    assert s["c"].components["inherited"] is None
+
+
+def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
+    parent = facts("p", points=1, tags=("waiting:A",))
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], {"c": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "B"
+    assert s.components["waiting_source"] == "model"
     assert s.components["inherited"] is None
 
 
