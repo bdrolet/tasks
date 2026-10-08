@@ -40,16 +40,22 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
 - `POST /next` — today's selection (capacity 5 points, diversity across
   projects, optional `energy` deep|shallow and `n`) plus `overcommitted`,
   `stale`, `nudge`. Logs a `manual` run; never bumps deferral counters.
-  - Must-dos first: a hard `due_on` today or tomorrow (or overdue) leads the
+  - Must-dos first: a hard `due_on` whose effective slack (days until due
+    minus the work it needs minus hard work queued ahead) is ≤ 5 leads the
     list whatever its score, beyond `n` and capacity, and consumes capacity.
   - Inbox is excluded: its tasks bucket `excluded:project`, never selected;
     a pin does not override that.
   - Starvation boost: a project not in a recent daily pick gets up to +50%
     at selection (`starvation_boost`), so no board goes days unpicked.
   - Nudge is presented grouped by `waiting_on` (who is owed), largest first.
-  - Subtasks inherit: snoozing, blocking or marking a parent as waiting
-    covers its subtasks (`components.inherited` names the ancestor); a pin
-    overrides an inherited block or wait, never an inherited snooze.
+  - Subtasks inherit: snoozing or blocking a parent, or a wait Ben set on
+    it (`waiting:` tag or override), covers its subtasks
+    (`components.inherited` names the ancestor); a model-inferred wait on a
+    parent does not. A pin overrides an inherited block or wait, never an
+    inherited snooze.
+  - A model-inferred wait counts only at medium/high `waiting_confidence`,
+    and is set aside on a hard-dated task once slack ≤ 5 days
+    (`wait_released: true`, shown as `waiting? <who>`).
   - An undated subtask takes its nearest ancestor's due date as a hard date
     (`components.due_from` names the ancestor), so it can be a must-do.
 - Dependencies ("block X on Y" / "X depends on Y" / "unblock X from Y"):
@@ -60,9 +66,9 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
   `nudge` | `snoozed` | `excluded`; or `list` = `overcommitted` | `stale` |
   `nudge`. `explain=true` adds `components` (P, U, I, B, A, C, points,
   effective_due, due_source (hard | inferred | horizon | none), soft, slack,
-  effective_slack, days_stale, starvation_boost, unenriched) and
+  effective_slack, days_stale, starvation_boost, waiting_source (tag | override | model | none), waiting_confidence, wait_released, unenriched) and
   the model's one-line `reason`.
-- Overrides (`PUT /tasks/{gid}/overrides`, null clears): `pinned_rank`
+- Overrides (`PUT /tasks/{gid}/overrides`, null clears; `waiting_on: ""` means not waiting — CLI `waiting_on=-`): `pinned_rank`
   (holds that position regardless of score), `snooze_until`, and field
   overrides `waiting_on`, `impact`, `energy`, `due_date_inferred`,
   `story_points`. Tags beat overrides: `impact:high`, `energy:deep`,
