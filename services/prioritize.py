@@ -445,8 +445,9 @@ def select(
     """Must-dos first, then a greedy fill; pins inserted at their rank
     afterwards and count toward neither n nor capacity (P5).
 
-    Must-dos are hard-dated tasks due within hard_due_window_days (overdue
-    included), by score: placed whatever n, capacity, energy or diversity
+    Must-dos are hard-dated tasks whose effective_slack is within
+    hard_due_slack_days (overdue included), by score: placed whatever n,
+    capacity, energy or diversity
     say, but they consume capacity and count as a pick of their project.
     The fill ranks by score * (1 + starvation_boost) * energy factor, with
     the same-project diversity haircut after every pick, and stops at n
@@ -481,9 +482,14 @@ def select(
 
 
 def _is_must(t: ScoredTask, config: Config) -> bool:
+    """Hard-dated and, after the EDF pass, within hard_due_slack_days of
+    being too late — so a day of work gets a week's notice and an hour's
+    gets a few days'. Overdue is negative slack."""
     c = t.components
-    days = c.get("days_until_due")
-    return c.get("due_source") == "hard" and days is not None and days <= config.hard_due_slack_days
+    slack = c.get("effective_slack")
+    return (
+        c.get("due_source") == "hard" and slack is not None and slack <= config.hard_due_slack_days
+    )
 
 
 def _sorted_pins(tasks: list[ScoredTask]) -> list[ScoredTask]:

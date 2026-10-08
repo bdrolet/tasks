@@ -236,6 +236,7 @@ def test_next_reselection_honours_must_do_and_starvation(monkeypatch):
             row("must", 2, rank=1, score=0.2, project="Family", points=4),
             due_source="hard",
             days_until_due=0,
+            effective_slack=0.0,
             starvation_boost=0.0,
         ),
         _with(

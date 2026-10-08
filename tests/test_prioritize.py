@@ -834,3 +834,46 @@ def test_released_task_joins_feasibility_and_can_be_a_must_do():
     s = scored.by_gid()["a"]
     assert s.components["effective_slack"] == 2.0 and s.components["simulated_start"] == 0.0
     assert [t.gid for t in pz.select(scored.next(), CFG, n=1)] == ["a"]
+
+
+def test_must_do_is_decided_by_effective_slack():
+    # 5 points = 1 effort day. EDF queue: near is first (due in 6 → slack 5 →
+    # must-do); far is second (due in 8, minus its own day and near's → slack 6 → not).
+    near = facts("n", name="[P3] file it", points=5, due_on=TODAY + timedelta(days=6))
+    far = facts("f", name="[P3] file it", points=5, due_on=TODAY + timedelta(days=8))
+    quick = facts("q", name="[P0] hot", points=1, due_on=TODAY + timedelta(days=20))
+    scored = run([near, far, quick])
+    picked = [t.gid for t in pz.select(scored.next(), CFG, n=1)]
+    assert picked[0] == "n" and "f" not in picked
+
+
+def test_edf_queue_makes_the_second_of_two_same_day_tasks_a_must_do_first():
+    # both due in 7 days with 1 effort day: alone each has slack 6 (not a
+    # must-do); queued, the second has slack 5 and is one.
+    a = facts("a", name="[P1] x", points=5, due_on=TODAY + timedelta(days=7))
+    b = facts("b", name="[P1] y", points=5, due_on=TODAY + timedelta(days=7))
+    scored = run([a, b])
+    slacks = sorted(t.components["effective_slack"] for t in scored.next())
+    assert slacks == [5.0, 6.0]
+    musts = [t.gid for t in pz.select(scored.next(), CFG, n=1)]
+    assert len(musts) == 1 and scored.by_gid()[musts[0]].components["effective_slack"] == 5.0
+
+
+def test_overdue_hard_task_is_a_must_do():
+    late = facts("l", name="[P3] late", points=1, due_on=TODAY - timedelta(days=3))
+    quick = facts("q", name="[P0] hot", points=1, due_on=TODAY + timedelta(days=20))
+    assert pz.select(run([late, quick]).next(), CFG, n=1)[0].gid == "l"
+
+
+def test_undated_task_is_never_a_must_do():
+    from models.prioritize import ScoredTask
+
+    t = ScoredTask(
+        gid="u",
+        bucket="next",
+        score=1.0,
+        position=1,
+        rank=None,
+        components={"due_source": "none", "effective_slack": None},
+    )
+    assert pz._is_must(t, CFG) is False
