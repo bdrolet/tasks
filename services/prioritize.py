@@ -440,7 +440,7 @@ def _is_must(t: ScoredTask, config: Config) -> bool:
     c = t.components
     days = c.get("days_until_due")
     return (
-        c.get("due_source") == "hard" and days is not None and days <= config.hard_due_window_days
+        c.get("due_source") == "hard" and days is not None and days <= config.hard_due_slack_days
     )
 
 

@@ -210,7 +210,7 @@ def test_diversity_penalty_mixes_projects():
 
 
 def test_selection_respects_capacity_and_n():
-    fs = [facts(f"t{i}", points=3, due_on=TODAY + timedelta(days=i + 1)) for i in range(6)]
+    fs = [facts(f"t{i}", points=3, due_on=TODAY + timedelta(days=i + 10)) for i in range(6)]
     scored = run(fs)
     assert sum(t.points for t in pz.select(scored.next(), CFG)) >= CFG.points_per_day
     assert len(pz.select(scored.next(), CFG)) == 2  # 3 + 3 fills 5
@@ -218,8 +218,8 @@ def test_selection_respects_capacity_and_n():
 
 
 def test_energy_flag_demotes_mismatches():
-    deep = facts("d", points=1, due_on=TODAY + timedelta(days=2))
-    shallow = facts("s", points=1, due_on=TODAY + timedelta(days=2))
+    deep = facts("d", points=1, due_on=TODAY + timedelta(days=10))
+    shallow = facts("s", points=1, due_on=TODAY + timedelta(days=10))
     scored = run([deep, shallow], {"d": enr(energy="deep"), "s": enr(energy="shallow")})
     assert pz.select(scored.next(), CFG, n=1, energy="shallow")[0].gid == "s"
     assert pz.select(scored.next(), CFG, n=1, energy="deep")[0].gid == "d"
@@ -444,7 +444,7 @@ def test_past_horizon_is_not_stale_but_past_inferred_is():
 def test_hard_due_today_is_selected_first_beyond_n_and_consumes_capacity():
     must = facts("m", name="[P3] file it", points=4, due_on=TODAY)
     highs = [
-        facts(f"h{i}", name="[P0] big", points=1, due_on=TODAY + timedelta(days=3))
+        facts(f"h{i}", name="[P0] big", points=1, due_on=TODAY + timedelta(days=10))
         for i in range(4)
     ]
     scored = run([must, *highs])
@@ -462,14 +462,14 @@ def test_every_hard_must_do_is_placed_even_past_n_and_capacity():
         facts(f"m{i}", name="[P3] x", points=3, due_on=TODAY + timedelta(days=d))
         for i, d in enumerate((-2, 0, 1))
     ]
-    other = facts("o", name="[P0] y", points=1, due_on=TODAY + timedelta(days=5))
+    other = facts("o", name="[P0] y", points=1, due_on=TODAY + timedelta(days=10))
     picked = pz.select(run([*musts, other]).next(), CFG, n=1)
     assert {t.gid for t in picked} == {"m0", "m1", "m2"}
 
 
 def test_must_do_ignores_soft_dates_inside_the_window():
     inferred = facts("i", name="[P3] x", points=1)
-    top = facts("t", name="[P0] y", points=1, due_on=TODAY + timedelta(days=5))
+    top = facts("t", name="[P0] y", points=1, due_on=TODAY + timedelta(days=10))
     scored = run(
         [inferred, top],
         {"i": enr(due_date_inferred=TODAY, due_date_inferred_confidence="high")},
