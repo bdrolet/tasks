@@ -8,7 +8,7 @@
     task-next points <ref|gid> <n>
     task-next pin <ref|gid> <position> | unpin <ref|gid>
     task-next snooze <ref|gid> <YYYY-MM-DD> | unsnooze <ref|gid>
-    task-next override <ref|gid> field=value ... (field= clears)
+    task-next override <ref|gid> field=value ... (field= clears; waiting_on=- means not waiting)
     task-next block <ref|gid> <blocker ref|gid>    # X depends on the blocker
     task-next unblock <ref|gid> <blocker ref|gid>
     task-next calibrate
@@ -76,10 +76,28 @@ def _refs(tasks: list[dict]) -> dict[str, str]:
     return task_ref.assign([t["task_gid"] for t in tasks])
 
 
-def _line(t: dict, refs: dict[str, str], explain: bool) -> str:
+def _due_flag(t: dict, today: str | None) -> str:
+    """'due today' / 'due tomorrow' / 'overdue' / 'due in Nd' for a hard-dated
+    row; '' for soft or undated rows. Hard dates inside the must-do window
+    are what select() forces to the top, so every hard date in Next shows
+    its distance."""
+    due = t.get("effective_due")
+    if not today or not due or t.get("soft"):
+        return ""
+    days = (date.fromisoformat(due) - date.fromisoformat(today)).days
+    if days < 0:
+        return "overdue"
+    if days == 0:
+        return "due today"
+    if days == 1:
+        return "due tomorrow"
+    return f"due in {days}d"
+
+
+def _line(t: dict, refs: dict[str, str], explain: bool, today: str | None = None) -> str:
     due = t.get("effective_due") or "—"
     soft = "~" if t.get("soft") else ""
-    flags = "".join(
+    marks = "".join(
         s
         for s, on in (
             ("!", t.get("overcommitted")),
@@ -88,6 +106,11 @@ def _line(t: dict, refs: dict[str, str], explain: bool) -> str:
         )
         if on
     )
+    words = [
+        f"waiting?{t.get('waiting_on') or '?'}" if t.get("wait_released") else "",
+        _due_flag(t, today),
+    ]
+    flags = " ".join(p for p in (marks, *words) if p)
     row = [
         refs[t["task_gid"]],
         t["task_gid"],
@@ -129,7 +152,8 @@ def render_lists(payload: dict, explain: bool = False) -> str:
         if key == "nudge" and rows:
             out += _nudge_groups(rows, refs, explain)
         else:
-            out += [_line(t, refs, explain) for t in rows] or ["—"]
+            today = payload.get("today") if key == "next" else None
+            out += [_line(t, refs, explain, today) for t in rows] or ["—"]
     if payload.get("unenriched"):
         out.append(f"({payload['unenriched']} task(s) scored with defaults — enrichment pending)")
     return "\n".join(out)
@@ -285,9 +309,14 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit(
                     f"task-next: unknown field {key!r}; one of {', '.join(OVERRIDE_FIELDS)}"
                 )
-            patch[key] = (
-                (int(value) if key in ("story_points", "pinned_rank") else value) if value else None
-            )
+            if key == "waiting_on" and value == "-":
+                patch[key] = ""  # explicit "not waiting" (spec D2); `waiting_on=` still clears
+            else:
+                patch[key] = (
+                    (int(value) if key in ("story_points", "pinned_rank") else value)
+                    if value
+                    else None
+                )
         _overrides(gid, patch)
     elif args.cmd == "block":
         blocker = resolve_for_write(args.blocker, args)

@@ -232,3 +232,44 @@ def test_block_resolves_both_refs(api):
     tn.main(["block", ref_a, ref_c])
     writes = [c for c in api if c[0] == "PATCH"]
     assert writes == [("PATCH", "/tasks/a", {"add_dependencies": ["c"]}, None)]
+
+
+def test_override_dash_means_not_waiting(api):
+    gid = "1218118170820306"
+    tn.main(["override", gid, "waiting_on=-"])
+    tn.main(["override", gid, "waiting_on="])
+    writes = [c for c in api if c[0] == "PUT"]
+    assert writes[-2][2] == {"waiting_on": ""}
+    assert writes[-1][2] == {"waiting_on": None}
+
+
+def test_released_row_shows_waiting_flag_and_due_flag():
+    payload = {
+        "today": "2026-09-23",
+        "next": [
+            T("r", wait_released=True, waiting_on="Michael", effective_due="2026-09-30"),
+            T("t", effective_due="2026-09-23"),
+            T("m", effective_due="2026-09-24"),
+            T("o", effective_due="2026-09-20"),
+            T("s", effective_due="2026-09-30", soft=True),
+        ],
+        "overcommitted": [],
+        "stale": [],
+        "nudge": [],
+    }
+    lines = tn.render_lists(payload).splitlines()
+    flags = {
+        line.split("\t")[1]: line.split("\t")[6]
+        for line in lines
+        if "\t" in line and not line.startswith("#")
+    }
+    assert flags["r"] == "waiting?Michael due in 7d"
+    assert flags["t"] == "due today"
+    assert flags["m"] == "due tomorrow"
+    assert flags["o"] == "overdue"
+    assert flags["s"] == ""
+
+
+def test_due_flag_tolerates_missing_dates():
+    assert tn._due_flag({"effective_due": None, "soft": False}, "2026-09-23") == ""
+    assert tn._due_flag({"effective_due": "2026-09-30", "soft": False}, None) == ""
