@@ -56,6 +56,7 @@ GOOD = {
     "story_points_suggested": 3,
     "points_confidence": "medium",
     "waiting_on": None,
+    "waiting_confidence": "medium",
     "due_date_inferred": None,
     "due_date_inferred_confidence": "low",
     "impact": "high",
@@ -848,3 +849,12 @@ def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkey
     # only today's run exists: the project reads as never offered, not 0 days
     assert event.by_gid()["a"].components["days_since_project_offered"] is None
     assert event.by_gid()["a"].components["starvation_boost"] == 0.5
+
+
+def test_stored_enrichment_without_waiting_confidence_reads_as_medium():
+    from handlers.prioritize import _enrichment_from_raw
+
+    old_row = {k: v for k, v in GOOD.items() if k != "waiting_confidence"}
+    assert _enrichment_from_raw(old_row).waiting_confidence == "medium"
+    assert _enrichment_from_raw(GOOD).waiting_confidence == "medium"
+    assert _enrichment_from_raw({**GOOD, "waiting_confidence": "low"}).waiting_confidence == "low"

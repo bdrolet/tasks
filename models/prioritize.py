@@ -37,6 +37,7 @@ class Enrichment:
     story_points_suggested: int | None
     points_confidence: str
     waiting_on: str | None
+    waiting_confidence: str  # low | medium | high — how sure the model is about waiting_on
     due_date_inferred: date | None
     due_date_inferred_confidence: str
     impact: str
@@ -52,6 +53,7 @@ Enrichment.DEFAULT = Enrichment(
     story_points_suggested=None,
     points_confidence="low",
     waiting_on=None,
+    waiting_confidence="low",
     due_date_inferred=None,
     due_date_inferred_confidence="low",
     impact="medium",
