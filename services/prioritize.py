@@ -296,6 +296,16 @@ def score_set(
         effort = eff.points / config.points_per_day
         if eff.points_source != "field" and eff.points_confidence == "low":
             effort *= config.low_confidence_multiplier
+        # A model's guess may not hide a hard deadline: inside the slack
+        # window the task comes back to `next`, wait kept and flagged. A tag
+        # or override wait is an instruction and holds. Raw slack here — the
+        # task was outside the EDF queue when it was bucketed.
+        released = None
+        if bucket == "nudge" and eff.waiting_source == "model" and source == "hard" and due:
+            raw_slack = (due - today).days - effort
+            if raw_slack <= config.hard_due_slack_days:
+                bucket = "next"
+                released = {"waiting_on": eff.waiting_on, "slack": raw_slack}
         days_stale = max(0, (today - _local_date(f.modified_at)).days)
         offered = last_offered.get(f.project_name or "")
         days_offered = (today - offered).days if offered is not None else None
@@ -339,6 +349,7 @@ def score_set(
                 },
                 "pinned_despite": despite,
                 "inherited": bk.inherited,
+                "wait_released": released,
                 "starvation_boost": boost,
                 "days_since_project_offered": days_offered,
             },

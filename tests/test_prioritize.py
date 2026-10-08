@@ -768,3 +768,69 @@ def test_empty_waiting_tag_is_ignored():
     t = facts("t", points=1, tags=("waiting:",))
     s = run([t]).by_gid()["t"]
     assert s.bucket == "next" and s.components["waiting_source"] == "none"
+
+
+def _model_wait(who="Michael"):
+    return enr(waiting_on=who, waiting_confidence="high")
+
+
+def test_model_wait_is_released_near_a_hard_deadline():
+    # 5 points = 1.0 effort day; due in 6 days → raw slack 5.0 == N → released
+    a = facts("a", points=5, due_on=TODAY + timedelta(days=6))
+    s = run([a], {"a": _model_wait()}).by_gid()["a"]
+    assert s.bucket == "next"
+    assert s.components["waiting_on"] == "Michael"  # kept, for the waiting? flag
+    assert s.components["wait_released"] == {"waiting_on": "Michael", "slack": 5.0}
+    assert s.components["due_source"] == "hard"
+
+
+def test_model_wait_holds_outside_the_slack_window():
+    a = facts("a", points=5, due_on=TODAY + timedelta(days=7))  # raw slack 6.0 > N
+    s = run([a], {"a": _model_wait()}).by_gid()["a"]
+    assert s.bucket == "nudge" and s.components["wait_released"] is None
+
+
+def test_override_wait_is_never_released():
+    a = facts("a", points=5, due_on=TODAY)  # slack -1
+    s = run([a], {"a": enr()}, {"a": Overrides(fields={"waiting_on": "FTB"})}).by_gid()["a"]
+    assert s.bucket == "nudge" and s.components["wait_released"] is None
+    t = facts("t", points=5, due_on=TODAY, tags=("waiting:FTB",))
+    assert run([t]).by_gid()["t"].bucket == "nudge"
+
+
+def test_soft_dates_never_release_a_wait():
+    inferred = facts("i", points=1)
+    e = enr(
+        waiting_on="X",
+        waiting_confidence="high",
+        due_date_inferred=TODAY,
+        due_date_inferred_confidence="high",
+    )
+    assert run([inferred], {"i": e}).by_gid()["i"].bucket == "nudge"
+    horizon = facts("h", name="[P0] x", points=1, created_at=TS)  # P0 horizon long past
+    assert run([horizon], {"h": _model_wait()}).by_gid()["h"].bucket == "nudge"
+
+
+def test_inherited_hard_date_releases_a_childs_model_wait():
+    parent = facts("p", points=1, due_on=TODAY + timedelta(days=2), num_open_subtasks=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], {"c": _model_wait()}).by_gid()["c"]
+    assert s.bucket == "next"
+    assert s.components["due_from"] == "p"
+    assert s.components["wait_released"]["waiting_on"] == "Michael"
+
+
+def test_pinned_waiting_task_is_not_double_handled_by_release():
+    a = facts("a", points=5, due_on=TODAY)
+    s = run([a], {"a": _model_wait()}, {"a": Overrides(pinned_rank=1)}).by_gid()["a"]
+    assert s.bucket == "next"
+    assert s.components["pinned_despite"] == "waiting"
+    assert s.components["wait_released"] is None
+
+
+def test_released_task_joins_feasibility_and_can_be_a_must_do():
+    a = facts("a", points=5, due_on=TODAY + timedelta(days=3))  # slack 2
+    scored = run([a], {"a": _model_wait()})
+    s = scored.by_gid()["a"]
+    assert s.components["effective_slack"] == 2.0 and s.components["simulated_start"] == 0.0
+    assert [t.gid for t in pz.select(scored.next(), CFG, n=1)] == ["a"]
