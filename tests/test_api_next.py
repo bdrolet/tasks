@@ -251,3 +251,37 @@ def test_next_reselection_honours_must_do_and_starvation(monkeypatch):
     assert [t["task_gid"] for t in body["next"]] == ["must", "starved"]
     one = client.post("/next", headers=AUTH, json={"n": 1}).json()["next"]
     assert [t["task_gid"] for t in one] == ["must"]
+
+
+def test_empty_waiting_on_override_is_stored_not_cleared(monkeypatch):
+    saved = []
+
+    def merge(conn, gid, patch):
+        saved.append(patch)
+        return type("O", (), {"fields": patch, "pinned_rank": None, "snooze_until": None})()
+
+    monkeypatch.setattr(repo, "merge_overrides", merge)
+    assert (
+        client.put("/tasks/t1/overrides", headers=AUTH, json={"waiting_on": ""}).status_code == 200
+    )
+    assert saved == [{"waiting_on": ""}]
+    client.put("/tasks/t1/overrides", headers=AUTH, json={"waiting_on": None})
+    assert saved[-1] == {"waiting_on": None}
+
+
+def test_rows_carry_wait_released(monkeypatch):
+    released = row(
+        "r",
+        6,
+        score=0.4,
+        components={
+            **row("r", 6)["components"],
+            "waiting_on": "Michael",
+            "wait_released": {"waiting_on": "Michael", "slack": 5.0},
+        },
+    )
+    monkeypatch.setattr(repo, "list_scores", lambda conn: [*ROWS, released])
+    tasks = client.get("/ranking?limit=100", headers=AUTH).json()["tasks"]
+    by = {t["task_gid"]: t for t in tasks}
+    assert by["r"]["wait_released"] is True and by["r"]["waiting_on"] == "Michael"
+    assert by["a"]["wait_released"] is False
