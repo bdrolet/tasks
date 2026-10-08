@@ -30,6 +30,7 @@ class Effective:
     points_source: str  # field | estimate | default
     points_confidence: str
     waiting_on: str | None
+    waiting_source: str  # tag | override | model | none
     due_date_inferred: date | None
     due_date_inferred_confidence: str
     impact: str
@@ -49,7 +50,9 @@ def _tag_values(tags: tuple[str, ...]) -> dict[str, str]:
 def effective(
     facts: TaskFacts, enrichment: Enrichment, overrides: Overrides, config: Config
 ) -> Effective:
-    """tag > override > model > default, per field."""
+    """tag > override > model > default, per field. A wait also records its
+    source: a model wait at low confidence is no wait at all, and an override
+    of "" is an explicit "not waiting" that only a tag outranks."""
     tags = _tag_values(facts.tags)
     o = overrides.fields
 
@@ -85,11 +88,21 @@ def effective(
         if "due_date_inferred" in o and o["due_date_inferred"]
         else enrichment.due_date_inferred_confidence
     )
+    if tags.get("waiting"):
+        waiting_on, waiting_source = tags["waiting"], "tag"
+    elif o.get("waiting_on") is not None:
+        waiting_on, waiting_source = (o["waiting_on"] or None), "override"
+    elif enrichment.waiting_on and enrichment.waiting_confidence != "low":
+        waiting_on, waiting_source = enrichment.waiting_on, "model"
+    else:
+        waiting_on, waiting_source = None, "none"
+
     return Effective(
         points=points,
         points_source=source,
         points_confidence=conf,
-        waiting_on=pick("waiting", "waiting_on", enrichment.waiting_on),
+        waiting_on=waiting_on,
+        waiting_source=waiting_source,
         due_date_inferred=inferred,
         due_date_inferred_confidence=inferred_conf,
         impact=pick("impact", "impact", enrichment.impact, IMPACTS),
@@ -297,6 +310,8 @@ def score_set(
                 "impact": eff.impact,
                 "energy": eff.energy,
                 "waiting_on": eff.waiting_on,
+                "waiting_source": eff.waiting_source,
+                "waiting_confidence": e.waiting_confidence,
                 "unenriched": e.unenriched,
                 "reason": e.reason,
                 "override": {

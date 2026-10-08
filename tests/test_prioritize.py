@@ -142,7 +142,7 @@ def test_blocked_parent_and_waiting_are_excluded():
     done_dep = facts("dd", points=1, completed=True)
     unblocked = facts("u", points=1, dependencies=("dd",))
     s = run(
-        [dep, blocked, parent, waiting, done_dep, unblocked], {"w": enr(waiting_on="the lawyer")}
+        [dep, blocked, parent, waiting, done_dep, unblocked], {"w": enr(waiting_on="the lawyer", waiting_confidence="high")}
     ).by_gid()
     assert s["b"].bucket == "excluded:blocked"
     assert s["p"].bucket == "excluded:parent"
@@ -295,14 +295,14 @@ def test_stale_rules_each_trigger():
 def test_nudge_sorted_by_days_stale_desc():
     a = facts("a", points=1, modified_at=TS - timedelta(days=1))
     b = facts("b", points=1, modified_at=TS - timedelta(days=10))
-    scored = run([a, b], {"a": enr(waiting_on="x"), "b": enr(waiting_on="y")})
+    scored = run([a, b], {"a": enr(waiting_on="x", waiting_confidence="high"), "b": enr(waiting_on="y", waiting_confidence="high")})
     assert [t.gid for t in pz.side_lists(scored)["nudge"]] == ["b", "a"]
 
 
 def test_positions_are_total_over_the_set():
     a = facts("a", points=1)
     w = facts("w", points=1)
-    scored = run([a, w], {"w": enr(waiting_on="x")})
+    scored = run([a, w], {"w": enr(waiting_on="x", waiting_confidence="high")})
     assert sorted(t.position for t in scored.tasks) == [1, 2]
     assert scored.by_gid()["a"].position == 1
 
@@ -553,7 +553,7 @@ def test_child_of_blocked_parent_is_blocked_until_the_dependency_completes():
 def test_child_of_waiting_parent_is_a_nudge_under_the_parents_person():
     parent = facts("p", points=1)
     child = facts("c", points=1, parent_gid="p")
-    scored = run([parent, child], {"p": enr(waiting_on="the consulate")})
+    scored = run([parent, child], {"p": enr(waiting_on="the consulate", waiting_confidence="high")})
     s = scored.by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "the consulate"
@@ -564,7 +564,7 @@ def test_child_of_waiting_parent_is_a_nudge_under_the_parents_person():
 def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
     parent = facts("p", points=1)
     child = facts("c", points=1, parent_gid="p")
-    s = run([parent, child], {"p": enr(waiting_on="A"), "c": enr(waiting_on="B")}).by_gid()["c"]
+    s = run([parent, child], {"p": enr(waiting_on="A", waiting_confidence="high"), "c": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "B"
     assert s.components["inherited"] is None
@@ -630,7 +630,7 @@ def test_completed_ancestor_passes_no_state_down():
     c = facts("c", points=1, parent_gid="p")
     s = run(
         [dep, gp, p, c],
-        {"p": enr(waiting_on="someone")},
+        {"p": enr(waiting_on="someone", waiting_confidence="high")},
         overrides={"p": Overrides(snooze_until=TODAY + timedelta(days=3))},
     ).by_gid()["c"]
     assert s.bucket == "next"
@@ -687,3 +687,53 @@ def test_completed_parent_passes_no_due_date_down():
     c = run([parent, child]).by_gid()["c"].components
     assert c["due_source"] != "hard"
     assert c["due_from"] is None
+
+
+def test_waiting_source_follows_precedence():
+    a = facts("a", points=1)
+    model = enr(waiting_on="the model", waiting_confidence="high")
+    assert pz.effective(a, model, Overrides.NONE, CFG).waiting_source == "model"
+    o = Overrides(fields={"waiting_on": "vendor"})
+    e = pz.effective(a, model, o, CFG)
+    assert (e.waiting_on, e.waiting_source) == ("vendor", "override")
+    tagged = facts("t", points=1, tags=("waiting:the bank",))
+    e = pz.effective(tagged, model, o, CFG)
+    assert (e.waiting_on, e.waiting_source) == ("the bank", "tag")
+    assert pz.effective(a, enr(), Overrides.NONE, CFG).waiting_source == "none"
+
+
+def test_low_confidence_model_wait_is_not_a_wait():
+    a = facts("a", points=1)
+    for conf, bucket in (("low", "next"), ("medium", "nudge"), ("high", "nudge")):
+        s = run([a], {"a": enr(waiting_on="someone", waiting_confidence=conf)}).by_gid()["a"]
+        assert s.bucket == bucket, conf
+        assert s.components["waiting_confidence"] == conf
+    low = run([a], {"a": enr(waiting_on="someone", waiting_confidence="low")}).by_gid()["a"]
+    assert low.components["waiting_on"] is None and low.components["waiting_source"] == "none"
+
+
+def test_tag_and_override_waits_ignore_confidence():
+    o = Overrides(fields={"waiting_on": "vendor"})
+    a = facts("a", points=1)
+    assert run([a], {"a": enr(waiting_confidence="low")}, {"a": o}).by_gid()["a"].bucket == "nudge"
+    t = facts("t", points=1, tags=("waiting:bank",))
+    assert run([t], {"t": enr(waiting_confidence="low")}).by_gid()["t"].bucket == "nudge"
+
+
+def test_empty_override_means_not_waiting():
+    a = facts("a", points=1)
+    model = enr(waiting_on="Michael", waiting_confidence="high")
+    s = run([a], {"a": model}, {"a": Overrides(fields={"waiting_on": ""})}).by_gid()["a"]
+    assert s.bucket == "next"
+    assert s.components["waiting_on"] is None
+    assert s.components["waiting_source"] == "override"
+    # a tag still beats the empty override
+    t = facts("t", points=1, tags=("waiting:bank",))
+    s = run([t], {"t": model}, {"t": Overrides(fields={"waiting_on": ""})}).by_gid()["t"]
+    assert s.bucket == "nudge" and s.components["waiting_on"] == "bank"
+
+
+def test_empty_waiting_tag_is_ignored():
+    t = facts("t", points=1, tags=("waiting:",))
+    s = run([t]).by_gid()["t"]
+    assert s.bucket == "next" and s.components["waiting_source"] == "none"
