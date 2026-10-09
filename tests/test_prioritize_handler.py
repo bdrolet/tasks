@@ -1041,14 +1041,20 @@ def goals_db(monkeypatch, db):
 
 @pytest.fixture
 def tripwire_asana(monkeypatch):
-    created, existing = [], {}
+    class Created(list):
+        effects: dict
+
+    created, existing = Created(), {}
+    effects = {"section": [], "publish": [], "metric": []}
+    monkeypatch.setattr(h.otel, "tripwire_fired", type("C", (), {"add": lambda self, n, a=None: effects["metric"].append((n, a))})())
     monkeypatch.setattr(asana, "find_task_by_external", lambda ext: existing.get(ext))
     monkeypatch.setattr(asana, "create_task_from_fields", lambda fields: (created.append(fields), type("T", (), {"gid": f"new{len(created)}", "permalink_url": "u"})())[1])
-    monkeypatch.setattr(asana, "add_task_to_section", lambda gid, sec: None)
+    monkeypatch.setattr(asana, "add_task_to_section", lambda gid, sec: effects["section"].append((gid, sec)))
     monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "proj")
     monkeypatch.setattr(h.tags_service, "resolve_gids", lambda names: [f"g-{n}" for n in names])
-    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: None)
+    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: effects["publish"].append((gid, source)))
     monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
+    created.effects = effects
     return created, existing
 
 
@@ -1062,6 +1068,10 @@ def test_day_changed_evaluates_fires_and_records_next_step(goals_db, tripwire_as
     assert created[0]["tags"] == ["g-serves:consulting", "g-role:derisk", "g-tripwire"]
     assert ("consulting", TODAY) in goals_db.goal_states
     assert goals_db.next_steps == [(TODAY, {"consulting": None})]
+    fx = created.effects
+    assert fx["section"] == [("new1", "sec-review")]
+    assert fx["publish"] == [("new1", "pipeline")]
+    assert fx["metric"] == [(1, {"goal": "consulting"})]
 
 
 def test_tripwire_already_fired_yesterday_is_not_recreated(goals_db, tripwire_asana, monkeypatch):
@@ -1107,3 +1117,32 @@ def test_no_strategy_day_changed_is_unchanged(goals_db, monkeypatch):
     out = h.handle_day_changed(today=TODAY)
     assert out["goals"] == 0 and out["tripwires_fired"] == 0 and goals_db.goal_states == {}
     assert goals_db.snapshot == Strategy.EMPTY  # an emptied document clears the API's view too
+
+
+def test_tripwire_notes_escape_user_text(goals_db, tripwire_asana, monkeypatch):
+    created, _ = tripwire_asana
+    strat = _fire_strat()
+    g = strat.goals[0]
+    tw = replace_facts(g.tripwires[0], subject="signed & <b>clients", op=">=", value=0)
+    monkeypatch.setattr(st, "load", lambda **kw: Strategy(goals=(replace_facts(g, tripwires=(tw,)),), text_hash="sh"))
+    assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 1
+    notes = created[0]["html_notes"]
+    assert "&gt;=" in notes and "&amp;" in notes and "&lt;b&gt;" in notes
+    assert "<b>clients" not in notes
+
+
+def test_next_step_is_the_top_path_task_serving_the_goal(goals_db, tripwire_asana, monkeypatch):
+    strat = Strategy(goals=(replace_facts(_fire_strat().goals[0], tripwires=()),
+                            Goal(id="finances", kind="outcome")), text_hash="sh")
+    monkeypatch.setattr(st, "load", lambda **kw: strat)
+
+    def add(gid, name, tags):
+        f = _facts(gid, name=name, tags=[{"gid": t, "name": t} for t in tags])
+        goals_db.facts[gid] = f
+
+    add("a", "[P0] support work", ["serves:consulting", "role:support"])
+    add("b", "[P2] path work", ["serves:consulting", "role:path"])
+    add("c", "[P1] other goal path", ["serves:finances", "role:path"])
+    h.handle_day_changed(today=TODAY)
+    steps = goals_db.next_steps[0][1]
+    assert steps["consulting"] == "b" and steps["finances"] == "c"

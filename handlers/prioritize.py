@@ -6,6 +6,7 @@ and Pub/Sub redelivers. A Claude failure never raises — facts and scores
 still land, the task is flagged unenriched, and the daily heal retries it.
 Design: docs/superpowers/specs/2026-09-23-next-prioritizer-design.md"""
 
+import html
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -662,7 +663,8 @@ def fire_tripwires(strategy: Strategy, states: list[GoalState], previous: dict[s
             fields = {
                 "name": f"[P1] {t['action']}",
                 "html_notes": (
-                    f"<body>Tripwire fired for <b>{goal.id}</b>: {t['text']} (measured {t['value']}).\n"
+                    f"<body>Tripwire fired for <b>{html.escape(goal.id)}</b>: {html.escape(str(t['text']))} "
+                    f"(measured {html.escape(str(t['value']))}).\n"
                     f"Review: task-next review</body>"
                 ),
                 "projects": [asana.ASANA_PROJECT_ID],
