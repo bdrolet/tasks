@@ -11,6 +11,10 @@ from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
 from services import managed_projects
+from models.strategy import Goal, Strategy
+from repo import goals as repo_goals
+from services import strategy as st
+from services import tags as tags_service
 
 TODAY = date(2026, 9, 23)
 TASK = {
@@ -73,6 +77,7 @@ class MemConn:
         self.scores, self.runs, self.estimated = [], [], set()
         self.deleted = []
         self.last_offered = {}
+        self.goal_states = {}
 
     def __enter__(self):
         return self
@@ -102,7 +107,7 @@ def db(monkeypatch):
     monkeypatch.setattr(
         repo,
         "upsert_enrichment",
-        lambda c, gid, hsh, raw, model: c.enrichment.__setitem__(gid, (hsh, raw)),
+        lambda c, gid, hsh, raw, model, strategy_hash="": c.enrichment.__setitem__(gid, (hsh, raw)),
     )
     monkeypatch.setattr(repo, "list_enrichment", lambda c: dict(c.enrichment))
     monkeypatch.setattr(repo, "list_overrides", lambda c: dict(c.overrides))
@@ -144,6 +149,8 @@ def db(monkeypatch):
             c.facts[gid] = TaskFacts(**(c.facts[gid].__dict__ | {"story_points": pts}))
 
     monkeypatch.setattr(repo, "set_story_points", set_points)
+    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
+    monkeypatch.setattr(repo_goals, "save_snapshot", lambda c, strategy: None)
     return conn
 
 
@@ -179,7 +186,7 @@ def model(monkeypatch):
         calls.append(kw)
         return json.dumps(GOOD)
 
-    monkeypatch.setattr(en, "extract", lambda **kw: en.parse(fake(**kw)))
+    monkeypatch.setattr(en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ())))
     return calls
 
 
@@ -848,3 +855,103 @@ def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkey
     # only today's run exists: the project reads as never offered, not 0 days
     assert event.by_gid()["a"].components["days_since_project_offered"] is None
     assert event.by_gid()["a"].components["starvation_boost"] == 0.5
+
+
+# ---- strategy layer: serves write-back ---------------------------------------
+
+STRAT = Strategy(goals=(Goal(id="consulting", kind="outcome"), Goal(id="finances", kind="area")), text_hash="sh")
+SERVES_HIGH = GOOD | {
+    "serves": [{"goal": "consulting", "role": "path", "confidence": "high"}],
+    "necessity_confidence": "high", "necessity_reason": "next step",
+}
+
+
+@pytest.fixture
+def strategy(monkeypatch):
+    monkeypatch.setattr(st, "load", lambda **kw: STRAT)
+    monkeypatch.setattr(st, "section_text", lambda: "### consulting\n- kind: outcome\n")
+    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
+    return STRAT
+
+
+@pytest.fixture
+def tag_fake(monkeypatch, asana_fake):
+    asana_fake["tags"] = []
+    monkeypatch.setattr(tags_service, "resolve_gids", lambda names: [f"g-{n}" for n in names])
+    monkeypatch.setattr(asana, "add_tag", lambda gid, tag_gid: asana_fake["tags"].append((gid, tag_gid)))
+    monkeypatch.setattr(repo, "claim_serves", lambda c, gid, payload: c.__dict__.setdefault("serves_claims", {}).setdefault(gid, payload) is payload)
+    monkeypatch.setattr(repo, "set_tags", lambda c, gid, tags: c.__dict__.setdefault("tags_set", []).append((gid, tags)))
+    return asana_fake
+
+
+def _model_returning(monkeypatch, payload):
+    calls = []
+
+    def fake(**kw):
+        calls.append(kw)
+        return json.dumps(payload)
+
+    monkeypatch.setattr(en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ())))
+    return calls
+
+
+def test_enrichment_receives_strategy_text_and_hash_in_facts(db, tag_fake, strategy, monkeypatch):
+    calls = _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    assert calls[0]["strategy_text"].startswith("### consulting") and calls[0]["known_goals"] == ("consulting", "finances")
+    assert db.facts["t1"].content_hash == en.content_hash(TASK["name"], TASK["notes"], [
+        {"text": "sent it", "created_by": "Ben", "created_at": "2026-09-19T00:00:00Z"}], strategy_hash="sh")
+
+
+def test_confident_serves_is_written_back_once(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    h.handle_task_changed("t1", today=TODAY)  # redelivery
+    assert tag_fake["tags"] == [("t1", "g-serves:consulting"), ("t1", "g-role:path")]
+    assert [c for c in tag_fake["comments"] if c.startswith("Attached to")] == [
+        "Attached to consulting as path \u2014 adjust the tags if wrong."
+    ]
+    assert db.tags_set == [("t1", ["cheryl", "serves:consulting", "role:path"])]
+    assert db.serves_claims["t1"] == {"serves": ["consulting"], "role": "path", "confidence": "high"}
+
+
+def test_low_confidence_claims_grooming_and_writes_nothing(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"necessity_confidence": "low"})
+    h.handle_task_changed("t1", today=TODAY)
+    assert tag_fake["tags"] == [] and db.serves_claims["t1"] == {"grooming": True}
+
+
+def test_confident_none_claims_none_and_writes_nothing(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"serves": []})
+    h.handle_task_changed("t1", today=TODAY)
+    assert tag_fake["tags"] == [] and db.serves_claims["t1"] == {"none": True, "confidence": "high"}
+
+
+def test_existing_serves_tag_skips_the_draft(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    monkeypatch.setitem(TASK, "tags", [{"gid": "g", "name": "serves:finances"}])
+    try:
+        h.handle_task_changed("t1", today=TODAY)
+    finally:
+        TASK["tags"] = [{"gid": "g", "name": "cheryl"}]
+    assert tag_fake["tags"] == [] and "serves_claims" not in db.__dict__
+
+
+def test_no_strategy_means_no_claim(db, tag_fake, monkeypatch):
+    monkeypatch.setattr(st, "load", lambda **kw: Strategy.EMPTY)
+    monkeypatch.setattr(st, "section_text", lambda: "")
+    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
+    _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    assert "serves_claims" not in db.__dict__
+
+
+def test_tag_write_failure_keeps_the_claim(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+
+    def boom(gid, tag_gid):
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(asana, "add_tag", boom)
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.serves_claims["t1"]["serves"] == ["consulting"] and not db.__dict__.get("tags_set")
