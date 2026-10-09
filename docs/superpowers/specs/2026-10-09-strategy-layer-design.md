@@ -494,9 +494,12 @@ This is the one place in the design where a necessity judgment acts without
 Ben seeing a card, so it carries its own reversal path. Every necessity
 suppression is listed by `GET /review` under `stop_doing.suppressed_emails`
 with the email's `web_link` and the reason, and
-`POST /suppressions/{message_id}/restore` creates the task through the
-normal creation path (tags from the stored judgment omitted, so enrichment
-judges it afresh) and marks the row `restored_at`. A restore is a labelled
+`POST /suppressions/{message_id}/restore` creates the task from the stored
+subject, sender, reason and `web_link` through `create_task_from_fields`,
+with `external.gid = message_id` so the pipeline's dedupe holds and with no
+`serves:` tag, so enrichment judges it afresh; it then marks the row
+`restored_at`. (It does not re-run summary or deadline extraction: the
+suppressed row holds no body and the API has no inbox credentials.) A restore is a labelled
 disagreement for `calibrate` (D10); a suppression that is never restored
 counts as agreement after `config.strategy.suppression_settle_days` (30).
 
