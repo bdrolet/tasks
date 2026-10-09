@@ -1144,7 +1144,7 @@ def test_tripwire_notes_escape_user_text(goals_db, tripwire_asana, monkeypatch):
 
 def test_next_step_is_the_top_path_task_serving_the_goal(goals_db, tripwire_asana, monkeypatch):
     strat = Strategy(goals=(replace_facts(_fire_strat().goals[0], tripwires=()),
-                            Goal(id="finances", kind="outcome")), text_hash="sh")
+                            Goal(id="finances", kind="area"), Goal(id="home", kind="area")), text_hash="sh")
     monkeypatch.setattr(st, "load", lambda **kw: strat)
 
     def add(gid, name, tags):
@@ -1156,7 +1156,7 @@ def test_next_step_is_the_top_path_task_serving_the_goal(goals_db, tripwire_asan
     add("c", "[P1] other goal path", ["serves:finances", "role:path"])
     h.handle_day_changed(today=TODAY)
     steps = goals_db.next_steps[0][1]
-    assert steps["consulting"] == "b" and steps["finances"] == "c"
+    assert steps == {"consulting": "b", "finances": "c", "home": None}  # areas get next steps too
 
 
 # ---- final fix wave: strategy-hash staleness (spec D4) -------------------------

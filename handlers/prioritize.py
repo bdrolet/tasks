@@ -705,7 +705,7 @@ def handle_day_changed(*, today: date | None = None) -> dict:
         scored = rescore(conn, kind="daily", trigger_gid=None, today=today, strategy=strategy)
         if states:
             steps = {}
-            for g in strategy.outcome_goals():
+            for g in strategy.goals:
                 step = next((t for t in scored.next() if t.components.get("role") == "path" and g.id in (t.components.get("serves") or [])), None)
                 steps[g.id] = step.gid if step else None
             repo_goals.set_next_steps(conn, today, steps)

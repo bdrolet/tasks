@@ -22,7 +22,7 @@ def test_build_shapes_goals_grooming_and_stop_doing():
             "next_step": "t1", "stalled": False, "leads": [{"tag": "conversation", "window": "week", "value": 1, "threshold": 3, "met": False}],
             "lag": None, "tripwires": [], "diagnosis": "insufficient data"}),
         "finances": GoalState("finances", "area", TODAY, "h", {
-            "below_the_line": True, "muted_until": None,
+            "below_the_line": True, "muted_until": None, "next_step": "t2",
             "signals": [{"signal": "overdue", "class": "evidence", "raw": True, "effective": True, "consecutive_days": 4, "state": "true", "tasks": ["t2"]}]}),
     }
     scores = [
@@ -39,6 +39,7 @@ def test_build_shapes_goals_grooming_and_stop_doing():
     assert goals["consulting"]["next_step"] == {"gid": "t1", "name": "[P1] Write offer", "permalink_url": "u/t1"}
     assert goals["consulting"]["stalled"] is False and goals["consulting"]["diagnosis"] == "insufficient data"
     assert goals["finances"]["below_the_line"] is True
+    assert goals["finances"]["next_step"]["gid"] == "t2" and goals["finances"]["stalled"] is False
     assert goals["finances"]["signals"][0]["tasks"] == [{"gid": "t2", "name": "[P1] Pay bill", "permalink_url": "u/t2"}]
     assert [g["gid"] for g in r["grooming"]] == ["t3"]
     assert [g["gid"] for g in r["stop_doing"]["tasks"]] == ["t4", "t5"]
