@@ -171,6 +171,18 @@ def _local_date(ts: datetime) -> date:
     return ts.astimezone(ZoneInfo(LOCAL_TZ)).date()
 
 
+def _goal_due(eff: Effective, strategy: Strategy) -> date | None:
+    """Nearest outcome-goal horizon among the goals a path/derisk task serves."""
+    if eff.role not in ("path", "derisk"):
+        return None
+    dues = [
+        g.horizon
+        for g in (strategy.get(s) for s in eff.serves)
+        if g and g.kind == "outcome" and g.horizon
+    ]
+    return min(dues) if dues else None
+
+
 def _effective_due(
     facts: TaskFacts,
     eff: Effective,
@@ -192,16 +204,12 @@ def _effective_due(
         return eff.due_date_inferred, "inferred", None
     horizon = config.horizon_days.get(facts.priority or config.default_priority)
     prio_due = _local_date(facts.created_at) + timedelta(days=horizon) if horizon is not None else None
-    if eff.role in ("path", "derisk"):
-        goal_dues = [
-            g.horizon
-            for g in (strategy.get(s) for s in eff.serves)
-            if g and g.kind == "outcome" and g.horizon
-        ]
-        if goal_dues:
-            goal_due = min(goal_dues)
-            if prio_due is None or goal_due < prio_due:
-                return goal_due, "goal_horizon", None
+    goal_due = _goal_due(eff, strategy)
+    # Flag mode reproduces the pre-strategy ranking exactly (spec D6), so the
+    # goal horizon only becomes a due date outside it.
+    if goal_due and config.necessity_mode != "flag":
+        if prio_due is None or goal_due < prio_due:
+            return goal_due, "goal_horizon", None
     if prio_due is None:
         return None, "none", None
     return prio_due, "horizon", None
@@ -350,9 +358,12 @@ def score_set(
         confident_none = (
             strategy.goals
             and not eff.serves
+            and not e.serves  # the model actually said "none", not unknown goals
             and eff.necessity_source == "model"
             and eff.necessity_confidence in ("medium", "high")
         )
+        if eff.necessity_source == "model" and not eff.serves and e.serves:
+            grooming = True  # the model named goals, none of them known
         if confident_none and bucket == "next" and config.necessity_mode == "suppress":
             if ov.pinned_rank is not None:
                 despite = despite or "stop_doing"
@@ -416,7 +427,12 @@ def score_set(
                 "grooming": grooming,
                 "confident_none": bool(confident_none),
                 "below_the_line": bool(
-                    eff.role in ("path", "derisk") and any(s in below_the_line for s in eff.serves)
+                    config.necessity_mode != "flag"
+                    and eff.role in ("path", "derisk")
+                    and any(s in below_the_line for s in eff.serves)
+                ),
+                "goal_horizon": (
+                    gd.isoformat() if (gd := _goal_due(eff, strategy)) else None
                 ),
             },
             project_name=f.project_name,
