@@ -2,6 +2,7 @@
 markdown renderer, plus the necessity half of calibrate (D10)."""
 
 from datetime import date
+from typing import Any
 
 from models.strategy import GoalState, Strategy
 
@@ -22,7 +23,8 @@ def build(
     by_gid = {r["task_gid"]: r for r in scores}
     goals = []
     for g in strategy.goals:
-        s = (states.get(g.id).state if states.get(g.id) else {}) or {}
+        gs = states.get(g.id)
+        s = (gs.state if gs else {}) or {}
         entry: dict = {
             "id": g.id,
             "kind": g.kind,
@@ -60,7 +62,7 @@ def build(
         goals.append(entry)
     active = [r for r in scores if r["bucket"] in ("next", "nudge", "stop_doing")]
     grooming = [
-        _ref(r)
+        (_ref(r) or {})
         | {
             "serves_suggested": r["components"].get("serves_suggested")
             or r["components"].get("serves")
@@ -72,7 +74,7 @@ def build(
         if r["components"].get("grooming")
     ]
     stop = [
-        _ref(r) | {"reason": r["components"].get("reason")}
+        (_ref(r) or {}) | {"reason": r["components"].get("reason")}
         for r in active
         if r["components"].get("confident_none")
     ]
@@ -217,7 +219,7 @@ def necessity_calibration(rows: list[dict], restore_rates: list[dict]) -> dict:
             gate2[r["task_gid"]] = est
         elif origin == "enrichment":
             enrich[r["task_gid"]] = est
-    g2 = {"judged": 0, "agreed": 0}
+    g2: dict[str, Any] = {"judged": 0, "agreed": 0}
     for gid in gate2.keys() & enrich.keys():
         a, b = gate2[gid], enrich[gid]
         g2["judged"] += 1

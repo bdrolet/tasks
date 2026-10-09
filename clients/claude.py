@@ -173,7 +173,7 @@ def run_agent(
     runner = (
         _get_client()
         .with_options(max_retries=1)
-        .beta.messages.tool_runner(
+        .beta.messages.tool_runner(  # type: ignore[call-overload]
             model=AGENT_MODEL,
             max_tokens=4096,
             max_iterations=max_iterations,

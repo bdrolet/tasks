@@ -110,6 +110,7 @@ def effective(
     known = {g.id for g in strategy.goals}
     tag_serves = tuple(s for s in _serves_tags(facts.tags) if s in known)
     tag_role = tags.get("role") if tags.get("role") in ROLE_RANK else None
+    role: str | None
     if _serves_tags(facts.tags) or tag_role:
         serves, role, nsource = tag_serves, tag_role or "support", "tag"
     elif o.get("serves") is not None:

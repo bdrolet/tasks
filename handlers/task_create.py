@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import clients.asana as asana
 import clients.otel as otel
@@ -218,7 +219,7 @@ def handle(event: EmailClassifiedEvent) -> None:
         return
     # Spec D10/D14: with a strategy loaded, every create records what gate 2
     # judged, so calibration can compare it with enrichment's later draft.
-    draft = None
+    draft: dict[str, Any] | None = None
     if has_strategy:
         if outcome == "tag":
             draft = {

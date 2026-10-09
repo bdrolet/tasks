@@ -415,16 +415,15 @@ def _parse(
         and s.get("role") in ROLES
         and s.get("confidence") in ("low", "medium", "high")
     ]
-    necessity = {
-        "serves": serves,
-        "necessity_confidence": data.get("necessity_confidence")
+    nec_confidence = (
+        str(data["necessity_confidence"])
         if data.get("necessity_confidence") in ("low", "medium", "high")
-        else "low",
-        "necessity_reason": str(data.get("necessity_reason") or "").strip(),
-    }
+        else "low"
+    )
+    nec_reason = str(data.get("necessity_reason") or "").strip()
     if not known_goals:
         # No strategy loaded: the defaults are authoritative, whatever the model said.
-        necessity = {"serves": [], "necessity_confidence": "low", "necessity_reason": ""}
+        serves, nec_confidence, nec_reason = [], "low", ""
     if gid is not None and not gid_exists(str(gid)):
         gid = None
     if gid is not None:
@@ -437,16 +436,30 @@ def _parse(
             resolves=bool(data.get("resolves")),
             evidence=evidence,
             outcome="attached",
-            **necessity,
+            serves=serves,
+            necessity_confidence=nec_confidence,
+            necessity_reason=nec_reason,
         )
     if actionable:
         return Decision(
-            actionable=True, reason=reason, evidence=evidence, outcome="actionable", **necessity
+            actionable=True,
+            reason=reason,
+            evidence=evidence,
+            outcome="actionable",
+            serves=serves,
+            necessity_confidence=nec_confidence,
+            necessity_reason=nec_reason,
         )
     if not reason:
         return _fail_open("no_reason", message_id)
     return Decision(
-        actionable=False, reason=reason, evidence=evidence, outcome="suppressed", **necessity
+        actionable=False,
+        reason=reason,
+        evidence=evidence,
+        outcome="suppressed",
+        serves=serves,
+        necessity_confidence=nec_confidence,
+        necessity_reason=nec_reason,
     )
 
 

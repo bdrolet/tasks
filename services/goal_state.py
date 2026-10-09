@@ -201,7 +201,7 @@ def _area_state(
         "below_the_line": (not muted) and any(s["effective"] for s in signals),
         "evidence_below_the_line": (not muted)
         and any(s["effective"] and s["class"] == "evidence" for s in signals),
-        "muted_until": muted_until.isoformat() if muted else None,
+        "muted_until": muted_until.isoformat() if muted_until is not None and muted else None,
         "tagged": tagged,
     }
 

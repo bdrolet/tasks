@@ -692,12 +692,10 @@ def fire_tripwires(
         goal = strategy.get(s.goal_id)
         if goal is None or goal.kind != "outcome":
             continue
+        prev_state = previous.get(s.goal_id)
         prev = {
             (t["ordinal"], t["by"]): t
-            for t in (
-                previous.get(s.goal_id).state.get("tripwires") if previous.get(s.goal_id) else []
-            )
-            or []
+            for t in (prev_state.state.get("tripwires") if prev_state else []) or []
         }
         for t in s.state.get("tripwires") or []:
             if not t["fired"] or prev.get((t["ordinal"], t["by"]), {}).get("fired"):
