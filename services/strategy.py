@@ -154,7 +154,11 @@ def _parse_block(goal_id: str, body: str, findings: list[str]) -> Goal | None:
                 fields["standard"] = value
             elif key == "below-the-line":
                 for part in value.split(";"):
-                    sig = _parse_signal(part)
+                    try:
+                        sig = _parse_signal(part)
+                    except ValueError:
+                        findings.append(f"{goal_id}: below-the-line signal {part.strip()!r} has an invalid date")
+                        continue
                     if sig is None:
                         findings.append(f"{goal_id}: below-the-line signal {part.strip()!r} not understood")
                     else:

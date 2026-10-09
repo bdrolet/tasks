@@ -112,6 +112,14 @@ def test_unknown_signal_is_ignored_with_a_finding():
     assert any("home: below-the-line" in f for f in s.findings)
 
 
+def test_invalid_date_drops_only_that_signal():
+    doc = "### home\n- kind: area\n- below-the-line: undated:tax after 2026-02-30; stale > 14 days\n"
+    s = st.parse(doc, today=TODAY)
+    assert [x.kind for x in s.get("home").signals] == ["stale"]
+    assert any("home: below-the-line signal 'undated:tax after 2026-02-30' has an invalid date" in f
+               for f in s.findings)
+
+
 def test_text_hash_is_stable_and_changes_with_text():
     assert st.text_hash(DOC) == st.text_hash(DOC)
     assert st.text_hash(DOC) != st.text_hash(DOC + "x")
