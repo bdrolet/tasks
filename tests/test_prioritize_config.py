@@ -11,12 +11,13 @@ def test_repo_config_loads_with_spec_defaults():
     assert cfg.points_per_day == 5
     assert cfg.default_points == 3
     assert cfg.weights == {
-        "priority": 0.25,
-        "urgency": 0.30,
-        "impact": 0.15,
-        "unblock": 0.10,
-        "aging": 0.05,
-        "category": 0.15,
+        "priority": 0.20,
+        "urgency": 0.24,
+        "impact": 0.12,
+        "unblock": 0.08,
+        "aging": 0.04,
+        "category": 0.12,
+        "necessity": 0.20,
     }
     assert sum(cfg.weights.values()) == pytest.approx(1.0)
     assert cfg.priority_weight["P0"] == 1.0 and cfg.priority_weight["P3"] == 0.1
@@ -76,3 +77,30 @@ def test_fingerprint_tracks_the_file_bytes(tmp_path):
     fa, fb = pc.load(str(a)).fingerprint, pc.load(str(b)).fingerprint
     assert len(fa) == 12 and fa == pc.load(str(a)).fingerprint
     assert fa != fb
+
+
+def test_weights_still_sum_to_one_with_necessity():
+    cfg = pc.load()
+    assert abs(sum(cfg.weights.values()) - 1.0) < 1e-9
+    assert cfg.weights["necessity"] == 0.20
+
+
+def test_necessity_and_strategy_sections():
+    cfg = pc.load()
+    assert cfg.necessity_mode == "flag"
+    assert cfg.necessity_role == {"path": 1.0, "derisk": 0.9, "support": 0.5}
+    assert cfg.necessity_unattached == 0.2
+    assert cfg.below_the_line_boost == 1.15
+    assert cfg.strategy_stale_after_days == 90
+    assert cfg.lag_flat_periods == 2
+    assert cfg.suppression_settle_days == 30
+    assert cfg.signal_debounce_days == 3
+    assert cfg.min_tagged_for_signals == 5
+
+
+def test_bad_mode_is_rejected(tmp_path):
+    text = pc.DEFAULT_PATH.read_text().replace('mode = "flag"', 'mode = "yolo"')
+    p = tmp_path / "p.toml"
+    p.write_text(text)
+    with pytest.raises(ValueError, match="necessity.mode"):
+        pc.load(str(p))

@@ -40,6 +40,15 @@ class Config:
     hard_due_window_days: int
     starvation_boost_per_day: float
     starvation_max_boost: float
+    necessity_mode: str
+    necessity_role: dict[str, float]
+    necessity_unattached: float
+    below_the_line_boost: float
+    strategy_stale_after_days: int
+    lag_flat_periods: int
+    suppression_settle_days: int
+    signal_debounce_days: int
+    min_tagged_for_signals: int
     # sha256 of the file's bytes, first 12 hex — stamped on every run so an
     # audit can tell a retune from a change in the tasks themselves.
     fingerprint: str = ""
@@ -52,6 +61,9 @@ def load(path: str | None = None) -> Config:
     cap, weights, prio = raw["capacity"], raw["weights"], raw["priority"]
     urg, cat, sel, stale = raw["urgency"], raw["category"], raw["selection"], raw["stale"]
     starve = raw["starvation"]
+    nec, strat = raw["necessity"], raw["strategy"]
+    if nec["mode"] not in ("flag", "demote", "suppress"):
+        raise ValueError(f"necessity.mode must be flag|demote|suppress, got {nec['mode']!r}")
     return Config(
         points_per_day=float(cap["points_per_day"]),
         default_points=int(cap["default_points"]),
@@ -80,5 +92,14 @@ def load(path: str | None = None) -> Config:
         hard_due_window_days=int(sel["hard_due_window_days"]),
         starvation_boost_per_day=float(starve["boost_per_day"]),
         starvation_max_boost=float(starve["max_boost"]),
+        necessity_mode=str(nec["mode"]),
+        necessity_role={k: float(nec[k]) for k in ("path", "derisk", "support")},
+        necessity_unattached=float(nec["unattached"]),
+        below_the_line_boost=float(nec["below_the_line_boost"]),
+        strategy_stale_after_days=int(strat["stale_after_days"]),
+        lag_flat_periods=int(strat["lag_flat_periods"]),
+        suppression_settle_days=int(strat["suppression_settle_days"]),
+        signal_debounce_days=int(strat["signal_debounce_days"]),
+        min_tagged_for_signals=int(strat["min_tagged_for_signals"]),
         fingerprint=hashlib.sha256(data).hexdigest()[:12],
     )
