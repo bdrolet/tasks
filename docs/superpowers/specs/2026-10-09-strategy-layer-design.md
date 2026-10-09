@@ -73,7 +73,7 @@ never work → goal, so a task cannot say what it serves.
 | **Lead measure** | A controllable, predictive count: conversations held per week. Computed from completed tasks. |
 | **Lag measure** | The outcome: revenue per month. Reported by hand. |
 | **Tripwire** | A pre-registered state-and-date: "0 signed clients by 2026-12-31 → revisit niche and offer". Evaluated daily; fires as a task. |
-| **Below the line** | An area's slipping signal: "any overdue bill". Boosts that area's tasks while true. |
+| **Below the line** | An area's slipping signal: "a P1 bill more than 3 days overdue". Debounced over consecutive days; evidence signals boost the area's path and derisk tasks, absence signals only report. |
 
 ## Decisions
 
@@ -279,10 +279,13 @@ due date with `due_source = "goal_horizon"` and the existing
 without an invented deadline, and the no-invented-due-dates rule is kept:
 nothing is written to Asana.
 
-**Below-the-line boost.** While an area's signal is true (D9), every task
-serving that area has its cost of delay multiplied by
-`config.necessity.below_the_line_boost` (1.3). The slipping standard climbs
-without Ben touching anything.
+**Below-the-line boost.** While an area is below the line on an
+**evidence** signal (D9) and not muted, the area's `path` and `derisk`
+tasks — not its `support` tasks — have their cost of delay multiplied by
+`config.necessity.below_the_line_boost` (1.15). Absence signals never
+boost. The overdue task that is the evidence is already climbing through
+urgency; the boost is for the tasks that would fix the standard, not for
+everything that shares a tag.
 
 ### D7 — Measures and tripwires are evaluated on the daily tick
 
@@ -310,7 +313,7 @@ acceptable, because a tripwire edit is a strategy change.
 `path` for the goal, after the rescore; `null` means **stalled** and the
 review says so.
 
-**Below the line** for an area: any configured signal true (D9).
+**Below the line** for an area: any signal's effective value true and the area not muted (D9); each signal's raw value, effective value, `no_data` state and evidence gids are stored.
 
 ### D8 — A fired tripwire becomes a task
 
@@ -329,21 +332,62 @@ Why a task and not a notification: the ranked list is the one place Ben
 reliably looks, and the research's finding is that strategy-change signals
 are missed precisely because they live somewhere else.
 
-### D9 — Below-the-line signals are a small closed grammar
+### D9 — Below-the-line signals: a closed grammar, debounced, with a baseline
 
-`below-the-line:` accepts a `;`-separated list of signals, each one of:
+`below-the-line:` accepts a `;`-separated list of signals. The grammar is
+closed on purpose: a signal must be computable from `task_facts` and
+`goal_state` alone, so the daily tick needs neither Asana nor a model. The
+design goal here is **few false positives**: a slipping area should be rare
+and, when reported, obviously true from its evidence.
+
+**Two classes of signal.**
+
+| Class | Signals | Says | Effect |
+|---|---|---|---|
+| **Evidence** | `overdue`, `undated` | something concrete is wrong | review finding **and** scoring boost (D6) |
+| **Absence** | `stale`, `lead` | nothing happened | review finding **only** — never moves the ranking, because absence of activity is too often absence of need |
+
+**Grammar.**
 
 | Signal | True when |
 |---|---|
-| `overdue` | any open task serving this area has a hard due date before today |
-| `overdue:<tag>` | as above, restricted to tasks carrying `<tag>` |
-| `undated:<tag> after YYYY-MM-DD` | today is after the date and an open task serving this area carries `<tag>` with no hard due date |
-| `lead <tag> < <n> per <period>` | the area's lead-style count is below `n` |
-| `stale > <n> days` | no task serving this area has been completed in `n` days |
+| `overdue[:<min-priority>+] [grace <n>]` | an open task serving this area with role `path` or `derisk` (never `support`), priority at or above `<min-priority>` (default `P1`, i.e. P0 or P1), **actionable** (bucket `next`: not snoozed, blocked, waiting or a parent), has a hard `due_on` more than `<n>` days before today (default `grace 3`) |
+| `overdue:<tag> [grace <n>]` | as above, restricted to tasks carrying `<tag>`; priority filter not applied |
+| `undated:<tag> after YYYY-MM-DD` | today is after the date and an open actionable task serving this area carries `<tag>` with no hard due date |
+| `stale > <n> days` | no task serving this area has been completed in `n` days, **and** the area has at least one open actionable task — an area with nothing to do is not slipping |
+| `lead <tag> < <n> per <period>` | the area's lead-style count is below `n`, **and** `<tag>` has appeared on a completed task serving this area within the last 90 days — a tag never adopted is not a measure |
 
-Anything else is a parse warning and the signal is ignored. The grammar is
-closed on purpose: a signal must be computable from `task_facts` alone, so
-the daily tick needs neither Asana nor a model.
+Anything else is a parse warning and the signal is ignored. When a
+signal's baseline condition fails (no actionable tasks for `stale`, no
+tag history for `lead`) its state is `no_data`, not false, and the review
+says so.
+
+**Rollout guard.** Until at least `config.strategy.min_tagged_for_signals`
+(5) tasks carry `serves:<area>`, every signal of that area is `no_data`.
+This stops every area flipping on the first morning before the heal has
+tagged anything.
+
+**Debounce with hysteresis.** A signal's **raw** value is evaluated daily
+and stored. Its **effective** value flips to true only after
+`config.strategy.signal_debounce_days` (3) consecutive raw-true days, and
+flips back to false only after the same number of consecutive raw-false
+days. `goal_state` holds both, so one bad day never flips anything and one
+good day never clears it. An area is below the line when any signal's
+effective value is true.
+
+**Mute.** `POST /goals/{id}/mute {until}` writes `goal_overrides.mute_until`.
+While muted, signals keep evaluating (raw and effective are still stored,
+so the state is correct the day the mute ends) but the area is never
+reported below the line and never boosts. The review shows "muted until
+<date>". `POST /goals/{id}/mute {until: null}` clears it.
+
+**Evidence, always.** `goal_state.state.signals[*].tasks` lists the gids
+that made each raw-true signal true, and `GET /review` renders them, so a
+false positive is diagnosable in one glance and the fix is a tag or
+priority edit.
+
+What this does not prevent is a signal written too loosely —
+`overdue:P3+ grace 0` is legal. The evidence list is the defence there.
 
 ### D10 — Necessity judgments are calibrated like points
 
@@ -379,7 +423,10 @@ value against `serves_estimated`, so no new audit table is needed.
     "diagnosis": "lead weak" | "lead strong, lag flat" | "on track" | "insufficient data"
   }, {
     "id": "finances", "kind": "area", "below_the_line": true,
-    "signals": [{"signal": "overdue", "true": true, "tasks": [gid, ...]}],
+    "muted_until": null,
+    "signals": [{"signal": "overdue grace 3", "class": "evidence",
+                 "raw": true, "effective": true, "consecutive_days": 4,
+                 "state": "true" | "false" | "no_data", "tasks": [gid, ...]}],
     "next_step": {...} | null
   }],
   "grooming": [{gid, name, serves_suggested, confidence, reason}],
@@ -404,8 +451,10 @@ service). The cadence is a thing in the list, not a habit.
 ### D12 — Lag values are reported by hand
 
 `POST /goals/{id}/reports` `{value, period_start?}` writes `goal_reports`.
-The `task-next` agent gains `report <goal> <value>` and `review` (prints
-`GET /review`). No revenue integration; the number comes from Ben monthly.
+`POST /goals/{id}/mute` `{until}` writes `goal_overrides.mute_until` (D9).
+The `task-next` agent gains `report <goal> <value>`, `mute <area> until
+<date>` and `review` (prints `GET /review`). No revenue integration; the
+number comes from Ben monthly.
 
 ### D13 — The subscriber requires the database, as before
 
@@ -540,9 +589,9 @@ goes in the user message, where enrichment already puts it.
 | `handlers/prioritize.py` | draft write-back (D5); `evaluate` + tripwire tasks on `day_changed` (D7, D8) |
 | `handlers/weekly_review.py` | **new** — renders `GET /review` as the standing-task comment (D11) |
 | `repo/prioritize.py` | `serves_estimated` claim; `strategy_hash` on enrichment |
-| `repo/goals.py` | **new** — `goal_state`, `goal_reports` |
+| `repo/goals.py` | **new** — `goal_state`, `goal_reports`, `goal_overrides` |
 | `api/routers/next.py` | `/calibrate` necessity section (D10) |
-| `api/routers/review.py` | **new** — `GET /review`, `POST /goals/{id}/reports`, `POST /suppressions/{message_id}/restore` |
+| `api/routers/review.py` | **new** — `GET /review`, `POST /goals/{id}/reports`, `POST /goals/{id}/mute`, `POST /suppressions/{message_id}/restore` |
 | `main.py` | `review` route on the webhook CF |
 | `terraform/cloud_functions.tf` | mount `standing-context` on `tasks-prioritize`; scheduler `tasks-weekly-review` |
 | `context/standing-context.example.md` | `## Strategy` example |
@@ -565,11 +614,17 @@ CREATE TABLE IF NOT EXISTS goal_reports (
 );
 CREATE INDEX IF NOT EXISTS goal_reports_goal_idx ON goal_reports (goal_id, reported_at DESC);
 
+CREATE TABLE IF NOT EXISTS goal_overrides (
+    goal_id       TEXT PRIMARY KEY,
+    mute_until    DATE,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS goal_state (
     goal_id       TEXT NOT NULL,
     day           DATE NOT NULL,
     kind          TEXT NOT NULL,            -- outcome | area
-    state         JSONB NOT NULL,           -- leads, lag, tripwires, below_the_line, signals, next_step, diagnosis
+    state         JSONB NOT NULL,           -- leads, lag, tripwires, below_the_line, muted_until, signals (raw, effective, consecutive_days, state, tasks), next_step, diagnosis
     strategy_hash TEXT NOT NULL,
     PRIMARY KEY (goal_id, day)
 );
@@ -598,11 +653,13 @@ path = 1.0
 derisk = 0.9
 support = 0.5
 unattached = 0.2              # serves empty with low confidence; unenriched; no strategy
-below_the_line_boost = 1.3    # multiplier on cost of delay for a slipping area's tasks
+below_the_line_boost = 1.15   # multiplier on cost of delay for a slipping area's path/derisk tasks (evidence signals only)
 
 [strategy]
 stale_after_days = 90         # 'last reviewed' older than this is a review finding
 suppression_settle_days = 30  # a necessity suppression not restored by then counts as agreement
+signal_debounce_days = 3      # consecutive raw-true days before a below-the-line signal flips, and raw-false before it clears
+min_tagged_for_signals = 5    # an area with fewer serves:<area> tasks reports no_data for every signal
 lag_flat_periods = 2          # consecutive unmet lag periods, with leads met, before "lead strong, lag flat"
 ```
 
@@ -650,13 +707,21 @@ confidence × outcome: attached | grooming | none), `tripwire_fired`
   `lead`/`tripwire`/`below-the-line` grammar form, valid and invalid;
   `findings` for no-tripwire, no-lead, stale.
 - `tests/test_goal_state.py`: lead counts over window edges; lag met/unmet;
-  tripwire before/after `by`; each below-the-line signal; next-step and
-  stalled; diagnosis rule including the two-period requirement.
+  tripwire before/after `by`; next-step and stalled; diagnosis rule
+  including the two-period requirement. Below-the-line, per signal:
+  `overdue` ignores `support` role, P2/P3 by default, snoozed/blocked/
+  waiting tasks and anything inside the grace period; `overdue:P2+ grace 0`
+  widens it; `stale` is `no_data` with no open actionable task; `lead` is
+  `no_data` with no tag history; the rollout guard; debounce needs exactly
+  `signal_debounce_days` consecutive raw-true days to flip and the same
+  raw-false to clear; a mute suppresses the effective state but not the
+  stored raw values; evidence gids are listed.
 - `tests/test_prioritize.py` (extend): each role × weight; `unattached`;
   `flag` renormalisation reproduces today's ordering on the existing
   fixtures; `stop_doing` bucket only in `suppress`; pin overrides it;
   goal-horizon due replaces priority horizon only when earlier and never when
-  a hard or inferred date exists; below-the-line boost.
+  a hard or inferred date exists; below-the-line boost applies to path/derisk
+  tasks only, from evidence signals only, and not while muted.
 - `tests/test_enrichment.py` (extend): schema round-trip with `serves`;
   unknown goal id dropped; `content_hash` changes with strategy text;
   attach comment excluded from the hash.
@@ -671,7 +736,8 @@ confidence × outcome: attached | grooming | none), `tripwire_fired`
 - `tests/test_api_review.py`: restore creates through the normal path once,
   sets `restored_at`, and is idempotent on a second call.
 - `tests/test_api_review.py`: `GET /review` shape including
-  `stop_doing.suppressed_emails`; `POST /goals/{id}/reports`.
+  `stop_doing.suppressed_emails` and per-signal raw/effective/evidence;
+  `POST /goals/{id}/reports`; `POST /goals/{id}/mute` sets and clears.
 - `scripts/test-review.py --dry-run`: renders the review against the live DB
   without posting.
 
