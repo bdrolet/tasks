@@ -91,28 +91,39 @@ def classify(*, system: str, user: str, schema: dict) -> str:
 def extract_structured(
     *,
     model: str,
-    system: str,
+    system: str | list[dict],
     user: str,
     schema: dict,
     effort: str = "low",
     max_tokens: int = 8000,  # adaptive thinking counts against it
 ) -> str:
     """Single-turn structured extraction on a current-generation model.
-    Adaptive thinking (Opus 5 runs it by default; stated explicitly so the
-    request reads the same on any 4.6+ model), effort as given, JSON schema
-    output. No `temperature`: Opus 5 / Sonnet 5 reject it.
+    Opus 5.5 runs adaptive thinking always; effort is the only depth control
+    and defaults to medium there, so callers pass it explicitly. JSON schema
+    output. No `temperature`: Opus 5 / Sonnet 5 reject it. `system` is a
+    string (one cached block) or a ready list of blocks.
 
     Returns the text blocks joined (thinking blocks skipped). Raises
     RuntimeError on `refusal` or any stop reason other than `end_turn`, so a
     truncated or declined response never reaches json.loads as if it were
     complete. Callers own fail-open."""
-    response = _get_client().messages.create(  # type: ignore[call-overload]
+    blocks = (
+        [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if isinstance(system, str)
+        else system
+    )
+    response = _get_client().beta.messages.create(  # type: ignore[call-overload]
         model=model,
         max_tokens=max_tokens,
         thinking={"type": "adaptive"},
         output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        system=blocks,
         messages=[{"role": "user", "content": user}],
+        # A safety-classifier decline is re-run on a fallback model inside the
+        # same call, so a refusal degrades to a judgment rather than an
+        # unenriched row (spec §Model calls). Array-form header would be a 400.
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
     )
     _record_usage(response)
     if response.stop_reason != "end_turn":
