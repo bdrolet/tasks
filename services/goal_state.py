@@ -6,9 +6,11 @@ yesterday's task_scores. Design: strategy-layer spec D7, D9, D11."""
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from models.prioritize import TaskFacts
 from models.strategy import PERIOD_DAYS, Goal, GoalState, Signal, Strategy
+from services.due_digest import LOCAL_TZ
 from services.prioritize_config import Config
 
 PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -50,11 +52,17 @@ def window_days(period: str) -> int:
     return PERIOD_DAYS[period]
 
 
-def _completed_within(views: list[TaskView], goal_id: str, tag: str | None, days: int, today: date) -> list[TaskView]:
+def _local_date(ts: datetime) -> date:
+    return ts.astimezone(ZoneInfo(LOCAL_TZ)).date()
+
+
+def _completed_within(views: list[TaskView], goal_id: str, tag: str | None, days: int, today: date,
+                      inclusive: bool = False) -> list[TaskView]:
     start = today - timedelta(days=days)
     return [
         v for v in views
-        if v.completed and v.completed_at and v.completed_at.date() > start
+        if v.completed and v.completed_at
+        and (_local_date(v.completed_at) >= start if inclusive else _local_date(v.completed_at) > start)
         and goal_id in v.serves and (tag is None or tag in v.tags)
     ]
 
@@ -85,7 +93,7 @@ def _signal(sig: Signal, goal: Goal, views: list[TaskView], today: date, tagged:
     if sig.kind == "stale":
         if not open_actionable:
             return None, []
-        recent = _completed_within(views, goal.id, None, sig.days or 0, today)
+        recent = _completed_within(views, goal.id, None, sig.days or 0, today, inclusive=True)
         return not recent, []
     if sig.kind == "lead":
         history = _completed_within(views, goal.id, sig.tag, LEAD_HISTORY_DAYS, today)
@@ -115,6 +123,8 @@ def _debounce(prev: dict | None, raw: bool | None, config: Config) -> tuple[bool
 
 def _area_state(goal: Goal, views: list[TaskView], mutes: dict[str, date], prev: GoalState | None, today: date, config: Config) -> dict:
     tagged = sum(1 for v in views if goal.id in v.serves)
+    if prev is not None and prev.day != today - timedelta(days=1):
+        prev = None  # debounce counts consecutive daily evaluations only
     prev_signals = {s["signal"]: s for s in (prev.state.get("signals") if prev else []) or []}
     signals = []
     for sig in goal.signals:

@@ -180,3 +180,29 @@ def test_views_from_reads_components_and_facts():
     v = gs.views_from([f], scores)[0]
     assert (v.serves, v.role, v.bucket, v.priority, v.due_on, v.tags) == (("finances",), "derisk", "next", "P1", TODAY, ("bill",))
     assert gs.views_from([f], {})[0].bucket == "next"
+
+
+def test_debounce_ignores_previous_row_that_is_not_yesterday():
+    late = enough() + [view("a", due_on=TODAY - timedelta(days=9))]
+    for days_back in (0, 3):
+        prev = _prev(2)
+        prev["finances"] = replace(prev["finances"], day=TODAY - timedelta(days=days_back))
+        s = run([area([OVERDUE])], late, previous=prev)["finances"].state["signals"][0]
+        assert s["consecutive_days"] == 1 and s["effective"] is False, days_back
+
+
+def test_stale_boundary_is_inclusive_of_n_days():
+    sig = Signal(kind="stale", cls="absence", text="stale > 14 days", days=14)
+    for ago, expected in ((14, False), (15, True)):
+        noon = datetime(2026, 10, 9, 20, tzinfo=timezone.utc) - timedelta(days=ago)  # same local date
+        vs = [view("open")] + [gs.TaskView(f"d{i}", ("finances",), "path", "next", "P1", None, True, noon, ())
+                               for i in range(5)]
+        assert run([area([sig])], vs)["finances"].state["signals"][0]["raw"] is expected, ago
+
+
+def test_completions_count_on_the_local_calendar_date():
+    late_night = datetime(2026, 10, 9, 5, 0, tzinfo=timezone.utc)  # 2026-10-08 22:00 Pacific
+    v = gs.TaskView("w", ("consulting",), "path", "next", "P1", None, True, late_night, ("conversation",))
+    for period, met in (("day", False), ("week", True)):
+        g = outcome(leads=(Measure("conversation", ">=", 1, period),))
+        assert run([g], [v])["consulting"].state["leads"][0]["met"] is met, period
