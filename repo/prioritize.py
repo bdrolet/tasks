@@ -332,28 +332,38 @@ def lock_rescore(conn: Any) -> None:
     conn.execute("SELECT pg_advisory_xact_lock(%s)", (RESCORE_LOCK_KEY,))
 
 
+SCORES_BATCH = 50  # rows per INSERT; one round trip each instead of one per task
+
+
 def replace_scores(conn: Any, scored: ScoredSet) -> None:
+    """DELETE-all then multi-row INSERTs. Runs under lock_rescore, so every
+    round trip here is time every queued instance spends holding a DB
+    connection — hence batching (see tasks_prioritize max_instance_count)."""
     conn.execute("DELETE FROM task_scores")
-    for t in scored.tasks:
+    row_sql = "(%s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    for start in range(0, len(scored.tasks), SCORES_BATCH):
+        chunk = scored.tasks[start : start + SCORES_BATCH]
+        params: list[Any] = []
+        for t in chunk:
+            params.extend(
+                (
+                    t.gid,
+                    scored.today,
+                    t.bucket,
+                    t.score,
+                    t.position,
+                    t.rank,
+                    json.dumps(t.components, default=str),
+                    t.overcommitted,
+                    t.stale,
+                    t.stale_reason,
+                )
+            )
         conn.execute(
-            """
-            INSERT INTO task_scores
-                (task_gid, scored_at, today, bucket, score, position, rank, components,
-                 overcommitted, stale, stale_reason)
-            VALUES (%s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                t.gid,
-                scored.today,
-                t.bucket,
-                t.score,
-                t.position,
-                t.rank,
-                json.dumps(t.components, default=str),
-                t.overcommitted,
-                t.stale,
-                t.stale_reason,
-            ),
+            "INSERT INTO task_scores "
+            "(task_gid, scored_at, today, bucket, score, position, rank, components, "
+            "overcommitted, stale, stale_reason) VALUES " + ", ".join([row_sql] * len(chunk)),
+            tuple(params),
         )
 
 
