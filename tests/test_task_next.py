@@ -119,7 +119,7 @@ def test_calibrate_renders_table(api, capsys):
 def test_ranking_all_forwards_explain(api):
     tn.main(["ranking", "--all", "--explain"])
     ranking_calls = [c for c in api if c[1] == "/ranking"]
-    assert len(ranking_calls) == 4
+    assert len(ranking_calls) == 5
     assert all(c[3]["explain"] == "true" for c in ranking_calls)
 
 

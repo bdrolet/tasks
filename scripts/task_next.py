@@ -222,7 +222,7 @@ def _all_tasks(explain: bool = False) -> list[dict]:
     """Every non-completed ranked task (completed rows would only add refs
     that can collide with the ones a listing shows)."""
     tasks: list[dict] = []
-    for bucket in ("next", "nudge", "snoozed", "excluded"):
+    for bucket in ("next", "nudge", "snoozed", "excluded", "stop_doing"):
         params = {"bucket": bucket, "limit": 500, "explain": str(explain).lower()}
         tasks += [
             t

@@ -19,7 +19,7 @@ from services import review as review_service
 
 router = APIRouter()
 
-BUCKETS = ("next", "nudge", "snoozed", "excluded")
+BUCKETS = ("next", "nudge", "snoozed", "excluded", "stop_doing")
 LISTS = ("overcommitted", "stale", "nudge")
 OVERRIDE_FIELDS = {
     "waiting_on",

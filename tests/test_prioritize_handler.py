@@ -1198,3 +1198,31 @@ def test_rescore_flags_enrichment_stale_on_strategy_hash_mismatch(db, monkeypatc
     db.strategy_hashes = {"t": "new"}
     scored = h.rescore(db, kind="event", trigger_gid=None, today=TODAY, strategy=strat)
     assert not scored.tasks[0].components.get("enrichment_stale")
+
+
+def test_necessity_judgments_counter_fires_per_outcome(db, tag_fake, strategy, monkeypatch):
+    seen = []
+    counter = type("C", (), {"add": lambda self, n, a=None: seen.append((n, a))})()
+    monkeypatch.setattr(h.otel, "necessity_judgments", counter)
+    _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    assert seen == [(1, {"confidence": "high", "outcome": "attached"})]
+
+
+def _judged(monkeypatch, db, payload):
+    seen = []
+    counter = type("C", (), {"add": lambda self, n, a=None: seen.append((n, a))})()
+    monkeypatch.setattr(h.otel, "necessity_judgments", counter)
+    _model_returning(monkeypatch, payload)
+    h.handle_task_changed("t1", today=TODAY)
+    return seen
+
+
+def test_necessity_judgments_counts_none_and_grooming(db, tag_fake, strategy, monkeypatch):
+    seen = _judged(monkeypatch, db, SERVES_HIGH | {"serves": [], "necessity_confidence": "medium"})
+    assert seen == [(1, {"confidence": "medium", "outcome": "none"})]
+
+
+def test_necessity_judgments_counts_grooming(db, tag_fake, strategy, monkeypatch):
+    seen = _judged(monkeypatch, db, SERVES_HIGH | {"serves": [], "necessity_confidence": "low"})
+    assert seen == [(1, {"confidence": "low", "outcome": "grooming"})]

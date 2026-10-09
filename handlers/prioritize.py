@@ -319,11 +319,16 @@ def claim_serves_write_back(
     if served and conf in ("medium", "high"):
         role = max((s.role for s in served), key=lambda r: pz.ROLE_RANK[r])
         payload = {"serves": [s.goal for s in served], "role": role, "confidence": conf}
-        return payload if repo.claim_serves(conn, facts.gid, payload) else None
+        if not repo.claim_serves(conn, facts.gid, payload):
+            return None
+        otel.necessity_judgments.add(1, {"confidence": conf, "outcome": "attached"})
+        return payload
     if not served and conf in ("medium", "high"):
-        repo.claim_serves(conn, facts.gid, {"none": True, "confidence": conf})
+        if repo.claim_serves(conn, facts.gid, {"none": True, "confidence": conf}):
+            otel.necessity_judgments.add(1, {"confidence": conf, "outcome": "none"})
         return None
-    repo.claim_serves(conn, facts.gid, {"grooming": True})
+    if repo.claim_serves(conn, facts.gid, {"grooming": True}):
+        otel.necessity_judgments.add(1, {"confidence": conf, "outcome": "grooming"})
     return None
 
 
