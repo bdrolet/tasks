@@ -28,7 +28,9 @@ never work → goal, so a task cannot say what it serves.
 
 - Every task carries **what it serves** and **in what role**, set at creation
   and visible on the card; nothing enters the ranked set unattached without
-  being flagged.
+  being flagged. For a task born from email, "at creation" is literal: gate 2
+  judges necessity in the same call that decides whether the email is
+  actionable, and the task is created with its tags (D14).
 - Ranking prefers work that is on a goal's path or protects a goal or an
   area's standard, over work that merely supports one, and sinks work that
   serves nothing.
@@ -55,8 +57,9 @@ never work → goal, so a task cannot say what it serves.
   side; the display half buys nothing. Linkage is tags on the task.
 - **No automatic deletion.** The stop-doing list prompts; Ben removes.
 - **No revenue integration.** Lag measures are reported by hand.
-- **No change to what becomes a task.** Gates 1 and 2 are untouched; a task
-  that passes them is judged here, after creation.
+- **No change to gate 1.** Screening stays a cheap Haiku call over every
+  email with no strategy in its prompt. Gate 2 does read the strategy (D14);
+  it is already the judgment step and already reads the declared facts.
 - **No multi-user.** One strategy document, one person.
 
 ## Vocabulary
@@ -342,9 +345,11 @@ the daily tick needs neither Asana nor a model.
 `GET /calibrate` gains a `necessity` section: for every task with a
 non-null `serves_estimated`, compare the model's draft against the task's
 current effective `serves`/`role` (which, if different, Ben changed).
-Report agreement rate by `necessity_confidence` band and by `strategy_hash`,
-plus the count of grooming-list tasks Ben attached versus removed. This is
-the number that moves `mode` (D6).
+Report agreement rate by `necessity_confidence` band, by `strategy_hash`
+and by source (`gate2` from `tasks.serves_estimated`, `enrichment` from
+`task_facts.serves_estimated`), plus the count of grooming-list tasks Ben
+attached versus removed, and the gate-2 / enrichment agreement rate where
+both judged the same task (D14). This is the number that moves `mode` (D6).
 
 `task_override_events` (audit-trail spec) already records override writes;
 tag edits arrive as `task_changed` and are visible as a changed effective
@@ -372,7 +377,10 @@ value against `serves_estimated`, so no new audit table is needed.
     "next_step": {...} | null
   }],
   "grooming": [{gid, name, serves_suggested, confidence, reason}],
-  "stop_doing": [{gid, name, reason}]
+  "stop_doing": {
+    "tasks": [{gid, name, reason}],
+    "suppressed_emails": [{message_id, subject, sender, web_link, reason, created_at}]
+  }
 }
 ```
 
@@ -401,6 +409,44 @@ An unreadable strategy section is **not** a failure: `Strategy((), None,
 A failed model call leaves `serves` unenriched and neutral, as the existing
 fields are.
 
+### D14 — Gate 2 reads the strategy and tags at creation
+
+`services/triage.py::decide` already reads the `Roles` section of the
+declared facts and decides whether an email still requires anything. It
+gains the `## Strategy` section in the same system prompt and the same three
+output fields as enrichment (D4): `serves`, `necessity_confidence`,
+`necessity_reason`. One call, no second agent run.
+
+`actionable` is decided as today — strategy never makes a non-actionable
+email actionable. Strategy adds a second axis to an actionable email:
+
+| Gate-2 judgment | `flag` / `demote` | `suppress` |
+|---|---|---|
+| `serves` non-empty, confidence medium/high | create with `serves:`/`role:` tags | same |
+| `serves` non-empty, confidence low | create without tags; enrichment judges again (D5) → grooming | same |
+| `serves` empty, confidence medium/high | create without tags; enrichment judges again → stop-doing | **suppress**: `suppressed_emails` row, `source = "necessity"`, reason = `necessity_reason`, no task |
+| `serves` empty, confidence low | create without tags → grooming | same |
+
+The `mode` setting is the one in `[necessity]` (D6): the gate suppresses on
+necessity grounds only once the scorer is trusted to, and the same calibrate
+number governs both. Suppression here is the only place in the design where
+a necessity judgment acts without Ben seeing a card, which is why it waits
+for `suppress` mode and why every such row is listed by `GET /review` under
+`stop_doing.suppressed_emails` with the email's `web_link`, so a wrong call
+can be reversed by building the task from the email.
+
+The gate-2 draft is recorded on the pipeline's `tasks` row
+(`tasks.serves_estimated`, same JSON shape as `task_facts.serves_estimated`)
+so `calibrate` (D10) can score it against Ben's final tags, and against
+enrichment's own judgment of the same task when both ran — disagreement
+between the two gates is itself a signal about the prompt.
+
+Gate 1 is untouched: it runs over every email inbox publishes, the strategy
+section is long, and screening's job is "is there anything here", not
+"does it matter". Fail-open holds: an unreadable strategy section leaves
+gate 2 exactly as it is today, and a gate-2 failure already degrades to the
+category rule.
+
 ## Components
 
 | File | Change |
@@ -408,6 +454,9 @@ fields are.
 | `services/strategy.py` | **new, pure** — `parse`, `Goal`, `Strategy`, `strategy_hash` |
 | `services/goal_state.py` | **new, pure** — `evaluate`, lead/lag/tripwire/below-the-line logic |
 | `services/enrichment.py` | prompt + schema additions (D4); `is_estimate_comment` recognises the attach comment |
+| `services/triage.py` | strategy in the system prompt; `serves`/`necessity_confidence`/`necessity_reason` in the schema (D14) |
+| `handlers/task_create.py` | tag at creation; necessity suppression in `suppress` mode; record the draft on the `tasks` row (D14) |
+| `repo/tasks.py` | `serves_estimated` on the pipeline row |
 | `services/prioritize.py` | `necessity` term, `stop_doing` bucket, goal-horizon due, below-the-line boost, `flag` renormalisation (D6) |
 | `services/prioritize_config.py` | `[necessity]`, `[strategy]`, `weights.necessity` |
 | `handlers/prioritize.py` | draft write-back (D5); `evaluate` + tripwire tasks on `day_changed` (D7, D8) |
@@ -426,6 +475,7 @@ fields are.
 
 ```sql
 ALTER TABLE task_facts ADD COLUMN serves_estimated JSONB;   -- NULL = never judged for write-back (D5)
+ALTER TABLE tasks ADD COLUMN serves_estimated JSONB;        -- gate-2 draft at creation (D14)
 ALTER TABLE task_enrichment ADD COLUMN strategy_hash TEXT;  -- D4
 
 CREATE TABLE IF NOT EXISTS goal_reports (
@@ -447,7 +497,7 @@ CREATE TABLE IF NOT EXISTS goal_state (
 );
 ```
 
-`task_scores.bucket` gains the value `stop_doing`. `components` gains
+`suppressed_emails.source` gains the value `necessity`. `task_scores.bucket` gains the value `stop_doing`. `components` gains
 `necessity`, `serves` (effective), `role` (effective), `necessity_source`
 (`tag | override | model | default`), `grooming: bool`,
 `below_the_line: bool`, and `due_source` gains the value `goal_horizon`.
@@ -479,6 +529,9 @@ lag_flat_periods = 2          # consecutive unmet lag periods, with leads met, b
 
 ## Event handling
 
+- `email_classified` (existing, events CF): screen → triage (now with
+  strategy; D14) → create with `serves:`/`role:` tags, or suppress on
+  necessity in `suppress` mode → `task_changed` as today.
 - `task_changed` (existing): gather → enrich (now with strategy) → claim and
   draft write-back of `serves:`/`role:` (D5) → rescore. The rescore loads the
   strategy once per process (cached with the standing-context text; a cold
@@ -505,6 +558,7 @@ confidence × outcome: attached | grooming | none), `tripwire_fired`
 | Strategy section missing/unreadable | no goals; necessity neutral; warning; ranking as today |
 | A goal block malformed | that block skipped, rest loads; finding on the review |
 | Model call fails | `serves` unenriched → neutral; no write-back; retried on next content change as today |
+| Gate 2 fails or strategy unreadable there | gate 2 behaves exactly as today (fail-open); the task is judged by enrichment after creation |
 | Asana write-back fails | claim already taken (same as points): logged, never retried — the grooming list shows the task as unattached |
 | Tripwire task creation fails | raises → redelivery; external id prevents a duplicate on retry |
 | DB down on `day_changed` | raises (prioritizer D7) |
@@ -530,7 +584,12 @@ confidence × outcome: attached | grooming | none), `tripwire_fired`
 - `tests/test_prioritize_handler.py` (extend, fakes): the four write-back
   rows of D5; the claim guard under redelivery; tripwire task created once
   across two days of `fired`; day-changed ordering.
-- `tests/test_api_review.py`: `GET /review` shape; `POST /goals/{id}/reports`.
+- `tests/test_triage.py` (extend): schema round-trip with `serves`; unknown
+  goal id dropped; strategy absent leaves the prompt and parse as today.
+- `tests/test_task_create.py` (extend): the four rows of D14's table in each
+  mode; the suppressed row's `source`; the `tasks` row carries the draft.
+- `tests/test_api_review.py`: `GET /review` shape including
+  `stop_doing.suppressed_emails`; `POST /goals/{id}/reports`.
 - `scripts/test-review.py --dry-run`: renders the review against the live DB
   without posting.
 
