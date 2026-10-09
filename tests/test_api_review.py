@@ -92,3 +92,22 @@ def test_restore_unknown_or_non_necessity_is_404(monkeypatch):
     assert client.post("/suppressions/zz/restore", headers=AUTH).status_code == 404
     monkeypatch.setattr(repo_sup, "get", lambda c, mid: {"message_id": "m", "source": "agent", "restored_at": None})
     assert client.post("/suppressions/m/restore", headers=AUTH).status_code == 404
+
+
+def test_restore_escapes_html_in_notes(monkeypatch):
+    row = {"message_id": "m2", "importance": "P2", "subject": "S", "sender": "Ann <ann@x.y>",
+           "reason": "serves nothing & more", "source": "necessity", "web_link": "https://x/?a=1&b=2",
+           "restored_at": None, "restored_task_gid": None}
+    monkeypatch.setattr(repo_sup, "get", lambda c, mid: dict(row))
+    monkeypatch.setattr(repo_sup, "mark_restored", lambda c, mid, gid: True)
+    created = []
+    monkeypatch.setattr(asana, "find_task_by_external", lambda ext: None)
+    monkeypatch.setattr(asana, "create_task_from_fields", lambda f: (created.append(f), type("T", (), {"gid": "t9", "permalink_url": "u"})())[1])
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "proj")
+    monkeypatch.setattr(review_router.tags_service, "resolve_gids", lambda names: [])
+    monkeypatch.setattr(task_index, "refresh", lambda gid: None)
+    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: None)
+    assert client.post("/suppressions/m2/restore", headers=AUTH).status_code == 201
+    notes = created[0]["html_notes"]
+    assert "&lt;ann@x.y&gt;" in notes and "&amp; more" in notes and "a=1&amp;b=2" in notes
+    assert "<ann@" not in notes

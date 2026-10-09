@@ -2,6 +2,7 @@
 reports, area mutes, and restoring a necessity suppression (spec D11, D12,
 D14). Reads goal_state/task_scores only; the restore is the one Asana write."""
 
+import html
 from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Response
@@ -99,9 +100,9 @@ def restore(message_id: str, response: Response) -> dict:
         fields = {
             "name": f"[{row.get('importance') or 'P2'}] {subject}",
             "html_notes": (
-                f"<body>Restored from a necessity suppression. From {row.get('sender') or '?'}.\n"
-                f"Suppressed because: {row.get('reason') or '—'}\n"
-                f"<a href=\"{row.get('web_link') or ''}\">Open the email</a></body>"
+                f"<body>Restored from a necessity suppression. From {html.escape(row.get('sender') or '?')}.\n"
+                f"Suppressed because: {html.escape(row.get('reason') or '—')}\n"
+                f"<a href=\"{html.escape(row.get('web_link') or '', quote=True)}\">Open the email</a></body>"
             ),
             "projects": [asana.ASANA_PROJECT_ID],
             "external": {"gid": message_id, "data": "inbox"},

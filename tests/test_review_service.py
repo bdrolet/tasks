@@ -46,11 +46,40 @@ def test_build_shapes_goals_grooming_and_stop_doing():
 
 
 def test_render_is_markdown_with_links():
-    r = review.build(STRAT, {}, [score("t1", "[P1] Write offer", serves=["consulting"], role="path")], [], TODAY)
-    md = review.render(r)
+    states = {
+        "consulting": GoalState("consulting", "outcome", TODAY, "h", {
+            "next_step": "t1", "stalled": False,
+            "leads": [{"tag": "conversation", "window": "week", "value": 1, "threshold": 3, "met": False},
+                      {"tag": "proposal", "window": "month", "value": 2, "threshold": 2, "met": True}],
+            "lag": {"value": 500, "threshold": 4000, "met": False},
+            "tripwires": [{"text": "no calls", "action": "pivot", "fired": True, "evaluated": True}],
+            "diagnosis": "execution"}),
+        "finances": GoalState("finances", "area", TODAY, "h", {
+            "below_the_line": True, "muted_until": None,
+            "signals": [{"signal": "overdue", "class": "evidence", "state": "true", "consecutive_days": 4, "tasks": ["t2"]}]}),
+    }
+    scores = [
+        score("t1", "[P1] Write offer", serves=["consulting"], role="path"),
+        score("t2", "[P1] Pay bill", serves=["finances"], role="derisk"),
+        score("t3", "[P2] Maybe", grooming=True, serves_suggested=["consulting"]),
+        score("t4", "[P3] Fluff", confident_none=True, necessity_confidence="high"),
+    ]
+    sup = [{"message_id": "m1", "subject": "Linked", "sender": "a@x", "reason": "r1", "web_link": "https://o/m1", "created_at": None, "restored_at": None},
+           {"message_id": "m2", "subject": "Unlinked", "sender": "b@x", "reason": "r2", "web_link": None, "created_at": None, "restored_at": None}]
+    md = review.render(review.build(STRAT, states, scores, sup, TODAY))
     assert md.startswith("# Weekly strategy review — 2026-10-09")
-    assert "## consulting" in md and "stalled" in md
-    assert "outcome goal has no tripwire" in md
+    assert "## consulting" in md and "outcome goal has no tripwire" in md
+    assert "- next step: [[P1] Write offer](u/t1)" in md
+    assert "- lead conversation: 1 / 3 per week — not met" in md
+    assert "- lead proposal: 2 / 2 per month — met" in md
+    assert "- lag: 500 / 4000 — not met" in md
+    assert "- tripwire no calls → pivot: **FIRED**" in md
+    assert "  - overdue [evidence]: true (4d) — [[P1] Pay bill](u/t2)" in md
+    assert "- [[P2] Maybe](u/t3) — suggested consulting" in md
+    assert "- [[P3] Fluff](u/t4) —" in md
+    assert "- email [Linked](https://o/m1) from a@x — r1" in md
+    assert "- email Unlinked from b@x — r2" in md
+    assert "None" not in md
 
 
 def test_necessity_calibration_groups_by_band_and_source():

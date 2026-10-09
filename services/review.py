@@ -62,33 +62,37 @@ def _link(ref: dict | None) -> str:
 
 
 def render(review: dict) -> str:
-    out = [f"# Weekly strategy review — {review['reviewed_at']}", ""]
-    if review["findings"]:
+    out = [f"# Weekly strategy review — {review.get('reviewed_at', '')}", ""]
+    if review.get("findings"):
         out += ["**Findings**"] + [f"- {f}" for f in review["findings"]] + [""]
-    for g in review["goals"]:
-        out.append(f"## {g['id']} ({g['kind']})")
-        out.append(f"- next step: {_link(g['next_step'])}" + (" — **stalled**" if g["stalled"] else ""))
-        if g["kind"] == "outcome":
-            for lead in g["leads"]:
-                out.append(f"- lead {lead['tag']}: {lead['value']} / {lead['threshold']:g} per {lead['window']} — {'met' if lead['met'] else 'not met'}")
-            lag = g["lag"]
-            out.append(f"- lag: {lag['value']:g} / {lag['threshold']:g} — {'met' if lag['met'] else 'not met'}" if lag else "- lag: not reported")
-            for t in g["tripwires"]:
-                out.append(f"- tripwire {t['text']} → {t['action']}: {'**FIRED**' if t['fired'] else ('watching' if t['evaluated'] else 'not yet due')}")
-            out.append(f"- diagnosis: **{g['diagnosis']}**")
+    for g in review.get("goals", []):
+        out.append(f"## {g.get('id')} ({g.get('kind')})")
+        out.append(f"- next step: {_link(g.get('next_step'))}" + (" — **stalled**" if g.get("stalled") else ""))
+        if g.get("kind") == "outcome":
+            for lead in g.get("leads", []):
+                out.append(f"- lead {lead.get('tag')}: {lead.get('value')} / {lead.get('threshold', 0):g} per {lead.get('window')} — {'met' if lead.get('met') else 'not met'}")
+            lag = g.get("lag")
+            out.append(f"- lag: {lag.get('value', 0):g} / {lag.get('threshold', 0):g} — {'met' if lag.get('met') else 'not met'}" if lag else "- lag: not reported")
+            for t in g.get("tripwires", []):
+                status = "**FIRED**" if t.get("fired") else ("watching" if t.get("evaluated") else "not yet due")
+                out.append(f"- tripwire {t.get('text')} → {t.get('action')}: {status}")
+            out.append(f"- diagnosis: **{g.get('diagnosis', 'insufficient data')}**")
         else:
-            out.append(f"- below the line: {'**yes**' if g['below_the_line'] else 'no'}" + (f" (muted until {g['muted_until']})" if g["muted_until"] else ""))
-            for s in g["signals"]:
-                tasks = ", ".join(_link(t) for t in s["tasks"]) or "—"
-                out.append(f"  - {s['signal']} [{s['class']}]: {s['state']} ({s['consecutive_days']}d) — {tasks}")
+            out.append(f"- below the line: {'**yes**' if g.get('below_the_line') else 'no'}" + (f" (muted until {g['muted_until']})" if g.get("muted_until") else ""))
+            for s in g.get("signals", []):
+                tasks = ", ".join(_link(t) for t in s.get("tasks", [])) or "—"
+                out.append(f"  - {s.get('signal')} [{s.get('class', 'evidence')}]: {s.get('state', '?')} ({s.get('consecutive_days', 0)}d) — {tasks}")
         out.append("")
     out.append("## Grooming")
-    out += [f"- {_link(t)} — suggested {', '.join(t['serves_suggested']) or 'nothing'} ({t['confidence']}): {t['reason']}" for t in review["grooming"]] or ["- nothing"]
+    out += [f"- {_link(t)} — suggested {', '.join(t.get('serves_suggested') or []) or 'nothing'} ({t.get('confidence')}): {t.get('reason')}" for t in review.get("grooming", [])] or ["- nothing"]
     out += ["", "## Stop doing"]
-    out += [f"- {_link(t)} — {t['reason']} (remove, or attach with a serves: tag)" for t in review["stop_doing"]["tasks"]] or ["- nothing"]
-    for e in review["stop_doing"]["suppressed_emails"]:
-        flag = " — restored" if e["restored"] else ""
-        out.append(f"- email [{e['subject']}]({e['web_link']}) from {e['sender']} — {e['reason']}{flag}")
+    stop = review.get("stop_doing", {})
+    out += [f"- {_link(t)} — {t.get('reason')} (remove, or attach with a serves: tag)" for t in stop.get("tasks", [])] or ["- nothing"]
+    for e in stop.get("suppressed_emails", []):
+        flag = " — restored" if e.get("restored") else ""
+        subject = e.get("subject") or "(no subject)"
+        label = f"[{subject}]({e['web_link']})" if e.get("web_link") else subject
+        out.append(f"- email {label} from {e.get('sender')} — {e.get('reason')}{flag}")
     return "\n".join(out) + "\n"
 
 
