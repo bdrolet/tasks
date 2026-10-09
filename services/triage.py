@@ -423,6 +423,9 @@ def _parse(
         else "low",
         "necessity_reason": str(data.get("necessity_reason") or "").strip(),
     }
+    if not known_goals:
+        # No strategy loaded: the defaults are authoritative, whatever the model said.
+        necessity = {"serves": [], "necessity_confidence": "low", "necessity_reason": ""}
     if gid is not None and not gid_exists(str(gid)):
         gid = None
     if gid is not None:
