@@ -46,9 +46,11 @@ def health() -> dict:
 
 from api.routers import comments, projects, search, tasks
 from api.routers import next as next_router
+from api.routers import review as review_router
 
 app.include_router(search.router)
 app.include_router(tasks.router)
 app.include_router(comments.router)
 app.include_router(projects.router)
 app.include_router(next_router.router)
+app.include_router(review_router.router)
