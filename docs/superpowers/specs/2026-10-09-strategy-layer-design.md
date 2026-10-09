@@ -160,13 +160,17 @@ outcome goal with no `lead`; `last reviewed` missing or older than
 `services/enrichment.py`'s single schema-constrained call (prioritizer D5)
 gains the strategy and three output fields. No second model call per task.
 
-**Prompt additions.** System: what goals, areas and the three roles mean;
-that `path` means "a precondition on the goal's written path, or the
-obvious next step toward one"; that `derisk` means "its absence puts the
-outcome or the standard at significant risk"; that `support` means "helps
-but the goal is reachable without it"; that an empty `serves` with high
-confidence is a real and useful answer, not a failure. User: the full
-`## Strategy` section text, after the task content.
+**Prompt additions.** System, first block (static, unchanged across
+tasks): what goals, areas and the three roles mean; that `path` means "a
+precondition on the goal's written path, or the obvious next step toward
+one"; that `derisk` means "its absence puts the outcome or the standard at
+significant risk"; that `support` means "helps but the goal is reachable
+without it"; that an empty `serves` with high confidence is a real and
+useful answer, not a failure. System, second block: the full `## Strategy`
+section text, with `cache_control` on it. The strategy is the same for
+every task, so placing it in the system prefix rather than the user message
+means a full re-judge of the task set reads it from cache (see §Model
+calls). User: the task content, as today.
 
 **Schema additions** (strict, alongside the existing fields):
 
@@ -189,8 +193,8 @@ id in the loaded strategy is dropped at parse time with a warning.
 `sha256(name + "\n" + notes + "\n" + comments + "\n" + strategy_hash)`
 where `strategy_hash` is `sha256` of the `## Strategy` section text. A
 strategy edit therefore re-judges every task once on the next gather or heal
-— ~100 calls, about a dollar at the current volume — which is correct: a new
-guiding policy should re-sort the list. The hash is stored on
+— ~100 calls, a few dollars at the current volume (§Model calls) — which is
+correct: a new guiding policy should re-sort the list. The hash is stored on
 `task_enrichment` so `calibrate` can group judgments by strategy version.
 
 **Precedence is unchanged:** tag > override > model > default, per field.
@@ -415,9 +419,10 @@ fields are.
 
 `services/triage.py::decide` already reads the `Roles` section of the
 declared facts and decides whether an email still requires anything. It
-gains the `## Strategy` section in the same system prompt and the same three
-output fields as enrichment (D4): `serves`, `necessity_confidence`,
-`necessity_reason`. One call, no second agent run.
+gains the `## Strategy` section as a second cached system block, after the
+static instructions and the `Roles` facts, and the same three output fields
+as enrichment (D4): `serves`, `necessity_confidence`, `necessity_reason`.
+One call, no second agent run.
 
 `actionable` is decided as today — strategy never makes a non-actionable
 email actionable. Strategy adds a second axis to an actionable email:
@@ -457,13 +462,76 @@ section is long, and screening's job is "is there anything here", not
 gate 2 exactly as it is today, and a gate-2 failure already degrades to the
 category rule.
 
+## Model calls
+
+Every Claude call in this service, what this spec does to it, and the
+model it should run on. Prices are first-party API rates as of 2026-10-06
+(input / output per million tokens; cache reads are about a tenth of input
+on every current model).
+
+| Call | Where | Today | This spec | Model after |
+|---|---|---|---|---|
+| Gate 1 screening | `services/screening.py` → `claude.classify` | Haiku 4.5, temp 0, 512 tokens, every email | **unchanged** | as today |
+| Relating | `services/relating.py` → `claude.classify` | Haiku 4.5 | **unchanged** | as today |
+| **Gate 2 triage** | `services/triage.py` → `claude.run_agent` | `claude-sonnet-5` tool runner, adaptive thinking, effort `medium`, 4,096 max tokens, 6 iterations | **updated**: strategy as a second cached system block; schema gains `serves`, `necessity_confidence`, `necessity_reason` (D14) | `claude-sonnet-5`, unchanged |
+| Email summary | `services/email_summary.py` → `claude.summarize` | Haiku 4.5 | **unchanged** | as today |
+| Deadline extraction | `services/deadline.py` → `claude.extract` | Sonnet 4.6, temp 0 | **unchanged** | as today |
+| Digest bullets | `services/task_bullets.py` → `claude.summarize` | Haiku 4.5 | **unchanged** | as today |
+| **Enrichment** | `services/enrichment.py` → `claude.extract_structured` | `claude-opus-5`, adaptive thinking, effort `low`, JSON schema | **updated**: strategy as a second cached system block; schema gains the same three fields (D4); effort `medium` | **`claude-opus-5-5`**, effort `medium` |
+
+**No new model calls.** The parser (D3), goal-state evaluation (D7),
+tripwire tasks (D8), the weekly review render (D11) and calibrate (D10) are
+all deterministic. The review is a table of numbers and task links; a
+narrative paragraph on top is a follow-up, not part of this spec.
+
+**Why Opus 5.5 for enrichment.** Enrichment is the call whose output Ben
+reads on every card — the points draft today, the `serves:` draft after
+this spec — and the necessity judgment is harder than the point estimate:
+it reads a ~1,500-word strategy and decides whether a task is a
+precondition, a safeguard, or noise. That is the judgment the whole design
+rests on. `claude-opus-5-5` is the current Opus, at $4 / $20 against
+Opus 5's $5 / $25, with the same context, output cap and tokenizer; the
+only Opus 5 → 5.5 changes that could bite are that thinking cannot be
+disabled (this call already runs adaptive), forced `tool_choice` is gone
+(not used), and effort defaults to `medium` rather than `high` (set it
+explicitly). Effort moves from `low` to `medium` because the task got
+harder; `calibrate` is what says whether `low` would have done — run the
+first full re-judge at `medium`, and step down only if the agreement rate
+holds. Turn on the server-side refusal fallback (`fallbacks: "default"`
+with beta `server-side-fallback-2026-07-01`) so a classifier decline
+degrades to a judgment from the fallback model rather than an unenriched
+row; `extract_structured` already raises on `refusal`, so this is purely
+additive.
+
+**Why Sonnet 5 stays for gate 2.** The strategy adds a cached system block
+and three schema fields to an agent loop that already works; nothing about
+the loop gets harder. Moving it to `claude-sonnet-5-5` is a model migration
+with its own breaking changes (recalibrated effort levels, `between_tools`
+thinking, a different safeguard set) and belongs in its own PR, not coupled
+to a feature change whose output needs to be compared before and after.
+
+**Cost.** A full re-judge of ~100 tasks on Opus 5.5 at `medium`: per task
+roughly 1k static system + 2k strategy, both cached after the first call,
+plus up to 9k of notes and comments uncached, plus a few hundred output
+tokens and some thinking. About $3–6 per strategy edit, then pennies a day
+as tasks change. Gate 2's extra cost is the strategy block as a cache read
+on every actionable email — well under a tenth of a cent each.
+
+**Prompt caching.** Both calls already put the system prompt in a
+`cache_control` block. The strategy becomes a second block: render order is
+static instructions, then `Roles` (gate 2 only), then strategy, then the
+per-task or per-email content. Nothing volatile — today's date included —
+may sit before the strategy block, or the cache never hits; today's date
+goes in the user message, where enrichment already puts it.
+
 ## Components
 
 | File | Change |
 |---|---|
 | `services/strategy.py` | **new, pure** — `parse`, `Goal`, `Strategy`, `strategy_hash` |
 | `services/goal_state.py` | **new, pure** — `evaluate`, lead/lag/tripwire/below-the-line logic |
-| `services/enrichment.py` | prompt + schema additions (D4); `is_estimate_comment` recognises the attach comment |
+| `services/enrichment.py` | prompt + schema additions (D4); `MODEL = "claude-opus-5-5"`, `EFFORT = "medium"`; `is_estimate_comment` recognises the attach comment |
+| `clients/claude.py` | `extract_structured` gains the second cached system block and the refusal fallback (§Model calls) |
 | `services/triage.py` | strategy in the system prompt; `serves`/`necessity_confidence`/`necessity_reason` in the schema (D14) |
 | `handlers/task_create.py` | tag at creation; necessity suppression in `suppress` mode; record the draft on the `tasks` row (D14) |
 | `repo/tasks.py` | `serves_estimated` on the pipeline row |
@@ -625,3 +693,6 @@ confidence × outcome: attached | grooming | none), `tripwire_fired`
   that never had a task). The schedule repo could publish `task-events`.
 - A `task-review` agent that walks the grooming list interactively.
 - Moving `[PX]` into a custom field, as the prioritizer spec already lists.
+- Move gate 2 from `claude-sonnet-5` to `claude-sonnet-5-5` in its own PR,
+  with a before/after comparison on the backtest script.
+- A model-written narrative paragraph on top of the weekly review.
