@@ -28,7 +28,8 @@ never work → goal, so a task cannot say what it serves.
 
 - Every task carries **what it serves** and **in what role**, set at creation
   and visible on the card; nothing enters the ranked set unattached without
-  being flagged. For a task born from email, "at creation" is literal: gate 2
+  being flagged, and an email the model is highly confident serves nothing
+  never becomes a task. For a task born from email, "at creation" is literal: gate 2
   judges necessity in the same call that decides whether the email is
   actionable, and the task is created with its tags (D14).
 - Ranking prefers work that is on a goal's path or protects a goal or an
@@ -252,7 +253,7 @@ judgment:
 |---|---|
 | `flag` | N is recorded in `components` and the grooming/stop-doing lists are populated; the `necessity` weight is forced to 0 so ranking is unchanged. **Ship here.** |
 | `demote` | the `necessity` weight applies; uncertain "none" sinks via `unattached`. |
-| `suppress` | as `demote`, plus the `stop_doing` bucket. |
+| `suppress` | as `demote`, plus the `stop_doing` bucket, plus gate-2 suppression at medium confidence (D14). High-confidence gate-2 suppression is not mode-gated. |
 
 Moving from `flag` is a config edit, made when `GET /calibrate` shows the
 agreement rate (D10) that justifies it. The threshold is a judgment, not a
@@ -348,8 +349,9 @@ current effective `serves`/`role` (which, if different, Ben changed).
 Report agreement rate by `necessity_confidence` band, by `strategy_hash`
 and by source (`gate2` from `tasks.serves_estimated`, `enrichment` from
 `task_facts.serves_estimated`), plus the count of grooming-list tasks Ben
-attached versus removed, and the gate-2 / enrichment agreement rate where
-both judged the same task (D14). This is the number that moves `mode` (D6).
+attached versus removed, the gate-2 / enrichment agreement rate where both
+judged the same task, and the necessity-suppression restore rate by
+confidence band (D14). This is the number that moves `mode` (D6).
 
 `task_override_events` (audit-trail spec) already records override writes;
 tag edits arrive as `task_changed` and are visible as a changed effective
@@ -424,16 +426,24 @@ email actionable. Strategy adds a second axis to an actionable email:
 |---|---|---|
 | `serves` non-empty, confidence medium/high | create with `serves:`/`role:` tags | same |
 | `serves` non-empty, confidence low | create without tags; enrichment judges again (D5) → grooming | same |
-| `serves` empty, confidence medium/high | create without tags; enrichment judges again → stop-doing | **suppress**: `suppressed_emails` row, `source = "necessity"`, reason = `necessity_reason`, no task |
+| `serves` empty, confidence **high** | **no task**: `suppressed_emails` row, `source = "necessity"`, reason = `necessity_reason` | same |
+| `serves` empty, confidence medium | create without tags; enrichment judges again → stop-doing | **no task**, as the high row |
 | `serves` empty, confidence low | create without tags → grooming | same |
 
-The `mode` setting is the one in `[necessity]` (D6): the gate suppresses on
-necessity grounds only once the scorer is trusted to, and the same calibrate
-number governs both. Suppression here is the only place in the design where
-a necessity judgment acts without Ben seeing a card, which is why it waits
-for `suppress` mode and why every such row is listed by `GET /review` under
-`stop_doing.suppressed_emails` with the email's `web_link`, so a wrong call
-can be reversed by building the task from the email.
+A high-confidence "serves nothing" never becomes a task, in any mode, from
+the first deploy: Ben's instruction is that the list should not fill with
+things the model is sure do not matter. Only the medium band waits for
+`suppress` mode, governed by the same calibrate number as the scorer (D6).
+
+This is the one place in the design where a necessity judgment acts without
+Ben seeing a card, so it carries its own reversal path. Every necessity
+suppression is listed by `GET /review` under `stop_doing.suppressed_emails`
+with the email's `web_link` and the reason, and
+`POST /suppressions/{message_id}/restore` creates the task through the
+normal creation path (tags from the stored judgment omitted, so enrichment
+judges it afresh) and marks the row `restored_at`. A restore is a labelled
+disagreement for `calibrate` (D10); a suppression that is never restored
+counts as agreement after `config.strategy.suppression_settle_days` (30).
 
 The gate-2 draft is recorded on the pipeline's `tasks` row
 (`tasks.serves_estimated`, same JSON shape as `task_facts.serves_estimated`)
@@ -464,7 +474,7 @@ category rule.
 | `repo/prioritize.py` | `serves_estimated` claim; `strategy_hash` on enrichment |
 | `repo/goals.py` | **new** — `goal_state`, `goal_reports` |
 | `api/routers/next.py` | `/calibrate` necessity section (D10) |
-| `api/routers/review.py` | **new** — `GET /review`, `POST /goals/{id}/reports` |
+| `api/routers/review.py` | **new** — `GET /review`, `POST /goals/{id}/reports`, `POST /suppressions/{message_id}/restore` |
 | `main.py` | `review` route on the webhook CF |
 | `terraform/cloud_functions.tf` | mount `standing-context` on `tasks-prioritize`; scheduler `tasks-weekly-review` |
 | `context/standing-context.example.md` | `## Strategy` example |
@@ -497,7 +507,7 @@ CREATE TABLE IF NOT EXISTS goal_state (
 );
 ```
 
-`suppressed_emails.source` gains the value `necessity`. `task_scores.bucket` gains the value `stop_doing`. `components` gains
+`suppressed_emails.source` gains the value `necessity`, and the table gains `restored_at TIMESTAMPTZ` and `restored_task_gid TEXT` (D14). `task_scores.bucket` gains the value `stop_doing`. `components` gains
 `necessity`, `serves` (effective), `role` (effective), `necessity_source`
 (`tag | override | model | default`), `grooming: bool`,
 `below_the_line: bool`, and `due_source` gains the value `goal_horizon`.
@@ -524,6 +534,7 @@ below_the_line_boost = 1.3    # multiplier on cost of delay for a slipping area'
 
 [strategy]
 stale_after_days = 90         # 'last reviewed' older than this is a review finding
+suppression_settle_days = 30  # a necessity suppression not restored by then counts as agreement
 lag_flat_periods = 2          # consecutive unmet lag periods, with leads met, before "lead strong, lag flat"
 ```
 
@@ -586,8 +597,11 @@ confidence × outcome: attached | grooming | none), `tripwire_fired`
   across two days of `fired`; day-changed ordering.
 - `tests/test_triage.py` (extend): schema round-trip with `serves`; unknown
   goal id dropped; strategy absent leaves the prompt and parse as today.
-- `tests/test_task_create.py` (extend): the four rows of D14's table in each
-  mode; the suppressed row's `source`; the `tasks` row carries the draft.
+- `tests/test_task_create.py` (extend): the five rows of D14's table in each
+  mode, including high-confidence suppression in `flag` mode; the suppressed
+  row's `source`; the `tasks` row carries the draft.
+- `tests/test_api_review.py`: restore creates through the normal path once,
+  sets `restored_at`, and is idempotent on a second call.
 - `tests/test_api_review.py`: `GET /review` shape including
   `stop_doing.suppressed_emails`; `POST /goals/{id}/reports`.
 - `scripts/test-review.py --dry-run`: renders the review against the live DB
