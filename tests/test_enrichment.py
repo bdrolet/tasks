@@ -16,6 +16,7 @@ GOOD = {
     "story_points_suggested": 3,
     "points_confidence": "medium",
     "waiting_on": "the lawyer",
+    "waiting_confidence": "high",
     "due_date_inferred": "2026-09-30",
     "due_date_inferred_confidence": "high",
     "impact": "high",
@@ -196,3 +197,23 @@ def test_extract_passes_strategy_blocks_and_model():
     assert seen["model"] == "claude-opus-5-5" and seen["effort"] == "medium"
     assert isinstance(seen["system"], list) and len(seen["system"]) == 2
     assert e.serves[0].goal == "consulting"
+
+
+def test_parse_requires_waiting_confidence():
+    without = {k: v for k, v in GOOD.items() if k != "waiting_confidence"}
+    with pytest.raises(ValueError):
+        en.parse(json.dumps(without))
+    assert en.parse(json.dumps(GOOD)).waiting_confidence == "high"
+
+
+def test_hash_is_versioned():
+    import hashlib
+
+    unversioned = hashlib.sha256("\n".join(["n", "notes"]).encode()).hexdigest()
+    assert en.content_hash("n", "notes", []) != unversioned
+    assert en.HASH_VERSION == "v2"
+
+
+def test_prompt_defines_waiting_confidence():
+    assert "waiting_confidence" in en.SYSTEM_PROMPT
+    assert "is not waiting" in en.SYSTEM_PROMPT

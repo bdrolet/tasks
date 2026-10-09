@@ -193,6 +193,8 @@ On `day_changed`, before rescoring:
 
 ### D9 — Candidate set and "actionable"
 
+*Amended 2026-10-08 by `2026-10-08-hard-deadlines-over-inferred-waits-design.md`: a low-confidence model wait is not a wait; a hard-dated task's model wait is released near the deadline.*
+
 Candidates are the open tasks of every project in `ASANA_MANAGED_PROJECTS`,
 plus their subtasks down to `MAX_SUBTASK_DEPTH` (3) levels (in the root's
 project) — gather and heal descend that far, and D16's inheritance walks the
@@ -217,6 +219,8 @@ no prefix scores as `config.default_priority` (P2). The horizon for a soft
 deadline uses the same value.
 
 ### D11 — The order can be overridden by hand: pins and snoozes
+
+*Amended 2026-10-08 by `2026-10-08-hard-deadlines-over-inferred-waits-design.md`: `waiting_on: ""` is an explicit "not waiting".*
 
 Two manual controls, stored per task in `task_overrides` alongside the
 enrichment overrides (D5), applied by the pure scorer after scoring and
@@ -265,6 +269,8 @@ the task, only about how long ago it was created.
 
 ### D14 — Cross-day fairness replaces same-day diversity
 
+*Amended 2026-10-08 by `2026-10-08-hard-deadlines-over-inferred-waits-design.md`: must-dos are decided by `effective_slack ≤ hard_due_slack_days`, not calendar days.*
+
 The same-day diversity haircut (0.8 per pick) forced every project into
 every daily list and still let a board go unpicked for days when its scores
 were middling; it also cost a P1 due today its place. Fairness now works
@@ -299,6 +305,8 @@ subscriber also skips enrichment and the story-point write-back for them;
 a task moved out of an excluded project enriches on that move's event.
 
 ### D16 — Subtasks inherit blocked, snoozed and waiting from their ancestors
+
+*Amended 2026-10-08 by `2026-10-08-hard-deadlines-over-inferred-waits-design.md`: only tag/override waits inherit; a model wait stays on the parent.*
 
 *Added 2026-09-24.* "I don't want to do the passport stuff now, but I will
 if I plan to go out of the country" is a dependency: the passport parent is

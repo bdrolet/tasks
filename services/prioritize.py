@@ -32,6 +32,7 @@ class Effective:
     points_source: str  # field | estimate | default
     points_confidence: str
     waiting_on: str | None
+    waiting_source: str  # tag | override | model | none
     due_date_inferred: date | None
     due_date_inferred_confidence: str
     impact: str
@@ -68,7 +69,9 @@ def effective(
     config: Config,
     strategy: Strategy = Strategy.EMPTY,
 ) -> Effective:
-    """tag > override > model > default, per field."""
+    """tag > override > model > default, per field. A wait also records its
+    source: a model wait at low confidence is no wait at all, and an override
+    of "" is an explicit "not waiting" that only a tag outranks."""
     tags = _tag_values(facts.tags)
     o = overrides.fields
 
@@ -129,6 +132,16 @@ def effective(
         nsource = "model" if not enrichment.unenriched else "default"
     if not strategy.goals:
         serves, role, nsource = (), None, "default"
+    waiting_on: str | None
+    if tags.get("waiting"):
+        waiting_on, waiting_source = tags["waiting"], "tag"
+    elif o.get("waiting_on") is not None:
+        waiting_on, waiting_source = (o["waiting_on"] or None), "override"
+    elif enrichment.waiting_on and enrichment.waiting_confidence != "low":
+        waiting_on, waiting_source = enrichment.waiting_on, "model"
+    else:
+        waiting_on, waiting_source = None, "none"
+
     return Effective(
         serves=serves,
         role=role,
@@ -137,7 +150,8 @@ def effective(
         points=points,
         points_source=source,
         points_confidence=conf,
-        waiting_on=pick("waiting", "waiting_on", enrichment.waiting_on),
+        waiting_on=waiting_on,
+        waiting_source=waiting_source,
         due_date_inferred=inferred,
         due_date_inferred_confidence=inferred_conf,
         impact=pick("impact", "impact", enrichment.impact, IMPACTS),
@@ -229,6 +243,7 @@ class _State:
     snoozed: bool
     blocked: bool
     waiting_on: str | None
+    waiting_source: str  # tag | override | model | none
     completed: bool
     due_on: date | None
 
@@ -239,6 +254,7 @@ class _Bucketed:
     pinned_despite: str | None
     inherited: dict | None  # {"state": ..., "from": ancestor gid} when inheritance decided
     waiting_on: str | None  # effective, after inheritance
+    waiting_source: str  # effective, after inheritance
 
 
 def _own_state(
@@ -248,6 +264,7 @@ def _own_state(
         snoozed=bool(ov.snooze_until and ov.snooze_until > today),
         blocked=any(d in open_gids for d in facts.dependencies),
         waiting_on=eff.waiting_on,
+        waiting_source=eff.waiting_source,
         completed=facts.completed,
         due_on=facts.due_on,
     )
@@ -275,21 +292,38 @@ def _bucket(
     config: Config,
 ) -> _Bucketed:
     """Order: completed, snoozed (own, then inherited), excluded project,
-    blocked (own, then inherited), parent, waiting (own, then inherited).
-    A pin overrides only the last three, own or inherited (D15, D16)."""
-    waiting_on = own.waiting_on
+    blocked (own, then inherited), parent, waiting. For waiting, a hand-set
+    (tag or override) wait beats a model wait at any level and the nearer
+    hand-set wait wins: an own tag/override decides outright (a "" override
+    means not waiting and stops the walk); otherwise the nearest hand-set
+    ancestor wait; otherwise the task's own model wait. A model's guess
+    about a parent never inherits. A pin overrides only the last three, own
+    or inherited (D15, D16)."""
+    waiting_on, waiting_source = own.waiting_on, own.waiting_source
 
     def first(attr: str) -> str | None:
         return next((gid for gid, st in ancestors if getattr(st, attr)), None)
 
+    def first_hand_set_wait() -> str | None:
+        return next(
+            (
+                gid
+                for gid, st in ancestors
+                if st.waiting_on and st.waiting_source in ("tag", "override")
+            ),
+            None,
+        )
+
     if facts.completed:
-        return _Bucketed("excluded:completed", None, None, waiting_on)
+        return _Bucketed("excluded:completed", None, None, waiting_on, waiting_source)
     if own.snoozed:
-        return _Bucketed("snoozed", None, None, waiting_on)
+        return _Bucketed("snoozed", None, None, waiting_on, waiting_source)
     if src := first("snoozed"):
-        return _Bucketed("snoozed", None, {"state": "snoozed", "from": src}, waiting_on)
+        return _Bucketed(
+            "snoozed", None, {"state": "snoozed", "from": src}, waiting_on, waiting_source
+        )
     if facts.project_name in config.excluded_projects:
-        return _Bucketed("excluded:project", None, None, waiting_on)
+        return _Bucketed("excluded:project", None, None, waiting_on, waiting_source)
     reason, inherited = None, None
     if own.blocked:
         reason = "blocked"
@@ -297,17 +331,24 @@ def _bucket(
         reason, inherited = "blocked", {"state": "blocked", "from": src}
     elif facts.num_open_subtasks > 0:
         reason = "parent"
-    elif own.waiting_on:
-        reason = "waiting"
-    elif src := first("waiting_on"):
+    elif own.waiting_source in ("tag", "override"):
+        # An own hand-set answer wins outright — including a "" override,
+        # which says "not waiting" and stops the ancestor walk.
+        if own.waiting_on:
+            reason = "waiting"
+    elif src := first_hand_set_wait():
+        # A hand-set ancestor wait beats this task's own model guess.
         reason, inherited = "waiting", {"state": "waiting", "from": src}
         waiting_on = dict(ancestors)[src].waiting_on
+        waiting_source = dict(ancestors)[src].waiting_source
+    elif own.waiting_on:
+        reason = "waiting"
     if reason is None:
-        return _Bucketed("next", None, None, waiting_on)
+        return _Bucketed("next", None, None, waiting_on, waiting_source)
     if ov.pinned_rank is not None:
-        return _Bucketed("next", reason, inherited, waiting_on)
+        return _Bucketed("next", reason, inherited, waiting_on, waiting_source)
     bucket = "nudge" if reason == "waiting" else f"excluded:{reason}"
-    return _Bucketed(bucket, None, inherited, waiting_on)
+    return _Bucketed(bucket, None, inherited, waiting_on, waiting_source)
 
 
 def score_set(
@@ -356,8 +397,8 @@ def score_set(
         ancestors = _ancestors(f.gid, parent_of, states)
         bk = _bucket(f, states[f.gid], ov, ancestors, config)
         bucket, despite = bk.bucket, bk.pinned_despite
-        if bk.waiting_on != eff.waiting_on:
-            eff = replace(eff, waiting_on=bk.waiting_on)
+        if (bk.waiting_on, bk.waiting_source) != (eff.waiting_on, eff.waiting_source):
+            eff = replace(eff, waiting_on=bk.waiting_on, waiting_source=bk.waiting_source)
         n_val, grooming = necessity(eff, strategy, config)
         confident_none = (
             strategy.goals
@@ -378,6 +419,17 @@ def score_set(
         effort = eff.points / config.points_per_day
         if eff.points_source != "field" and eff.points_confidence == "low":
             effort *= config.low_confidence_multiplier
+        # A model's guess may not hide a hard deadline: inside the slack
+        # window the task comes back to `next`, wait kept and flagged. A tag
+        # or override wait is an instruction and holds. Raw slack here — the
+        # task was outside the EDF queue when it was bucketed. A date already
+        # past is a stale nudge, not an imminent deadline: it stays put.
+        released = None
+        if bucket == "nudge" and eff.waiting_source == "model" and source == "hard" and due:
+            raw_slack = (due - today).days - effort
+            if raw_slack <= config.hard_due_slack_days and (due - today).days >= 0:
+                bucket = "next"
+                released = {"waiting_on": eff.waiting_on, "slack": raw_slack}
         days_stale = max(0, (today - _local_date(f.modified_at)).days)
         offered = last_offered.get(f.project_name or "")
         days_offered = (today - offered).days if offered is not None else None
@@ -410,6 +462,10 @@ def score_set(
                 "impact": eff.impact,
                 "energy": eff.energy,
                 "waiting_on": eff.waiting_on,
+                "waiting_source": eff.waiting_source,
+                "waiting_confidence": (
+                    e.waiting_confidence if eff.waiting_source == "model" else None
+                ),
                 "unenriched": e.unenriched,
                 "reason": e.reason,
                 "override": {
@@ -419,6 +475,7 @@ def score_set(
                 },
                 "pinned_despite": despite,
                 "inherited": bk.inherited,
+                "wait_released": released,
                 "starvation_boost": boost,
                 "days_since_project_offered": days_offered,
                 "necessity": n_val,
@@ -536,8 +593,9 @@ def select(
     """Must-dos first, then a greedy fill; pins inserted at their rank
     afterwards and count toward neither n nor capacity (P5).
 
-    Must-dos are hard-dated tasks due within hard_due_window_days (overdue
-    included), by score: placed whatever n, capacity, energy or diversity
+    Must-dos are hard-dated tasks whose effective_slack is within
+    hard_due_slack_days (overdue included), by score: placed whatever n,
+    capacity, energy or diversity
     say, but they consume capacity and count as a pick of their project.
     The fill ranks by score * (1 + starvation_boost) * energy factor, with
     the same-project diversity haircut after every pick, and stops at n
@@ -572,10 +630,13 @@ def select(
 
 
 def _is_must(t: ScoredTask, config: Config) -> bool:
+    """Hard-dated and, after the EDF pass, within hard_due_slack_days of
+    being too late — so a day of work gets a week's notice and an hour's
+    gets a few days'. Overdue is negative slack."""
     c = t.components
-    days = c.get("days_until_due")
+    slack = c.get("effective_slack")
     return (
-        c.get("due_source") == "hard" and days is not None and days <= config.hard_due_window_days
+        c.get("due_source") == "hard" and slack is not None and slack <= config.hard_due_slack_days
     )
 
 

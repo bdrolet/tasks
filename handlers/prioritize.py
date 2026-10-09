@@ -377,6 +377,10 @@ def _enrichment_from_raw(raw: dict) -> Enrichment:
     d.update({k: v for k, v in raw.items() if k in d})
     if isinstance(d.get("serves"), list):
         d["serves"] = tuple(Serve(**s) for s in d["serves"] if isinstance(s, dict))
+    if "waiting_confidence" not in raw:
+        # Rows written before the field existed: keep today's behaviour
+        # (a stored wait counts) until the heal re-enriches them.
+        d["waiting_confidence"] = "medium"
     if isinstance(d.get("due_date_inferred"), str):
         d["due_date_inferred"] = date.fromisoformat(d["due_date_inferred"])
     d["unenriched"] = False
@@ -604,7 +608,9 @@ def heal(current_strategy_hash: str = "") -> int:
     with get_conn() as conn:
         index = repo.list_facts_index(conn)
         enrichment = repo.list_enrichment_hashes(conn)
+        raws = repo.list_enrichment(conn)
         open_gids = repo.list_open_gids(conn)
+    required = set(en.SCHEMA["required"])
 
     def needs(gid: str, modified_at: str | None) -> bool:
         if gid not in index:
@@ -614,11 +620,15 @@ def heal(current_strategy_hash: str = "") -> int:
         if modified and modified > fetched_at:
             return True
         stored = enrichment.get(gid)
-        return (
+        if (
             stored is None
             or stored[0] != content_hash
             or stored[1] != current_strategy_hash  # spec D4: a strategy edit re-judges
-        )
+        ):
+            return True
+        # Schema drift: a row written before a field became required is
+        # re-enriched even though nothing about the task changed (spec D6).
+        return not required <= set(raws.get(gid, ("", {}))[1])
 
     republished = 0
     seen: set[str] = set()

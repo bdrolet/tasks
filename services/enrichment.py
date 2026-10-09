@@ -21,6 +21,10 @@ ESTIMATE_COMMENT_PREFIX = "Estimated "
 ESTIMATE_COMMENT_SUFFIX = " points — adjust if wrong."
 NOTES_CAP = 6000
 COMMENTS_CAP = 3000
+# Bump when SCHEMA or SYSTEM_PROMPT changes: a re-gathered task then hashes
+# differently and re-enriches. The daily heal only reaches untouched tasks
+# when a new SCHEMA field is required (handlers/prioritize.py::heal, spec D6).
+HASH_VERSION = "v2"
 
 SCHEMA: dict = {
     "type": "object",
@@ -29,6 +33,7 @@ SCHEMA: dict = {
         "story_points_suggested": {"type": "integer", "enum": [1, 2, 3, 5, 8]},
         "points_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
         "waiting_on": {"type": ["string", "null"]},
+        "waiting_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
         "due_date_inferred": {"type": ["string", "null"], "pattern": r"^\d{4}-\d{2}-\d{2}$"},
         "due_date_inferred_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
         "impact": {"type": "string", "enum": ["low", "medium", "high"]},
@@ -58,6 +63,7 @@ SCHEMA: dict = {
         "story_points_suggested",
         "points_confidence",
         "waiting_on",
+        "waiting_confidence",
         "due_date_inferred",
         "due_date_inferred_confidence",
         "impact",
@@ -74,7 +80,7 @@ SYSTEM_PROMPT = """You read one Asana task — its title, description and commen
 
 story_points_suggested — relative size of the remaining work. 1: under an hour of focused work. 2: a morning. 3: a day. 5: several days. 8: a week or more, and should probably be split. points_confidence says how sure you are.
 
-waiting_on — the external party who must act before Ben can (a person, company or process), or null. "Waiting" means Ben has done his part; a task Ben simply hasn't started is not waiting.
+waiting_on — the external party (a person, company or process) who must act before Ben can do anything more, or null. Waiting means Ben has done his part. A task Ben has not started is not waiting. A task whose newest comment asks Ben to send, sign, provide or decide something is not waiting — that is his action. waiting_confidence is high only when a comment says the wait outright ("sent to X, waiting on their reply"); medium when the wait is implied by the task's state; low when you are reading between the lines.
 
 due_date_inferred — a date stated or clearly implied in the text ("by end of month", "before the 15th") when the task has no due date set; null otherwise. Never guess; a low-confidence date is ignored.
 
@@ -103,6 +109,7 @@ class _Out(BaseModel):
     story_points_suggested: Literal[1, 2, 3, 5, 8]
     points_confidence: Literal["low", "medium", "high"]
     waiting_on: str | None
+    waiting_confidence: Literal["low", "medium", "high"]
     due_date_inferred: date | None
     due_date_inferred_confidence: Literal["low", "medium", "high"]
     impact: Literal["low", "medium", "high"]
@@ -163,7 +170,7 @@ def _comment_lines(comments: list[dict]) -> list[str]:
 
 
 def content_hash(name: str, notes: str, comments: list[dict], strategy_hash: str = "") -> str:
-    body = "\n".join([name or "", notes or "", *_comment_lines(comments)])
+    body = "\n".join([HASH_VERSION, name or "", notes or "", *_comment_lines(comments)])
     if strategy_hash:
         body += "\n" + strategy_hash
     return hashlib.sha256(body.encode()).hexdigest()
@@ -216,6 +223,7 @@ def parse(raw: str, *, known_goals: tuple[str, ...] = ()) -> Enrichment:
         story_points_suggested=data.story_points_suggested,
         points_confidence=data.points_confidence,
         waiting_on=(data.waiting_on or None),
+        waiting_confidence=data.waiting_confidence,
         due_date_inferred=data.due_date_inferred,
         due_date_inferred_confidence=data.due_date_inferred_confidence,
         impact=data.impact,

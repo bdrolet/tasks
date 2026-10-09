@@ -142,7 +142,8 @@ def test_blocked_parent_and_waiting_are_excluded():
     done_dep = facts("dd", points=1, completed=True)
     unblocked = facts("u", points=1, dependencies=("dd",))
     s = run(
-        [dep, blocked, parent, waiting, done_dep, unblocked], {"w": enr(waiting_on="the lawyer")}
+        [dep, blocked, parent, waiting, done_dep, unblocked],
+        {"w": enr(waiting_on="the lawyer", waiting_confidence="high")},
     ).by_gid()
     assert s["b"].bucket == "excluded:blocked"
     assert s["p"].bucket == "excluded:parent"
@@ -210,7 +211,7 @@ def test_diversity_penalty_mixes_projects():
 
 
 def test_selection_respects_capacity_and_n():
-    fs = [facts(f"t{i}", points=3, due_on=TODAY + timedelta(days=i + 1)) for i in range(6)]
+    fs = [facts(f"t{i}", points=3, due_on=TODAY + timedelta(days=i + 10)) for i in range(6)]
     scored = run(fs)
     assert sum(t.points for t in pz.select(scored.next(), CFG)) >= CFG.points_per_day
     assert len(pz.select(scored.next(), CFG)) == 2  # 3 + 3 fills 5
@@ -218,8 +219,8 @@ def test_selection_respects_capacity_and_n():
 
 
 def test_energy_flag_demotes_mismatches():
-    deep = facts("d", points=1, due_on=TODAY + timedelta(days=2))
-    shallow = facts("s", points=1, due_on=TODAY + timedelta(days=2))
+    deep = facts("d", points=1, due_on=TODAY + timedelta(days=10))
+    shallow = facts("s", points=1, due_on=TODAY + timedelta(days=10))
     scored = run([deep, shallow], {"d": enr(energy="deep"), "s": enr(energy="shallow")})
     assert pz.select(scored.next(), CFG, n=1, energy="shallow")[0].gid == "s"
     assert pz.select(scored.next(), CFG, n=1, energy="deep")[0].gid == "d"
@@ -295,14 +296,20 @@ def test_stale_rules_each_trigger():
 def test_nudge_sorted_by_days_stale_desc():
     a = facts("a", points=1, modified_at=TS - timedelta(days=1))
     b = facts("b", points=1, modified_at=TS - timedelta(days=10))
-    scored = run([a, b], {"a": enr(waiting_on="x"), "b": enr(waiting_on="y")})
+    scored = run(
+        [a, b],
+        {
+            "a": enr(waiting_on="x", waiting_confidence="high"),
+            "b": enr(waiting_on="y", waiting_confidence="high"),
+        },
+    )
     assert [t.gid for t in pz.side_lists(scored)["nudge"]] == ["b", "a"]
 
 
 def test_positions_are_total_over_the_set():
     a = facts("a", points=1)
     w = facts("w", points=1)
-    scored = run([a, w], {"w": enr(waiting_on="x")})
+    scored = run([a, w], {"w": enr(waiting_on="x", waiting_confidence="high")})
     assert sorted(t.position for t in scored.tasks) == [1, 2]
     assert scored.by_gid()["a"].position == 1
 
@@ -444,7 +451,7 @@ def test_past_horizon_is_not_stale_but_past_inferred_is():
 def test_hard_due_today_is_selected_first_beyond_n_and_consumes_capacity():
     must = facts("m", name="[P3] file it", points=4, due_on=TODAY)
     highs = [
-        facts(f"h{i}", name="[P0] big", points=1, due_on=TODAY + timedelta(days=3))
+        facts(f"h{i}", name="[P0] big", points=1, due_on=TODAY + timedelta(days=10))
         for i in range(4)
     ]
     scored = run([must, *highs])
@@ -462,14 +469,14 @@ def test_every_hard_must_do_is_placed_even_past_n_and_capacity():
         facts(f"m{i}", name="[P3] x", points=3, due_on=TODAY + timedelta(days=d))
         for i, d in enumerate((-2, 0, 1))
     ]
-    other = facts("o", name="[P0] y", points=1, due_on=TODAY + timedelta(days=5))
+    other = facts("o", name="[P0] y", points=1, due_on=TODAY + timedelta(days=10))
     picked = pz.select(run([*musts, other]).next(), CFG, n=1)
     assert {t.gid for t in picked} == {"m0", "m1", "m2"}
 
 
 def test_must_do_ignores_soft_dates_inside_the_window():
     inferred = facts("i", name="[P3] x", points=1)
-    top = facts("t", name="[P0] y", points=1, due_on=TODAY + timedelta(days=5))
+    top = facts("t", name="[P0] y", points=1, due_on=TODAY + timedelta(days=10))
     scored = run(
         [inferred, top],
         {"i": enr(due_date_inferred=TODAY, due_date_inferred_confidence="high")},
@@ -550,24 +557,80 @@ def test_child_of_blocked_parent_is_blocked_until_the_dependency_completes():
     assert done.components["inherited"] is None
 
 
-def test_child_of_waiting_parent_is_a_nudge_under_the_parents_person():
-    parent = facts("p", points=1)
+def test_child_of_tag_waiting_parent_is_a_nudge_under_the_parents_person():
+    parent = facts("p", points=1, tags=("waiting:the consulate",))
     child = facts("c", points=1, parent_gid="p")
-    scored = run([parent, child], {"p": enr(waiting_on="the consulate")})
+    scored = run([parent, child])
     s = scored.by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "the consulate"
+    assert s.components["waiting_source"] == "tag"
     assert s.components["inherited"] == {"state": "waiting", "from": "p"}
     assert "c" in {t.gid for t in pz.side_lists(scored)["nudge"]}
 
 
-def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
+def test_child_of_override_waiting_parent_is_a_nudge():
     parent = facts("p", points=1)
     child = facts("c", points=1, parent_gid="p")
-    s = run([parent, child], {"p": enr(waiting_on="A"), "c": enr(waiting_on="B")}).by_gid()["c"]
+    s = run([parent, child], overrides={"p": Overrides(fields={"waiting_on": "FTB"})}).by_gid()["c"]
+    assert s.bucket == "nudge" and s.components["waiting_on"] == "FTB"
+    assert s.components["waiting_source"] == "override"
+    assert s.components["inherited"] == {"state": "waiting", "from": "p"}
+
+
+def test_child_of_model_waiting_parent_is_not_waiting():
+    parent = facts("p", points=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], {"p": enr(waiting_on="FTB", waiting_confidence="high")}).by_gid()
+    # the parent's own wait still holds on the parent (it buckets excluded:parent
+    # because it has an open child, but its own wait is recorded)
+    assert s["p"].components["waiting_on"] == "FTB"
+    assert s["p"].components["waiting_source"] == "model"
+    assert s["c"].bucket == "next"
+    assert s["c"].components["waiting_on"] is None
+    assert s["c"].components["inherited"] is None
+
+
+def test_own_state_wins_over_inherited_and_is_not_marked_inherited():
+    parent = facts("p", points=1, tags=("waiting:A",))
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], overrides={"c": Overrides(fields={"waiting_on": "B"})}).by_gid()["c"]
     assert s.bucket == "nudge"
     assert s.components["waiting_on"] == "B"
+    assert s.components["waiting_source"] == "override"
     assert s.components["inherited"] is None
+
+
+def test_hand_set_parent_wait_beats_childs_model_wait():
+    parent = facts("p", points=1, tags=("waiting:A",))
+    child = facts("c", points=1, parent_gid="p", due_on=TODAY + timedelta(days=3))
+    s = run([parent, child], {"c": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
+    assert s.bucket == "nudge"
+    assert s.components["waiting_on"] == "A"
+    assert s.components["waiting_source"] == "tag"
+    assert s.components["inherited"] == {"state": "waiting", "from": "p"}
+    assert s.components["wait_released"] is None  # never released past a hand-set wait
+
+
+def test_childs_not_waiting_override_stops_inherited_wait():
+    parent = facts("p", points=1, tags=("waiting:A",))
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], overrides={"c": Overrides(fields={"waiting_on": ""})}).by_gid()["c"]
+    assert s.bucket == "next"
+    assert s.components["waiting_on"] is None
+    assert s.components["waiting_source"] == "override"
+    assert s.components["inherited"] is None
+
+
+def test_tag_grandparent_behind_model_parent_is_inherited():
+    gp = facts("gp", points=1, tags=("waiting:A",))
+    p = facts("p", points=1, parent_gid="gp")
+    c = facts("c", points=1, parent_gid="p")
+    s = run([gp, p, c], {"p": enr(waiting_on="B", waiting_confidence="high")}).by_gid()["c"]
+    assert s.bucket == "nudge"
+    assert s.components["waiting_on"] == "A"
+    assert s.components["waiting_source"] == "tag"
+    assert s.components["inherited"] == {"state": "waiting", "from": "gp"}
 
 
 def test_grandchild_inherits_through_two_levels():
@@ -630,7 +693,7 @@ def test_completed_ancestor_passes_no_state_down():
     c = facts("c", points=1, parent_gid="p")
     s = run(
         [dep, gp, p, c],
-        {"p": enr(waiting_on="someone")},
+        {"p": enr(waiting_on="someone", waiting_confidence="high")},
         overrides={"p": Overrides(snooze_until=TODAY + timedelta(days=3))},
     ).by_gid()["c"]
     assert s.bucket == "next"
@@ -889,3 +952,174 @@ def test_no_strategy_means_everything_unattached_and_equal():
     )
     c = s.by_gid()
     assert c["a"].components["N"] == c["b"].components["N"] == CFG.necessity_unattached
+
+
+def test_waiting_source_follows_precedence():
+    a = facts("a", points=1)
+    model = enr(waiting_on="the model", waiting_confidence="high")
+    assert pz.effective(a, model, Overrides.NONE, CFG).waiting_source == "model"
+    o = Overrides(fields={"waiting_on": "vendor"})
+    e = pz.effective(a, model, o, CFG)
+    assert (e.waiting_on, e.waiting_source) == ("vendor", "override")
+    tagged = facts("t", points=1, tags=("waiting:the bank",))
+    e = pz.effective(tagged, model, o, CFG)
+    assert (e.waiting_on, e.waiting_source) == ("the bank", "tag")
+    assert pz.effective(a, enr(), Overrides.NONE, CFG).waiting_source == "none"
+
+
+def test_low_confidence_model_wait_is_not_a_wait():
+    a = facts("a", points=1)
+    for conf, bucket in (("low", "next"), ("medium", "nudge"), ("high", "nudge")):
+        s = run([a], {"a": enr(waiting_on="someone", waiting_confidence=conf)}).by_gid()["a"]
+        assert s.bucket == bucket, conf
+        # reported only when the model's wait is the one in force (low = no wait)
+        assert s.components["waiting_confidence"] == (None if conf == "low" else conf)
+    low = run([a], {"a": enr(waiting_on="someone", waiting_confidence="low")}).by_gid()["a"]
+    assert low.components["waiting_on"] is None and low.components["waiting_source"] == "none"
+
+
+def test_tag_and_override_waits_ignore_confidence():
+    o = Overrides(fields={"waiting_on": "vendor"})
+    a = facts("a", points=1)
+    assert run([a], {"a": enr(waiting_confidence="low")}, {"a": o}).by_gid()["a"].bucket == "nudge"
+    t = facts("t", points=1, tags=("waiting:bank",))
+    assert run([t], {"t": enr(waiting_confidence="low")}).by_gid()["t"].bucket == "nudge"
+
+
+def test_empty_override_means_not_waiting():
+    a = facts("a", points=1)
+    model = enr(waiting_on="Michael", waiting_confidence="high")
+    s = run([a], {"a": model}, {"a": Overrides(fields={"waiting_on": ""})}).by_gid()["a"]
+    assert s.bucket == "next"
+    assert s.components["waiting_on"] is None
+    assert s.components["waiting_source"] == "override"
+    # a tag still beats the empty override
+    t = facts("t", points=1, tags=("waiting:bank",))
+    s = run([t], {"t": model}, {"t": Overrides(fields={"waiting_on": ""})}).by_gid()["t"]
+    assert s.bucket == "nudge" and s.components["waiting_on"] == "bank"
+
+
+def test_empty_waiting_tag_is_ignored():
+    t = facts("t", points=1, tags=("waiting:",))
+    s = run([t]).by_gid()["t"]
+    assert s.bucket == "next" and s.components["waiting_source"] == "none"
+
+
+def _model_wait(who="Michael"):
+    return enr(waiting_on=who, waiting_confidence="high")
+
+
+def test_model_wait_is_released_near_a_hard_deadline():
+    # 5 points = 1.0 effort day; due in 6 days → raw slack 5.0 == N → released
+    a = facts("a", points=5, due_on=TODAY + timedelta(days=6))
+    s = run([a], {"a": _model_wait()}).by_gid()["a"]
+    assert s.bucket == "next"
+    assert s.components["waiting_on"] == "Michael"  # kept, for the waiting? flag
+    assert s.components["wait_released"] == {"waiting_on": "Michael", "slack": 5.0}
+    assert s.components["due_source"] == "hard"
+
+
+def test_model_wait_holds_outside_the_slack_window():
+    a = facts("a", points=5, due_on=TODAY + timedelta(days=7))  # raw slack 6.0 > N
+    s = run([a], {"a": _model_wait()}).by_gid()["a"]
+    assert s.bucket == "nudge" and s.components["wait_released"] is None
+
+
+def test_overdue_model_wait_is_not_released():
+    late = facts("l", points=5, due_on=TODAY - timedelta(days=1))  # raw slack -2
+    s = run([late], {"l": _model_wait()}).by_gid()["l"]
+    assert s.bucket == "nudge" and s.components["wait_released"] is None
+    # boundary: due today (raw slack -1) has not passed and IS released
+    today = facts("t", points=5, due_on=TODAY)
+    s = run([today], {"t": _model_wait()}).by_gid()["t"]
+    assert s.bucket == "next"
+    assert s.components["wait_released"] == {"waiting_on": "Michael", "slack": -1.0}
+
+
+def test_override_wait_is_never_released():
+    a = facts("a", points=5, due_on=TODAY)  # slack -1
+    s = run([a], {"a": enr()}, {"a": Overrides(fields={"waiting_on": "FTB"})}).by_gid()["a"]
+    assert s.bucket == "nudge" and s.components["wait_released"] is None
+    t = facts("t", points=5, due_on=TODAY, tags=("waiting:FTB",))
+    assert run([t]).by_gid()["t"].bucket == "nudge"
+
+
+def test_soft_dates_never_release_a_wait():
+    inferred = facts("i", points=1)
+    e = enr(
+        waiting_on="X",
+        waiting_confidence="high",
+        due_date_inferred=TODAY,
+        due_date_inferred_confidence="high",
+    )
+    assert run([inferred], {"i": e}).by_gid()["i"].bucket == "nudge"
+    horizon = facts("h", name="[P0] x", points=1, created_at=TS)  # P0 horizon long past
+    assert run([horizon], {"h": _model_wait()}).by_gid()["h"].bucket == "nudge"
+
+
+def test_inherited_hard_date_releases_a_childs_model_wait():
+    parent = facts("p", points=1, due_on=TODAY + timedelta(days=2), num_open_subtasks=1)
+    child = facts("c", points=1, parent_gid="p")
+    s = run([parent, child], {"c": _model_wait()}).by_gid()["c"]
+    assert s.bucket == "next"
+    assert s.components["due_from"] == "p"
+    assert s.components["wait_released"]["waiting_on"] == "Michael"
+
+
+def test_pinned_waiting_task_is_not_double_handled_by_release():
+    a = facts("a", points=5, due_on=TODAY)
+    s = run([a], {"a": _model_wait()}, {"a": Overrides(pinned_rank=1)}).by_gid()["a"]
+    assert s.bucket == "next"
+    assert s.components["pinned_despite"] == "waiting"
+    assert s.components["wait_released"] is None
+
+
+def test_released_task_joins_feasibility_and_can_be_a_must_do():
+    a = facts("a", points=5, due_on=TODAY + timedelta(days=3))  # slack 2
+    scored = run([a], {"a": _model_wait()})
+    s = scored.by_gid()["a"]
+    assert s.components["effective_slack"] == 2.0 and s.components["simulated_start"] == 0.0
+    assert [t.gid for t in pz.select(scored.next(), CFG, n=1)] == ["a"]
+
+
+def test_must_do_is_decided_by_effective_slack():
+    # 5 points = 1 effort day. EDF queue: near is first (due in 6 → slack 5 →
+    # must-do); far is second (due in 8, minus its own day and near's → slack 6 → not).
+    near = facts("n", name="[P3] file it", points=5, due_on=TODAY + timedelta(days=6))
+    far = facts("f", name="[P3] file it", points=5, due_on=TODAY + timedelta(days=8))
+    quick = facts("q", name="[P0] hot", points=1, due_on=TODAY + timedelta(days=20))
+    scored = run([near, far, quick])
+    picked = [t.gid for t in pz.select(scored.next(), CFG, n=1)]
+    assert picked[0] == "n" and "f" not in picked
+
+
+def test_edf_queue_makes_the_second_of_two_same_day_tasks_a_must_do_first():
+    # both due in 7 days with 1 effort day: alone each has slack 6 (not a
+    # must-do); queued, the second has slack 5 and is one.
+    a = facts("a", name="[P1] x", points=5, due_on=TODAY + timedelta(days=7))
+    b = facts("b", name="[P1] y", points=5, due_on=TODAY + timedelta(days=7))
+    scored = run([a, b])
+    slacks = sorted(t.components["effective_slack"] for t in scored.next())
+    assert slacks == [5.0, 6.0]
+    lo, hi = sorted(scored.next(), key=lambda t: t.components["effective_slack"])
+    assert pz._is_must(lo, CFG) and not pz._is_must(hi, CFG)
+
+
+def test_overdue_hard_task_is_a_must_do():
+    late = facts("l", name="[P3] late", points=1, due_on=TODAY - timedelta(days=3))
+    quick = facts("q", name="[P0] hot", points=1, due_on=TODAY + timedelta(days=20))
+    assert pz.select(run([late, quick]).next(), CFG, n=1)[0].gid == "l"
+
+
+def test_undated_task_is_never_a_must_do():
+    from models.prioritize import ScoredTask
+
+    t = ScoredTask(
+        gid="u",
+        bucket="next",
+        score=1.0,
+        position=1,
+        rank=None,
+        components={"due_source": "none", "effective_slack": None},
+    )
+    assert pz._is_must(t, CFG) is False
