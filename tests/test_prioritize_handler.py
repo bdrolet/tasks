@@ -948,10 +948,62 @@ def test_no_strategy_means_no_claim(db, tag_fake, monkeypatch):
 
 def test_tag_write_failure_keeps_the_claim(db, tag_fake, strategy, monkeypatch):
     _model_returning(monkeypatch, SERVES_HIGH)
+    attempts = []
 
     def boom(gid, tag_gid):
+        attempts.append((gid, tag_gid))
         raise RuntimeError("asana down")
 
     monkeypatch.setattr(asana, "add_tag", boom)
     h.handle_task_changed("t1", today=TODAY)
+    h.handle_task_changed("t1", today=TODAY)  # redelivery must not retry
     assert db.serves_claims["t1"]["serves"] == ["consulting"] and not db.__dict__.get("tags_set")
+    assert len(attempts) == 1
+    assert not [c for c in tag_fake["comments"] if c.startswith("Attached to")]
+
+
+def test_existing_serves_estimated_blocks_the_claim(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    seeded, _ = h.facts_from(TASK, [])
+    db.facts["t1"] = TaskFacts(**(seeded.__dict__ | {"serves_estimated": {"grooming": True}}))
+    claims = []
+    monkeypatch.setattr(repo, "claim_serves", lambda c, gid, payload: claims.append(gid) or True)
+    h.handle_task_changed("t1", today=TODAY)
+    assert claims == [] and tag_fake["tags"] == []
+
+
+@pytest.mark.parametrize(
+    "serves, role",
+    [
+        ([("finances", "support"), ("consulting", "path"), ("x", "derisk")], "path"),
+        ([("finances", "support"), ("consulting", "derisk")], "derisk"),
+    ],
+)
+def test_highest_role_wins_across_serves(db, tag_fake, monkeypatch, serves, role):
+    three = Strategy(
+        goals=(Goal(id="consulting", kind="outcome"), Goal(id="finances", kind="area"),
+               Goal(id="x", kind="outcome")),
+        text_hash="sh",
+    )
+    monkeypatch.setattr(st, "load", lambda **kw: three)
+    monkeypatch.setattr(st, "section_text", lambda: "### consulting\n")
+    payload = SERVES_HIGH | {
+        "serves": [{"goal": g, "role": r, "confidence": "high"} for g, r in serves]
+    }
+    _model_returning(monkeypatch, payload)
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.serves_claims["t1"]["role"] == role
+    assert tag_fake["tags"][-1] == ("t1", f"g-role:{role}")
+
+
+def test_medium_confidence_attaches_like_high(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"necessity_confidence": "medium"})
+    h.handle_task_changed("t1", today=TODAY)
+    assert tag_fake["tags"] == [("t1", "g-serves:consulting"), ("t1", "g-role:path")]
+    assert db.serves_claims["t1"]["confidence"] == "medium"
+
+
+def test_empty_serves_with_low_confidence_claims_grooming(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"serves": [], "necessity_confidence": "low"})
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.serves_claims["t1"] == {"grooming": True} and tag_fake["tags"] == []
