@@ -140,7 +140,7 @@ AGENT_MODEL = "claude-sonnet-5"
 
 def run_agent(
     *,
-    system: str,
+    system: str | list[dict],
     user: str,
     tools: list,
     output_schema: dict,
@@ -165,6 +165,11 @@ def run_agent(
     deadline_s is checked only between turns (after a message completes,
     before the next tool-use turn is requested) — it bounds when a new turn
     may start, not a hard wall-clock stop on a turn already in flight."""
+    blocks = (
+        [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if isinstance(system, str)
+        else system
+    )
     runner = (
         _get_client()
         .with_options(max_retries=1)
@@ -177,7 +182,7 @@ def run_agent(
                 "effort": "medium",
                 "format": {"type": "json_schema", "schema": output_schema},
             },
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            system=blocks,
             messages=[{"role": "user", "content": user}],
             tools=tools,
             timeout=request_timeout,

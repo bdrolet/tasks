@@ -24,9 +24,11 @@ import clients.otel as otel
 import clients.vertex as vertex
 from clients.db import get_conn
 from models.events import Decision, EmailClassifiedEvent, Screening
+from models.strategy import ROLES
 from repo import task_index as repo_index
 from repo import tasks as repo_tasks
 from services import standing_context
+from services import strategy as strategy_service
 
 logger = logging.getLogger(__name__)
 
@@ -277,8 +279,32 @@ OUTPUT_SCHEMA: dict = {
                 "additionalProperties": False,
             },
         },
+        "serves": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "goal": {"type": "string"},
+                    "role": {"type": "string", "enum": ["path", "derisk", "support"]},
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                },
+                "required": ["goal", "role", "confidence"],
+            },
+        },
+        "necessity_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "necessity_reason": {"type": "string"},
     },
-    "required": ["actionable", "reason", "related_task_gid", "resolves", "evidence"],
+    "required": [
+        "actionable",
+        "reason",
+        "related_task_gid",
+        "resolves",
+        "evidence",
+        "serves",
+        "necessity_confidence",
+        "necessity_reason",
+    ],
     "additionalProperties": False,
 }
 
@@ -297,7 +323,23 @@ Rules:
 - Do not reason beyond the facts given and the evidence you retrieved.
 - A search returning nothing is not evidence that nothing exists — it may be the wrong query. Before concluding an obligation is genuinely unhandled, broaden the query (drop keywords, search the sender alone) and try once more; a tool result that came back as an error is missing evidence, not absence of evidence, so prefer actionable: true in that case.
 
+- If a ## Strategy section is present in your instructions, also judge what a task from this email would serve: serves is a list of {goal, role, confidence} where goal is a ### id from the strategy and role is path (a precondition on an outcome goal's written path, or its obvious next step), derisk (its absence puts the outcome or an area's standard at significant risk) or support (helps, but not necessary). An empty serves with high confidence means the email serves no goal or area and is a real answer. necessity_confidence is your confidence in the serves list as a whole; necessity_reason is one sentence. Strategy never makes a non-actionable email actionable. Without a ## Strategy section, return an empty serves list with low confidence.
+
 Respond with the JSON object only."""
+
+
+def system_blocks(strategy_text: str) -> list[dict]:
+    blocks = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    if strategy_text.strip():
+        blocks.append(
+            {
+                "type": "text",
+                "text": "## Strategy\n\n" + strategy_text.strip(),
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    return blocks
+
 
 
 def build_user_message(
@@ -344,7 +386,14 @@ def _gid_exists(task_gid: str) -> bool:
     return asana.task_exists(task_gid)
 
 
-def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exists) -> Decision:
+def _parse(
+    text: str | None,
+    stop: str,
+    message_id: str,
+    *,
+    gid_exists=_gid_exists,
+    known_goals: tuple[str, ...] = (),
+) -> Decision:
     if stop != "end_turn" or not text:
         return _fail_open(stop, message_id)
     try:
@@ -358,6 +407,22 @@ def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exis
     raw_evidence = data.get("evidence")
     evidence: list = raw_evidence if isinstance(raw_evidence, list) else []
     actionable = data["actionable"]
+    raw_serves = data.get("serves")
+    serves = [
+        {"goal": s["goal"], "role": s["role"], "confidence": s["confidence"]}
+        for s in (raw_serves if isinstance(raw_serves, list) else [])
+        if isinstance(s, dict)
+        and s.get("goal") in known_goals
+        and s.get("role") in ROLES
+        and s.get("confidence") in ("low", "medium", "high")
+    ]
+    necessity = {
+        "serves": serves,
+        "necessity_confidence": data.get("necessity_confidence")
+        if data.get("necessity_confidence") in ("low", "medium", "high")
+        else "low",
+        "necessity_reason": str(data.get("necessity_reason") or "").strip(),
+    }
     if gid is not None and not gid_exists(str(gid)):
         gid = None
     if gid is not None:
@@ -370,12 +435,17 @@ def _parse(text: str | None, stop: str, message_id: str, *, gid_exists=_gid_exis
             resolves=bool(data.get("resolves")),
             evidence=evidence,
             outcome="attached",
+            **necessity,
         )
     if actionable:
-        return Decision(actionable=True, reason=reason, evidence=evidence, outcome="actionable")
+        return Decision(
+            actionable=True, reason=reason, evidence=evidence, outcome="actionable", **necessity
+        )
     if not reason:
         return _fail_open("no_reason", message_id)
-    return Decision(actionable=False, reason=reason, evidence=evidence, outcome="suppressed")
+    return Decision(
+        actionable=False, reason=reason, evidence=evidence, outcome="suppressed", **necessity
+    )
 
 
 def decide(
@@ -398,15 +468,17 @@ def decide(
     token = CURRENT_MESSAGE_ID.set(message_id)
     t0 = time.monotonic()
     try:
+        strategy = strategy_service.load()
+        known = tuple(g.id for g in strategy.goals)
         text, stop = claude.run_agent(
-            system=SYSTEM_PROMPT,
+            system=system_blocks(strategy_service.section_text() if strategy.goals else ""),
             user=user,
             tools=TOOLS,
             output_schema=OUTPUT_SCHEMA,
             max_iterations=MAX_ITERATIONS,
             deadline_s=DEADLINE_S,
         )
-        decision = _parse(text, stop, message_id)
+        decision = _parse(text, stop, message_id, known_goals=known)
     except Exception:  # noqa: BLE001 — fail-open by contract
         logger.exception("triage agent failed message_id=%s", message_id)
         decision = Decision(outcome="fail_open")

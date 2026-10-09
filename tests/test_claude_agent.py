@@ -147,3 +147,11 @@ def test_classify_sends_schema_and_returns_text(monkeypatch):
     assert captured["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert captured["messages"] == [{"role": "user", "content": "USER"}]
     assert captured["output_config"]["format"]["schema"] == {"type": "object"}
+
+
+def test_run_agent_accepts_system_blocks(monkeypatch):
+    captured = {}
+    _install(monkeypatch, _FakeRunner([_msg("end_turn", text="{}")]), captured)
+    blocks = [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": "b"}]
+    text, stop = claude.run_agent(system=blocks, user="u", tools=[], output_schema={"type": "object"})
+    assert captured["system"] == blocks and stop == "end_turn"
