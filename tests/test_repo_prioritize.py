@@ -201,6 +201,27 @@ def test_replace_scores_deletes_then_inserts():
     assert "INSERT INTO task_scores" in conn.executed[1][0]
 
 
+def test_replace_scores_batches_rows_per_statement():
+    conn = FakeConn()
+    tasks = [
+        ScoredTask(gid=f"t{i}", bucket="next", score=1.0, position=i, rank=None, components={})
+        for i in range(repo.SCORES_BATCH + 1)
+    ]
+    repo.replace_scores(conn, ScoredSet(today=date(2026, 9, 23), tasks=tasks))
+    inserts = [e for e in conn.executed if e[0].startswith("INSERT INTO task_scores")]
+    assert len(inserts) == 2  # 50 rows, then 1
+    assert inserts[0][0].count("(%s, now(),") == repo.SCORES_BATCH
+    assert len(inserts[0][1]) == repo.SCORES_BATCH * 10
+    assert inserts[1][0].count("(%s, now(),") == 1 and len(inserts[1][1]) == 10
+    assert inserts[0][1][0] == "t0" and inserts[1][1][0] == f"t{repo.SCORES_BATCH}"
+
+
+def test_replace_scores_with_no_tasks_only_deletes():
+    conn = FakeConn()
+    repo.replace_scores(conn, ScoredSet(today=date(2026, 9, 23), tasks=[]))
+    assert [q for q, _ in conn.executed] == ["DELETE FROM task_scores"]
+
+
 def test_insert_run_returns_id_and_last_daily_run_parses_top():
     conn = RowsConn(row={"run_id": 7})
     assert (
