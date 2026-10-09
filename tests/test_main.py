@@ -229,3 +229,13 @@ def test_webhook_passes_the_project_query_parameter(monkeypatch):
     request = Req(path="/", method="POST", args={"project": "p-family"})
     main.webhook(request)
     assert seen["project"] == "p-family"
+
+
+def test_review_route_requires_bearer_and_runs(monkeypatch):
+    from handlers import weekly_review
+
+    monkeypatch.setenv("ASANA_ESCALATE_TOKEN", "tok")
+    monkeypatch.setattr(weekly_review, "run", lambda: {"outcome": "posted"})
+    assert main.webhook(Req(path="/review", headers={}))[1] == 401
+    body, status = main.webhook(Req(path="/review", headers={"Authorization": "Bearer tok"}))
+    assert status == 200 and body == {"outcome": "posted"}

@@ -99,3 +99,29 @@ resource "google_cloud_scheduler_job" "day_changed" {
     data       = base64encode(jsonencode({ kind = "day_changed" }))
   }
 }
+
+# ---------------------------------------------------------------------------
+# Weekly strategy review — Monday 07:00 local. Posts GET /review's body as a
+# comment on the standing review task (strategy-layer spec D11).
+# ---------------------------------------------------------------------------
+resource "google_cloud_scheduler_job" "weekly_review" {
+  name      = "tasks-weekly-review"
+  schedule  = "0 7 * * 1"
+  time_zone = "America/New_York"
+
+  attempt_deadline = "300s"
+
+  retry_config {
+    retry_count = 1
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloudfunctions2_function.tasks_webhook.service_config[0].uri}/review"
+    body        = base64encode("{}")
+    headers = {
+      "Content-Type"  = "application/json"
+      "Authorization" = "Bearer ${var.tasks_escalate_token}"
+    }
+  }
+}

@@ -97,8 +97,8 @@ resource "google_secret_manager_secret_iam_member" "webhook_cf_escalate_token" {
 
 # ---------------------------------------------------------------------------
 # tasks-prioritize Cloud Function service account — task-events subscriber.
-# Reads Asana, calls Claude, writes the prioritizer tables; no calendar, no
-# standing context, no webhook secrets.
+# Reads Asana, calls Claude, writes the prioritizer tables, reads the declared
+# facts (strategy block); no calendar, no webhook secrets.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "tasks_prioritize_cf" {
   account_id   = "tasks-prioritize-cf"
@@ -111,6 +111,14 @@ resource "google_secret_manager_secret_iam_member" "prioritize_cf_shared" {
     if contains(["asana-api-key", "grafana-otlp-endpoint", "grafana-otlp-token"], k)
   }
   secret_id = each.value.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
+}
+
+# The strategy block rides in the declared facts, so the prioritizer mounts
+# standing-context (excluded from the loop above, which stays minimal).
+resource "google_secret_manager_secret_iam_member" "prioritize_cf_standing_context" {
+  secret_id = data.google_secret_manager_secret.shared["standing-context"].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.tasks_prioritize_cf.email}"
 }

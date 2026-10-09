@@ -5,8 +5,9 @@ process — Pub/Sub trigger on the inbox-owned email-events topic; handles
           email_classified (policy → enrich → create task) and label_applied.
 webhook — HTTP trigger (public); Asana webhook handshake + completion events,
           POST /escalate for the Cloud Scheduler overdue scan, POST /digest
-          for the due-day digest, and POST /webhook-sync for per-project
-          webhook reconciliation.
+          for the due-day digest, POST /review for the Monday strategy
+          review, and POST /webhook-sync for per-project webhook
+          reconciliation.
 prioritize — Pub/Sub trigger on task-events (tasks-prioritize CF)
 
 LAYER RULE: this file is a transport adapter — decode the envelope, route,
@@ -45,7 +46,14 @@ import functions_framework
 from cloudevents.http import CloudEvent
 
 import clients.otel as otel
-from handlers import asana_webhook, due_digest, label_applied, task_create, webhook_sync
+from handlers import (
+    asana_webhook,
+    due_digest,
+    label_applied,
+    task_create,
+    weekly_review,
+    webhook_sync,
+)
 from handlers import prioritize as prioritize_handler
 from services import escalation
 
@@ -117,6 +125,11 @@ def webhook(request):
             if not isinstance(body, dict):
                 body = {}
             return due_digest.run(force=bool(body.get("force"))), 200
+
+        if request.path == "/review" and request.method == "POST":
+            if not escalation.is_authorized(request.headers.get("Authorization")):
+                return "", 401
+            return weekly_review.run(), 200
 
         if request.path == "/webhook-sync" and request.method == "POST":
             if not escalation.is_authorized(request.headers.get("Authorization")):

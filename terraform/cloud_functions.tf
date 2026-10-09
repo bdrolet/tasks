@@ -298,10 +298,25 @@ resource "google_cloudfunctions2_function" "tasks_prioritize" {
     # The backfill burst hit "no available instance" at 3; idle costs nothing.
     # Concurrent rescores serialise on pg_advisory_xact_lock, so a burst queues
     # on the lock and can hold up to 10 DB connections meanwhile — fine, but known.
-    max_instance_count    = 10
-    timeout_seconds       = 120 # one task: 2-4 Asana calls + ≤1 Claude call + a rescore
-    available_memory      = "512Mi"
-    environment_variables = local.common_env
+    max_instance_count = 10
+    timeout_seconds    = 120 # one task: 2-4 Asana calls + ≤1 Claude call + a rescore
+    available_memory   = "512Mi"
+    environment_variables = merge(local.common_env, {
+      # Same declared-facts mount as tasks-events (see there): the prioritizer
+      # reads the strategy block from it. Read-only; the facts live in the
+      # private bdrolet/context repo.
+      STANDING_CONTEXT_PATH = "/etc/context/standing-context.md"
+    })
+
+    secret_volumes {
+      mount_path = "/etc/context"
+      project_id = var.project_id
+      secret     = data.google_secret_manager_secret.shared["standing-context"].secret_id
+      versions {
+        version = "latest"
+        path    = "standing-context.md"
+      }
+    }
 
     secret_environment_variables {
       key        = "ASANA_API_KEY"
