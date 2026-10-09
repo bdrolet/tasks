@@ -11,10 +11,12 @@ from zoneinfo import ZoneInfo
 
 from models.prioritize import Enrichment, Overrides, ScoredSet, ScoredTask, Stats, TaskFacts
 from services.due_digest import LOCAL_TZ
+from models.strategy import Strategy
 from services.prioritize_config import Config
 
 _PRIORITY_RE = re.compile(r"^\[P([0-3])\]")
-_TAG_FIELDS = ("waiting", "energy", "impact")
+_TAG_FIELDS = ("waiting", "energy", "impact", "role")
+ROLE_RANK = {"path": 3, "derisk": 2, "support": 1}
 IMPACTS = ("low", "medium", "high")
 ENERGIES = ("deep", "shallow")
 
@@ -34,6 +36,19 @@ class Effective:
     due_date_inferred_confidence: str
     impact: str
     energy: str
+    serves: tuple[str, ...] = ()
+    role: str | None = None
+    necessity_source: str = "default"  # tag | override | model | default
+    necessity_confidence: str = "low"
+
+
+def _serves_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    out = []
+    for tag in tags:
+        key, sep, value = tag.partition(":")
+        if sep and key.strip().casefold() == "serves" and value.strip():
+            out.append(value.strip())
+    return tuple(out)
 
 
 def _tag_values(tags: tuple[str, ...]) -> dict[str, str]:
@@ -47,7 +62,11 @@ def _tag_values(tags: tuple[str, ...]) -> dict[str, str]:
 
 
 def effective(
-    facts: TaskFacts, enrichment: Enrichment, overrides: Overrides, config: Config
+    facts: TaskFacts,
+    enrichment: Enrichment,
+    overrides: Overrides,
+    config: Config,
+    strategy: Strategy = Strategy.EMPTY,
 ) -> Effective:
     """tag > override > model > default, per field."""
     tags = _tag_values(facts.tags)
@@ -85,7 +104,36 @@ def effective(
         if "due_date_inferred" in o and o["due_date_inferred"]
         else enrichment.due_date_inferred_confidence
     )
+    known = {g.id for g in strategy.goals}
+    tag_serves = tuple(s for s in _serves_tags(facts.tags) if s in known)
+    tag_role = tags.get("role") if tags.get("role") in ROLE_RANK else None
+    if _serves_tags(facts.tags) or tag_role:
+        serves, role, nsource = tag_serves, tag_role or "support", "tag"
+    elif o.get("serves") is not None:
+        serves = tuple(s for s in o["serves"] if s in known)
+        role = o.get("role") if o.get("role") in ROLE_RANK else "support"
+        nsource = "override"
+    elif enrichment.serves:
+        # A low-confidence model judgment is a suggestion for grooming, not
+        # an attachment; only medium/high counts toward the effective serves.
+        ok = (
+            [s for s in enrichment.serves if s.goal in known]
+            if enrichment.necessity_confidence in ("medium", "high")
+            else []
+        )
+        serves = tuple(s.goal for s in ok)
+        role = max((s.role for s in ok), key=lambda r: ROLE_RANK[r], default=None)
+        nsource = "model"
+    else:
+        serves, role = (), None
+        nsource = "model" if not enrichment.unenriched else "default"
+    if not strategy.goals:
+        serves, role, nsource = (), None, "default"
     return Effective(
+        serves=serves,
+        role=role,
+        necessity_source=nsource,
+        necessity_confidence=enrichment.necessity_confidence,
         points=points,
         points_source=source,
         points_confidence=conf,
@@ -97,6 +145,28 @@ def effective(
     )
 
 
+def necessity(eff: Effective, strategy: Strategy, config: Config) -> tuple[float, bool]:
+    """(N, grooming). Unattached when nothing known is served; grooming when
+    the judgment is uncertain or a tag names an unknown goal."""
+    if not strategy.goals or not eff.serves:
+        uncertain = eff.necessity_source in ("model", "default") and eff.necessity_confidence == "low"
+        groomed = uncertain or (eff.necessity_source == "tag")  # a tag with no known goal
+        return config.necessity_unattached, groomed
+    role_factor = config.necessity_role[eff.role or "support"]
+    weight = max(g.weight for g in (strategy.get(s) for s in eff.serves) if g)
+    return weight * role_factor, False
+
+
+def effective_weights(config: Config) -> dict[str, float]:
+    """flag mode: drop the necessity term and divide the rest by (1 - w),
+    which recovers the pre-strategy weights to the digit (spec D6)."""
+    w = dict(config.weights)
+    n = w.pop("necessity", 0.0)
+    if config.necessity_mode == "flag":
+        return {k: v / (1.0 - n) for k, v in w.items()} | {"necessity": 0.0}
+    return config.weights if "necessity" in config.weights else {**config.weights, "necessity": 0.0}
+
+
 def _local_date(ts: datetime) -> date:
     return ts.astimezone(ZoneInfo(LOCAL_TZ)).date()
 
@@ -106,6 +176,7 @@ def _effective_due(
     eff: Effective,
     config: Config,
     ancestors: list[tuple[str, "_State"]],
+    strategy: Strategy = Strategy.EMPTY,
 ) -> tuple[date | None, str, str | None]:
     """(date, source, from): hard due_on; else the nearest ancestor's hard
     due_on, still "hard" (D16 — the parent's deadline binds the work under
@@ -120,9 +191,20 @@ def _effective_due(
     if eff.due_date_inferred and eff.due_date_inferred_confidence in ("medium", "high"):
         return eff.due_date_inferred, "inferred", None
     horizon = config.horizon_days.get(facts.priority or config.default_priority)
-    if horizon is None:
+    prio_due = _local_date(facts.created_at) + timedelta(days=horizon) if horizon is not None else None
+    if eff.role in ("path", "derisk"):
+        goal_dues = [
+            g.horizon
+            for g in (strategy.get(s) for s in eff.serves)
+            if g and g.kind == "outcome" and g.horizon
+        ]
+        if goal_dues:
+            goal_due = min(goal_dues)
+            if prio_due is None or goal_due < prio_due:
+                return goal_due, "goal_horizon", None
+    if prio_due is None:
         return None, "none", None
-    return _local_date(facts.created_at) + timedelta(days=horizon), "horizon", None
+    return prio_due, "horizon", None
 
 
 MAX_SUBTASK_DEPTH = 3
@@ -224,6 +306,9 @@ def score_set(
     config: Config,
     today: date,
     project_last_offered: dict[str, date] | None = None,
+    *,
+    strategy: Strategy = Strategy.EMPTY,
+    below_the_line: frozenset[str] = frozenset(),
 ) -> ScoredSet:
     """`project_last_offered` maps project name -> the last day one of its
     tasks was in a daily pick; a project absent from it has never been
@@ -249,7 +334,7 @@ def score_set(
             f = replace(f, num_open_subtasks=open_children.get(f.gid, 0))
         e = enrichments.get(f.gid, Enrichment.DEFAULT)
         ov = overrides.get(f.gid, Overrides.NONE)
-        prepared.append((f, e, ov, effective(f, e, ov, config)))
+        prepared.append((f, e, ov, effective(f, e, ov, config, strategy)))
     # D16: a subtask inherits snoozed / blocked / waiting, and a hard due
     # date when it has none of its own, from its ancestors.
     parent_of = {f.gid: f.parent_gid for f in facts}
@@ -261,7 +346,20 @@ def score_set(
         bucket, despite = bk.bucket, bk.pinned_despite
         if bk.waiting_on != eff.waiting_on:
             eff = replace(eff, waiting_on=bk.waiting_on)
-        due, source, due_from = _effective_due(f, eff, config, ancestors)
+        n_val, grooming = necessity(eff, strategy, config)
+        confident_none = (
+            strategy.goals
+            and not eff.serves
+            and eff.necessity_source == "model"
+            and eff.necessity_confidence in ("medium", "high")
+        )
+        if confident_none and bucket == "next" and config.necessity_mode == "suppress":
+            if ov.pinned_rank is not None:
+                despite = despite or "stop_doing"
+            else:
+                bucket = "stop_doing"
+        known = {g.id for g in strategy.goals}
+        due, source, due_from = _effective_due(f, eff, config, ancestors, strategy)
         effort = eff.points / config.points_per_day
         if eff.points_source != "field" and eff.points_confidence == "low":
             effort *= config.low_confidence_multiplier
@@ -308,6 +406,18 @@ def score_set(
                 "inherited": bk.inherited,
                 "starvation_boost": boost,
                 "days_since_project_offered": days_offered,
+                "necessity": n_val,
+                "N": n_val,
+                "serves": list(eff.serves),
+                "serves_suggested": [s.goal for s in e.serves if s.goal in known],
+                "role": eff.role,
+                "necessity_source": eff.necessity_source,
+                "necessity_confidence": eff.necessity_confidence,
+                "grooming": grooming,
+                "confident_none": bool(confident_none),
+                "below_the_line": bool(
+                    eff.role in ("path", "derisk") and any(s in below_the_line for s in eff.serves)
+                ),
             },
             project_name=f.project_name,
             points=eff.points,
@@ -336,7 +446,11 @@ def score_set(
         t.overcommitted = c["effective_slack"] < 0
         cursor += c["effort_days"]
 
-    caps = {"inferred": config.soft_cap_inferred, "horizon": config.soft_cap_horizon}
+    caps = {
+        "inferred": config.soft_cap_inferred,
+        "horizon": config.soft_cap_horizon,
+        "goal_horizon": config.soft_cap_horizon,
+    }
     # Score every non-completed task so nudge/excluded rows are explainable too.
     for f, eff, t, due, source in pending:
         if t.bucket == "excluded:completed":
@@ -359,7 +473,7 @@ def score_set(
         i = config.impact_weight[eff.impact]
         open_dependents = sum(1 for d in f.dependents if d in open_gids)
         b = min(1.0, config.unblock_per_task * open_dependents)
-        w = config.weights
+        w = effective_weights(config)
         cod = (
             w["priority"] * p_weight
             + w["urgency"] * u
@@ -367,7 +481,10 @@ def score_set(
             + w["unblock"] * b
             + w["aging"] * a
             + w["category"] * cat
+            + w["necessity"] * c["N"]
         )
+        if c["below_the_line"] and config.necessity_mode != "flag":
+            cod *= config.below_the_line_boost
         c.update({"P": p_weight, "U": u, "A": a, "C": cat, "I": i, "B": b, "cost_of_delay": cod})
         t.score = cod / max(c["effort_days"], config.min_effort_days)
 
@@ -475,4 +592,10 @@ def side_lists(scored: ScoredSet) -> dict[str, list[ScoredTask]]:
         "nudge": sorted(
             (t for t in active if t.bucket == "nudge"), key=lambda t: -t.components["days_stale"]
         ),
+        "grooming": [t for t in active if t.components.get("grooming")],
+        "stop_doing": [
+            t
+            for t in scored.tasks
+            if t.bucket == "stop_doing" or (t.bucket in ("next", "nudge") and t.components.get("confident_none"))
+        ],
     }
