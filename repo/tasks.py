@@ -1,16 +1,47 @@
+import json
 from typing import Any
 
 
-def insert(conn: Any, *, task_gid: str, message_id: str, category: str, importance: str) -> None:
+def insert(
+    conn: Any,
+    *,
+    task_gid: str,
+    message_id: str,
+    category: str,
+    importance: str,
+    serves_estimated: dict | None = None,
+) -> None:
     """Record a created task. Idempotent on message_id (Pub/Sub redelivery)."""
     conn.execute(
         """
-        INSERT INTO tasks (task_gid, message_id, category, importance)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO tasks (task_gid, message_id, category, importance, serves_estimated)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (message_id) DO NOTHING
         """,
-        (task_gid, message_id, category, importance),
+        (
+            task_gid,
+            message_id,
+            category,
+            importance,
+            json.dumps(serves_estimated) if serves_estimated is not None else None,
+        ),
     )
+
+
+def necessity_rows(conn: Any) -> list[dict]:
+    """Gate-2 serves drafts recorded at creation, shaped like
+    repo.prioritize.necessity_rows (source tells the two apart)."""
+    return conn.execute(
+        """
+        SELECT t.task_gid, t.serves_estimated, f.tags, o.overrides, e.strategy_hash,
+               'gate2' AS source
+        FROM tasks t
+        JOIN task_facts f USING (task_gid)
+        LEFT JOIN task_overrides o USING (task_gid)
+        LEFT JOIN task_enrichment e USING (task_gid)
+        WHERE t.serves_estimated IS NOT NULL
+        """
+    ).fetchall()
 
 
 def get_gid_by_message(conn: Any, message_id: str) -> str | None:

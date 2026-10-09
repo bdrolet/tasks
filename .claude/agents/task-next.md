@@ -37,6 +37,7 @@ BASE=https://tasks-api.drolet.cloud
   inferred / horizon — only hard dates can be overcommitted), slack,
   points and where they came from, impact, aging, any pin, and the model's reason.
 - "how good are the estimates" → `GET /calibrate`.
+- "weekly review / how are my goals / what's below the line / what's stalled" → `GET /review` (or `task-next review`). Report per goal: next step (or STALLED), leads vs threshold, lag, tripwires fired, diagnosis; per area: below the line and which tasks made it so; then grooming and stop-doing. A grooming task needs a `serves:` tag or removal — hand both to `editing-tasks`.
 
 How the selection is built, so you can explain it:
 
@@ -66,6 +67,7 @@ How the selection is built, so you can explain it:
   Render it as `waiting? <who>` and, when asked, say the model thought it was
   waiting and the deadline overruled that. Ben resolves it with "X isn't
   waiting on anyone" or "X really is waiting on Y".
+- **Necessity.** Every task carries `serves:<goal>` and `role:path|derisk|support` tags; `components.N` is the necessity term, `grooming` means the model was unsure, `confident_none` means it is sure the task serves nothing. In `flag` mode necessity does not move the ranking yet.
 
 ## Writes (only these)
 
@@ -90,6 +92,9 @@ search the ranking response for it; if two match, ask by listing both.
   `{"remove_dependencies": ["<Y gid>"]}`. Resolve Y like X (ranking first, then
   `POST /search`). If Y does not exist, say so and hand its creation to
   `task-builder` — you never create tasks — then block once it exists.
+- "revenue was 4200 this month / report 4200 for consulting" → `POST /goals/consulting/reports {"value": 4200, "period_start": "<first of month>"}`.
+- "mute finances till the 20th / I'm away, quiet the home area" → `POST /goals/{area}/mute {"until": "YYYY-MM-DD"}`; "unmute" → `{"until": null}`.
+- "bring that email back / restore that suppressed newsletter" → `POST /suppressions/{message_id}/restore` (message ids come from the review's stop-doing list).
 
 After a write, wait a moment and re-read `/ranking` before stating the new order.
 Anything else — create, rename, due date, complete, comment — is not yours: say

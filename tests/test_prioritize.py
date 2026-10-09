@@ -752,6 +752,208 @@ def test_completed_parent_passes_no_due_date_down():
     assert c["due_from"] is None
 
 
+# --- strategy layer: necessity -------------------------------------------
+from dataclasses import replace as _replace  # noqa: E402
+from datetime import date as _date  # noqa: E402
+
+from models.prioritize import Serve  # noqa: E402
+from models.strategy import Goal, Strategy  # noqa: E402
+
+STRATEGY = Strategy(
+    goals=(
+        Goal(id="consulting", kind="outcome", weight=1.0, horizon=_date(2026, 12, 15)),
+        Goal(id="finances", kind="area", weight=0.8),
+    )
+)
+
+
+def cfg_with(**kw):
+    return _replace(CFG, **kw)
+
+
+def run_s(fs, enrichments=None, overrides=None, config=None, below=frozenset(), today=TODAY):
+    return pz.score_set(
+        fs,
+        enrichments or {},
+        overrides or {},
+        {},
+        config or CFG,
+        today,
+        strategy=STRATEGY,
+        below_the_line=below,
+    )
+
+
+def test_flag_mode_reproduces_pre_strategy_scores_exactly():
+    old = cfg_with(
+        weights={
+            "priority": 0.25,
+            "urgency": 0.30,
+            "impact": 0.15,
+            "unblock": 0.10,
+            "aging": 0.05,
+            "category": 0.15,
+        }
+    )
+    fs = [
+        facts("a", due_on=TODAY + timedelta(days=5), points=1),
+        facts("b", name="[P3] b", points=5),
+        facts("c", project="Consulting"),
+        facts("d", name="[P3] d", tags=("serves:consulting", "role:path")),
+        facts("e", name="[P3] e"),
+    ]
+    ens = {"e": enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="high")}
+    before = {t.gid: t.score for t in pz.score_set(fs, ens, {}, {}, old, TODAY).tasks}
+    after = {
+        t.gid: t.score
+        for t in run_s(
+            fs, ens, config=cfg_with(necessity_mode="flag"), below=frozenset({"consulting"})
+        ).tasks
+    }
+    for gid in before:
+        assert abs(before[gid] - after[gid]) < 1e-12, gid
+
+
+def test_goal_horizon_due_only_outside_flag_mode():
+    f = facts("d", name="[P3] d", tags=("serves:consulting", "role:path"))
+    flag = (
+        run_s([f], config=cfg_with(necessity_mode="flag"), below=frozenset({"consulting"}))
+        .by_gid()["d"]
+        .components
+    )
+    assert flag["due_source"] == "horizon" and flag["below_the_line"] is False
+    assert flag["goal_horizon"] == "2026-12-15"
+    demote = run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["d"].components
+    assert demote["due_source"] == "goal_horizon"
+
+
+def test_model_naming_only_unknown_goals_is_not_confident_none():
+    e = enr(serves=(Serve("ghost", "path", "high"),), necessity_confidence="high")
+    t = run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="suppress")).by_gid()["a"]
+    assert t.bucket == "next"
+    assert t.components["confident_none"] is False and t.components["grooming"] is True
+
+
+def test_effective_weights_flag_vs_demote():
+    w = pz.effective_weights(cfg_with(necessity_mode="flag"))
+    assert w["necessity"] == 0 and abs(w["priority"] - 0.25) < 1e-12
+    w = pz.effective_weights(cfg_with(necessity_mode="demote"))
+    assert w == CFG.weights
+
+
+def test_necessity_from_tags_wins_over_model():
+    f = facts("a", tags=("serves:finances", "role:support"))
+    e = enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="high")
+    c = run_s([f], {"a": e}, config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
+    assert c["serves"] == ["finances"] and c["role"] == "support" and c["necessity_source"] == "tag"
+    assert abs(c["N"] - 0.8 * 0.5) < 1e-12
+
+
+def test_necessity_roles_and_weights():
+    for role, expected in (("path", 1.0), ("derisk", 0.9), ("support", 0.5)):
+        f = facts("a", tags=("serves:consulting", f"role:{role}"))
+        c = run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
+        assert abs(c["N"] - expected) < 1e-12, role
+
+
+def test_model_serves_without_tags_uses_highest_role():
+    e = enr(
+        serves=(Serve("finances", "support", "high"), Serve("consulting", "derisk", "medium")),
+        necessity_confidence="high",
+    )
+    c = (
+        run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="demote"))
+        .by_gid()["a"]
+        .components
+    )
+    assert c["role"] == "derisk" and c["necessity_source"] == "model" and abs(c["N"] - 0.9) < 1e-12
+
+
+def test_low_confidence_model_serves_is_grooming_with_suggestion():
+    e = enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="low")
+    c = (
+        run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="demote"))
+        .by_gid()["a"]
+        .components
+    )
+    assert c["serves"] == [] and c["grooming"] is True
+    assert c["N"] == CFG.necessity_unattached
+    assert c["serves_suggested"] == ["consulting"]
+
+
+def test_unknown_goal_tag_is_unattached_and_groomed():
+    f = facts("a", tags=("serves:ghost", "role:path"))
+    c = run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
+    assert c["serves"] == [] and c["N"] == CFG.necessity_unattached and c["grooming"] is True
+
+
+def test_uncertain_none_is_unattached_and_groomed_not_suppressed():
+    e = enr(serves=(), necessity_confidence="low")
+    t = run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="suppress")).by_gid()["a"]
+    assert t.bucket == "next" and t.components["grooming"] is True
+    assert t.components["N"] == CFG.necessity_unattached
+
+
+def test_confident_none_is_stop_doing_only_in_suppress_mode():
+    e = enr(serves=(), necessity_confidence="high")
+    for mode, bucket in (("flag", "next"), ("demote", "next"), ("suppress", "stop_doing")):
+        t = run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode=mode)).by_gid()["a"]
+        assert t.bucket == bucket, mode
+
+
+def test_pin_overrides_stop_doing():
+    e = enr(serves=(), necessity_confidence="high")
+    ov = {"a": Overrides(pinned_rank=1)}
+    t = run_s([facts("a")], {"a": e}, ov, config=cfg_with(necessity_mode="suppress")).by_gid()["a"]
+    assert t.bucket == "next" and t.components["pinned_despite"] == "stop_doing"
+
+
+def test_goal_horizon_becomes_soft_due_for_path_tasks_without_dates():
+    f = facts(
+        "a", name="[P3] a", tags=("serves:consulting", "role:path")
+    )  # P3 horizon = 2026-12-29 local
+    c = run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
+    assert c["effective_due"] == "2026-12-15" and c["due_source"] == "goal_horizon" and c["soft"]
+
+
+def test_goal_horizon_does_not_replace_a_nearer_priority_horizon_or_any_real_date():
+    f = facts("a", name="[P0] a", tags=("serves:consulting", "role:path"))  # P0 horizon = +3d
+    assert (
+        run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components["due_source"]
+        == "horizon"
+    )
+    f = facts("b", due_on=TODAY + timedelta(days=100), tags=("serves:consulting", "role:path"))
+    assert (
+        run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["b"].components["due_source"]
+        == "hard"
+    )
+    f = facts("c", tags=("serves:consulting", "role:support"))
+    assert (
+        run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["c"].components["due_source"]
+        == "horizon"
+    )
+
+
+def test_below_the_line_boosts_path_and_derisk_only_in_demote():
+    cfg = cfg_with(necessity_mode="demote")
+    path = facts("a", tags=("serves:finances", "role:path"))
+    support = facts("b", tags=("serves:finances", "role:support"))
+    plain = run_s([path, support], config=cfg).by_gid()
+    boosted = run_s([path, support], config=cfg, below=frozenset({"finances"})).by_gid()
+    assert abs(boosted["a"].score / plain["a"].score - CFG.below_the_line_boost) < 1e-9
+    assert abs(boosted["b"].score - plain["b"].score) < 1e-12
+    assert boosted["a"].components["below_the_line"] is True
+
+
+def test_no_strategy_means_everything_unattached_and_equal():
+    e = enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="high")
+    s = pz.score_set(
+        [facts("a"), facts("b")], {"a": e}, {}, {}, cfg_with(necessity_mode="demote"), TODAY
+    )
+    c = s.by_gid()
+    assert c["a"].components["N"] == c["b"].components["N"] == CFG.necessity_unattached
+
+
 def test_waiting_source_follows_precedence():
     a = facts("a", points=1)
     model = enr(waiting_on="the model", waiting_confidence="high")

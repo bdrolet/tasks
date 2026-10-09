@@ -23,6 +23,12 @@ curl -s "$BASE/ranking?bucket=next&limit=100"          -H "Authorization: Bearer
 curl -s "$BASE/ranking?list=overcommitted"             -H "Authorization: Bearer $TOKEN"
 curl -s "$BASE/ranking?explain=true"                   -H "Authorization: Bearer $TOKEN"
 curl -s "$BASE/calibrate"                              -H "Authorization: Bearer $TOKEN"
+curl -s "$BASE/review"                                 -H "Authorization: Bearer $TOKEN"
+curl -s -XPOST "$BASE/goals/<id>/reports" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"value": 4200, "period_start": "2026-10-01"}'
+curl -s -XPOST "$BASE/goals/<id>/mute" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"until": "2026-10-20"}'   # null unmutes
+curl -s -XPOST "$BASE/suppressions/<message_id>/restore" -H "Authorization: Bearer $TOKEN"
 curl -s -XPUT "$BASE/tasks/<gid>/overrides" -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{"pinned_rank": 1}'
 curl -s -XPATCH "$BASE/tasks/<gid>" -H "Authorization: Bearer $TOKEN" \
@@ -33,7 +39,8 @@ curl -s -XPATCH "$BASE/tasks/<gid>" -H "Authorization: Bearer $TOKEN" \
 
 Or the CLI, which does the same and prints ref-first TSV: `task-next`,
 `task-next ranking`, `task-next start|points|pin|unpin|snooze|unsnooze|override <ref|gid> …`,
-`task-next block|unblock <ref|gid> <blocker ref|gid>`, `task-next calibrate`.
+`task-next block|unblock <ref|gid> <blocker ref|gid>`, `task-next calibrate`,
+`task-next review|report|mute|restore`.
 
 ## Meaning
 
@@ -64,6 +71,14 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
   `PATCH /tasks/{gid}` `add_dependencies` / `remove_dependencies` (GIDs). This
   skill never creates a task — if Y does not exist, say so and hand creation
   to `task-builder`.
+- **Strategy** — tasks carry `serves:<goal-or-area>` tags and exactly one
+  `role:` tag (`path`, `derisk` or `support`). `GET /review` reports per goal
+  its next step, leads, lag and tripwires, per area whether it is below the
+  line, plus a **grooming** list (tasks the model could not place — add a
+  `serves:` tag or remove them) and a **stop-doing** list (tasks and
+  suppressed emails that serve nothing; restore an email with
+  `POST /suppressions/{message_id}/restore`). Below-the-line signals debounce
+  over three days before they count.
 - `GET /ranking` — every task in score order. `bucket` = `next` (default) |
   `nudge` | `snoozed` | `excluded`; or `list` = `overcommitted` | `stale` |
   `nudge`. `explain=true` adds `components` (P, U, I, B, A, C, points,

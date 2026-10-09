@@ -93,6 +93,7 @@ def test_row_to_facts_roundtrip():
         "tags": '["a"]',
         "dependencies": ["d"],
         "dependents": [],
+        "serves_estimated": None,
         "num_open_subtasks": 0,
         "content_hash": "h",
     }
@@ -266,3 +267,61 @@ def test_project_last_offered_reads_daily_runs_within_the_window():
     assert params == (date(2026, 8, 24), date(2026, 9, 23))
     repo.project_last_offered(conn, today=date(2026, 9, 23), days=7)
     assert conn.executed[1][1] == (date(2026, 9, 16), date(2026, 9, 23))
+
+
+def test_claim_serves_is_conditional_on_null():
+    conn = FakeConn()
+    assert repo.claim_serves(conn, "t1", {"serves": ["consulting"], "role": "path"}) is True
+    q, p = conn.executed[0]
+    assert "SET serves_estimated = %s" in q and "serves_estimated IS NULL" in q
+    assert p[1] == "t1" and '"role": "path"' in p[0]
+    assert repo.claim_serves(RowsConn(rowcount=0), "t1", {}) is False
+
+
+def test_set_tags_bumps_fetched_at():
+    conn = FakeConn()
+    repo.set_tags(conn, "t1", ["serves:consulting", "role:path"])
+    q, p = conn.executed[0]
+    assert "UPDATE task_facts SET tags = %s" in q and "fetched_at = now()" in q
+
+
+def test_upsert_enrichment_stores_strategy_hash():
+    conn = FakeConn()
+    repo.upsert_enrichment(conn, "t1", "h", {"x": 1}, "m", strategy_hash="s")
+    q, p = conn.executed[0]
+    assert "strategy_hash" in q and p[-1] == "s"
+    assert "strategy_hash = EXCLUDED.strategy_hash" in q
+
+
+def test_serves_estimated_is_inserted_but_never_updated_by_upsert_facts():
+    from dataclasses import replace
+
+    conn = FakeConn()
+    repo.upsert_facts(conn, F)
+    q, p = conn.executed[0]
+    assert "serves_estimated" in q.split("ON CONFLICT")[0]
+    assert "serves_estimated = EXCLUDED" not in q  # only claim_serves writes it
+    assert q.split("VALUES")[1].split("now()")[0].count("%s") == len(p)
+    assert p[-1] is None
+    repo.upsert_facts(conn, replace(F, serves_estimated={"role": "path"}))
+    assert '"role": "path"' in conn.executed[1][1][-1]
+
+
+def test_row_to_facts_reads_serves_estimated():
+    conn = FakeConn()
+    repo.upsert_facts(conn, F)
+    cols = [c.strip() for c in repo._FACT_COLS.split(",")]
+    row = dict(zip(cols, conn.executed[0][1]))
+    row["tags"] = row["dependencies"] = row["dependents"] = "[]"
+    assert repo._row_to_facts(row).serves_estimated is None
+    row["serves_estimated"] = '{"role": "path"}'
+    assert repo._row_to_facts(row).serves_estimated == {"role": "path"}
+
+
+def test_necessity_rows_joins_overrides_and_enrichment():
+    conn = RowsConn(rows=[{"task_gid": "t1"}])
+    assert repo.necessity_rows(conn) == [{"task_gid": "t1"}]
+    q, _ = conn.executed[0]
+    assert "f.serves_estimated IS NOT NULL" in q and "'enrichment' AS source" in q
+    assert "LEFT JOIN task_overrides o USING (task_gid)" in q
+    assert "LEFT JOIN task_enrichment e USING (task_gid)" in q and "e.strategy_hash" in q

@@ -214,3 +214,50 @@ CREATE TABLE IF NOT EXISTS task_stats (
     points_estimated     INTEGER,
     cycle_days           DOUBLE PRECISION     -- completed_at - started_at, NULL if never started
 );
+
+-- Strategy layer (docs/superpowers/specs/2026-10-09-strategy-layer-design.md)
+ALTER TABLE task_facts ADD COLUMN IF NOT EXISTS serves_estimated JSONB;        -- D5: NULL = never judged for write-back
+ALTER TABLE task_enrichment ADD COLUMN IF NOT EXISTS strategy_hash TEXT;       -- D4
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS serves_estimated JSONB;             -- D14: gate-2 draft at creation
+ALTER TABLE suppressed_emails ADD COLUMN IF NOT EXISTS web_link TEXT;          -- D14: the restore link
+ALTER TABLE suppressed_emails ADD COLUMN IF NOT EXISTS restored_at TIMESTAMPTZ;
+ALTER TABLE suppressed_emails ADD COLUMN IF NOT EXISTS restored_task_gid TEXT;
+
+CREATE TABLE IF NOT EXISTS goal_reports (
+    id            BIGSERIAL PRIMARY KEY,
+    goal_id       TEXT NOT NULL,
+    value         DOUBLE PRECISION NOT NULL,
+    period_start  DATE,
+    reported_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS goal_reports_goal_idx ON goal_reports (goal_id, reported_at DESC);
+
+CREATE TABLE IF NOT EXISTS goal_overrides (
+    goal_id       TEXT PRIMARY KEY,
+    mute_until    DATE,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The parsed strategy as the daily tick last saw it, so the tasks-api and
+-- the webhook CF read goals from the database and never mount the secret
+-- (spec D1: only tasks-prioritize mounts it). One row.
+CREATE TABLE IF NOT EXISTS strategy_snapshot (
+    id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    text_hash     TEXT NOT NULL,
+    last_reviewed DATE,
+    findings      JSONB NOT NULL DEFAULT '[]',
+    goals         JSONB NOT NULL DEFAULT '[]',   -- [{id, kind, weight, horizon}]
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per goal per day: leads, lag, tripwires, signals (raw, effective,
+-- consecutive_days, state, tasks), below_the_line, muted_until, next_step,
+-- diagnosis. Written by the daily tick (D7).
+CREATE TABLE IF NOT EXISTS goal_state (
+    goal_id       TEXT NOT NULL,
+    day           DATE NOT NULL,
+    kind          TEXT NOT NULL,
+    state         JSONB NOT NULL,
+    strategy_hash TEXT NOT NULL,
+    PRIMARY KEY (goal_id, day)
+);

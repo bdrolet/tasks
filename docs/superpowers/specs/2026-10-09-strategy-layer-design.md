@@ -1,0 +1,768 @@
+# Strategy layer — goals, areas, necessity and tripwires for the prioritizer
+
+**Date:** 2026-10-09
+**Status:** designed, not implemented
+**Builds on:** `2026-09-23-next-prioritizer-design.md` (the WSJF scorer this
+extends), `2026-08-18-standing-context-gate-design.md` (the private declared
+facts this reads the same way). Research notes behind the choices:
+`docs/superpowers/research/2026-10-09-strategy-frameworks.md`.
+
+## Problem
+
+The prioritizer answers "what is most costly to delay". It cannot answer
+"does any goal need this at all", "what is the next necessary step toward
+landing a client", "what can I do now to protect that goal", or "is the plan
+still working". A task gets a `[PX]` prefix and a date and from then on ranks
+like real work, whether or not it moves anything: a check with the accountant
+about a question whose answer would not change what gets filed ranks beside
+the proposal that would bring in revenue.
+
+Ben has written goals down at least three times before (a runway plan in
+December 2022, a horizons-style goals stack in 2023, a priorities note in
+2025). Each lived in a document nothing read, and each went stale within
+months. The research survey found the same failure in every commercial tool:
+goals become a parallel system nobody reviews, and the link runs goal → work,
+never work → goal, so a task cannot say what it serves.
+
+## Goals
+
+- Every task carries **what it serves** and **in what role**, set at creation
+  and visible on the card; nothing enters the ranked set unattached without
+  being flagged, and an email the model is highly confident serves nothing
+  never becomes a task. For a task born from email, "at creation" is literal: gate 2
+  judges necessity in the same call that decides whether the email is
+  actionable, and the task is created with its tags (D14).
+- Ranking prefers work that is on a goal's path or protects a goal or an
+  area's standard, over work that merely supports one, and sinks work that
+  serves nothing.
+- A **grooming** list shows the judgments the model was unsure of; a
+  **stop-doing** list shows the tasks it is confident serve nothing, each
+  with a prompt to remove or attach.
+- Each **outcome goal** shows its current next step, its lead and lag
+  measures against their thresholds, and whether a pre-registered
+  **tripwire** has fired. Each **area** shows whether it is above or below
+  its standard.
+- Strategy is **written prose Ben edits**, in a form a model can reason
+  from (diagnosis, guiding policy, path with assumptions), and the system
+  flags it when it goes stale.
+- The model's necessity judgment is **measured** against Ben's corrections,
+  the way point estimates already are, and the amount of trust the scorer
+  places in it is a config setting that moves only when that measurement
+  justifies it.
+
+## Non-goals
+
+- **No new strategy from the model.** It judges tasks against the written
+  strategy and enforces coherence; it does not write or rewrite goals.
+- **No Asana Goals.** Asana's goal object cannot be linked from the task
+  side; the display half buys nothing. Linkage is tags on the task.
+- **No automatic deletion.** The stop-doing list prompts; Ben removes.
+- **No revenue integration.** Lag measures are reported by hand.
+- **No change to gate 1.** Screening stays a cheap Haiku call over every
+  email with no strategy in its prompt. Gate 2 does read the strategy (D14);
+  it is already the judgment step and already reads the declared facts.
+- **No multi-user.** One strategy document, one person.
+
+## Vocabulary
+
+| Term | Meaning |
+|---|---|
+| **Outcome goal** | An end state with a clock: "≥ $15k/month from consulting before runway ends". Has a path, assumptions, lead and lag measures, tripwires. |
+| **Area** | A standard to keep, with no end state: finances, home, health, social, family, job search. Has a standard and a below-the-line signal. |
+| **Role** | How a task relates to a goal or area: `path` (a step on an outcome goal's path), `derisk` (protects a goal or standard from a significant downside), `support` (helps without being necessary). |
+| **Lead measure** | A controllable, predictive count: conversations held per week. Computed from completed tasks. |
+| **Lag measure** | The outcome: revenue per month. Reported by hand. |
+| **Tripwire** | A pre-registered state-and-date: "0 signed clients by 2026-12-31 → revisit niche and offer". Evaluated daily; fires as a task. |
+| **Below the line** | An area's slipping signal: "a P1 bill more than 3 days overdue". Debounced over consecutive days; evidence signals boost the area's path and derisk tasks, absence signals only report. |
+
+## Decisions
+
+### D1 — Strategy is a section of the private standing context
+
+The document is `strategy.md` in the private `bdrolet/context` repo, beside
+`roles.md` and `calendar.md`. That repo's CI already concatenates per-domain
+files into the `standing-context` secret, so the file becomes a `## Strategy`
+section with no change there. This service reads it through
+`services/standing_context.section("Strategy")`. Editing strategy is a PR in
+that repo and takes effect on the next cold start; no deploy here.
+
+Why not this repo: a diagnosis of Ben's runway and his children's needs is
+personal and this repo is public — the same reason the facts live there.
+Why not the database: the path to an outcome goal is a hypothesis that gets
+rewritten as evidence arrives, and prose is the cheapest thing to rewrite.
+
+**Infrastructure:** today only the events CF mounts the secret. The
+`tasks-prioritize` CF gets the same mount and `STANDING_CONTEXT_PATH`
+(`terraform/cloud_functions.tf`), since enrichment is where the judgment
+runs. The tasks-api does not read the document; it reads materialised rows.
+
+### D2 — One `###` block per goal or area: a parsed header, then prose
+
+Under `## Strategy`, each goal or area is a `### <id>` block. The id is the
+heading text: lowercase, `[a-z0-9-]+`, and it is what `serves:<id>` tags
+name. The block opens with a header of `- key: value` lines, which
+`services/strategy.py` parses, and continues in prose, which only the model
+reads. The header grammar:
+
+```
+- kind: outcome | area                       required
+- weight: <float>                            default 1.0; multiplies necessity
+- horizon: YYYY-MM-DD                        outcome only; the runway date
+- lag: <text> <op> <number> per <period>     outcome only; reported by hand
+- lead: <tag> <op> <number> per <period>     outcome only; repeatable
+- tripwire: <text> <op> <number> by YYYY-MM-DD -> <action text>
+                                             outcome only; repeatable
+- standard: <text>                           area only; prose for the model
+- below-the-line: <signal>[; <signal>]       area only; see D9
+- review: weekly | monthly                   default weekly
+```
+
+`<op>` is one of `>= <= = < >`. `<period>` is `day | week | month`. The
+`lead` tag is a plain Asana tag name (`conversation`, `proposal`); a
+completed task counts toward the lead when it carries that tag **and** a
+`serves:<id>` tag for this goal. `tripwire` text before the operator is either
+a lead tag name (counted the same way, over the whole window since the
+document's `last reviewed` date) or the literal `lag`.
+
+The section also carries one top-level line, `- last reviewed: YYYY-MM-DD`,
+before the first `###`.
+
+Prose conventions (Rumelt's kernel, which the research found to be the form
+a model enforces best): for an outcome goal, **Diagnosis**, **Guiding
+policy** (including what is explicitly *not* being done), **Path** (ordered
+preconditions, each with the assumption it rests on and an evidence status —
+untested, weak, confirmed), **Derisks** (pre-mortem failure modes and the
+task that would catch each early). For an area, **Standard** and **Not
+doing**. These are conventions the prompt describes; the parser does not
+require them.
+
+The full example lives in `context/standing-context.example.md` in this
+repo, under a `## Strategy` section, with placeholder content.
+
+### D3 — Parsing is pure and lenient; no document means no feature
+
+`services/strategy.py::parse(text) -> Strategy` is I/O-free and returns
+`Strategy(goals: tuple[Goal, ...], last_reviewed: date | None,
+findings: tuple[str, ...])`. A block with no `kind`, an unknown `kind`, a
+header line that does not parse, or a duplicate id is **skipped with a
+warning** and recorded in `findings`; the rest of the document loads. A
+missing or empty section yields `Strategy((), None, ())`, and every
+consumer treats that as "necessity is neutral" — the scorer's new term is a
+constant and ranking is unchanged from today.
+
+`findings` also carries review-level checks, which are warnings for the
+weekly review, never parse failures: an outcome goal with no tripwire; an
+outcome goal with no `lead`; `last reviewed` missing or older than
+`config.strategy.stale_after_days` (90).
+
+### D4 — The existing enrichment call judges necessity
+
+`services/enrichment.py`'s single schema-constrained call (prioritizer D5)
+gains the strategy and three output fields. No second model call per task.
+
+**Prompt additions.** System, first block (static, unchanged across
+tasks): what goals, areas and the three roles mean; that `path` means "a
+precondition on the goal's written path, or the obvious next step toward
+one"; that `derisk` means "its absence puts the outcome or the standard at
+significant risk"; that `support` means "helps but the goal is reachable
+without it"; that an empty `serves` with high confidence is a real and
+useful answer, not a failure. System, second block: the full `## Strategy`
+section text, with `cache_control` on it. The strategy is the same for
+every task, so placing it in the system prefix rather than the user message
+means a full re-judge of the task set reads it from cache (see §Model
+calls). User: the task content, as today.
+
+**Schema additions** (strict, alongside the existing fields):
+
+```json
+{
+  "serves": [
+    {"goal": "<id>", "role": "path" | "derisk" | "support",
+     "confidence": "low" | "medium" | "high"}
+  ],
+  "necessity_confidence": "low" | "medium" | "high",
+  "necessity_reason": string
+}
+```
+
+`serves` may be empty. `necessity_confidence` is the model's confidence in
+the `serves` list as a whole (including "nothing"). A `goal` that names no
+id in the loaded strategy is dropped at parse time with a warning.
+
+**Cache key.** `content_hash` (D5) becomes
+`sha256(name + "\n" + notes + "\n" + comments + "\n" + strategy_hash)`
+where `strategy_hash` is `sha256` of the `## Strategy` section text. A
+strategy edit therefore re-judges every task once on the next gather or heal
+— ~100 calls, a few dollars at the current volume (§Model calls) — which is
+correct: a new guiding policy should re-sort the list. The hash is stored on
+`task_enrichment` so `calibrate` can group judgments by strategy version.
+
+**Precedence is unchanged:** tag > override > model > default, per field.
+Two new tag families, `serves:<id>` (repeatable) and `role:<path|derisk|support>`
+(one per task; it applies to every `serves:` tag on that task), and two new
+override fields, `serves` (list of ids) and `role`. Ben's tag always wins.
+
+### D5 — Draft write-back, once, under the same guard as story points
+
+After enrichment, when the task carries no `serves:` tag **and**
+`task_facts.serves_estimated IS NULL`:
+
+| Judgment | Action |
+|---|---|
+| `serves` non-empty, `necessity_confidence` medium or high | write `serves:<id>` for each entry and one `role:<role>` tag (the highest role present, path > derisk > support); set `serves_estimated` to the JSON written; post the comment `Attached to {ids} as {role} — adjust the tags if wrong.` |
+| `serves` non-empty, confidence low | write nothing; `serves_estimated = '{"grooming": true}'`; the task appears in the grooming list |
+| `serves` empty, confidence medium or high | write nothing; `serves_estimated = '{"none": true}'`; the task appears in the stop-doing list |
+| `serves` empty, confidence low | write nothing; `serves_estimated = '{"grooming": true}'` |
+
+The guard is the conditional `UPDATE … WHERE serves_estimated IS NULL` whose
+rowcount decides who writes, exactly as `points_estimated` (prioritizer D6),
+so redelivery cannot write twice. Never written again for that task: a later
+tag that differs from `serves_estimated` means Ben corrected it, and both
+are kept for `calibrate`. The service's own comment is excluded from the
+content hash via `is_estimate_comment`, extended to recognise it.
+
+Ben's "ask at creation, always" is met at every creation path: the email
+pipeline and the API both already call `task_index.refresh` and publish
+`task_changed` after creation, which is what triggers this. The
+`task-builder` agent's rule additionally sets `serves:` and `role:` itself
+from the strategy section (a prompt-level rule in `.claude/agents/`, so the
+draft never runs for a task the agent built).
+
+### D6 — Scoring gains one cost-of-delay term, `necessity`, and one bucket
+
+`services/prioritize.py` stays pure; `score_set` takes a `Strategy`.
+
+**Effective necessity** per task, from the effective `serves`/`role`
+(tag > override > model):
+
+```
+role factor:  path 1.0 | derisk 0.9 | support 0.5          (config)
+N = max over serves of (goal.weight × role factor)
+N = config.necessity.unattached  (0.2)  when serves is empty and
+                                        necessity_confidence is low
+N = config.necessity.unattached         when unenriched, or when no strategy
+                                        is loaded (then every task gets the
+                                        same N, so ranking is unchanged)
+```
+
+**Bucket.** When `serves` is empty with medium/high confidence and the mode
+is `suppress`, the task's bucket is `stop_doing` — excluded from `next`
+like `excluded:blocked`, listed by `GET /review`, and a pin overrides it the
+way a pin overrides blocked. In any other mode the task stays in `next`.
+
+**Mode** (`config.necessity.mode`) sequences how much the scorer trusts the
+judgment:
+
+| mode | effect |
+|---|---|
+| `flag` | N is recorded in `components` and the grooming/stop-doing lists are populated; the `necessity` weight is forced to 0 so ranking is unchanged. **Ship here.** |
+| `demote` | the `necessity` weight applies; uncertain "none" sinks via `unattached`. |
+| `suppress` | as `demote`, plus the `stop_doing` bucket, plus gate-2 suppression at medium confidence (D14). High-confidence gate-2 suppression is not mode-gated. |
+
+Moving from `flag` is a config edit, made when `GET /calibrate` shows the
+agreement rate (D10) that justifies it. The threshold is a judgment, not a
+number in this spec; the point is that the number exists before the trust
+does.
+
+**Weights.** `[weights]` gains `necessity`; the block still sums to 1.0. The
+initial values are exactly today's six weights × 0.8 plus `necessity 0.20`:
+`priority 0.20, urgency 0.24, impact 0.12, unblock 0.08, aging 0.04,
+category 0.12, necessity 0.20`. In `flag` mode the scorer divides the six
+by `1 - necessity` and drops the term, which recovers today's weights to
+the digit, so today's ranking is reproduced exactly.
+
+**Goal horizon as soft due date.** For a task whose effective role is
+`path` or `derisk` on an outcome goal with a `horizon`, and which has no
+hard date and no inferred date, the goal's `horizon` becomes the effective
+due date with `due_source = "goal_horizon"` and the existing
+`soft_cap_horizon` cap. It replaces the priority horizon
+(`created_at + horizon[priority]`) only when earlier. Goal work gets a clock
+without an invented deadline, and the no-invented-due-dates rule is kept:
+nothing is written to Asana.
+
+**Below-the-line boost.** While an area is below the line on an
+**evidence** signal (D9) and not muted, the area's `path` and `derisk`
+tasks — not its `support` tasks — have their cost of delay multiplied by
+`config.necessity.below_the_line_boost` (1.15). Absence signals never
+boost. The overdue task that is the evidence is already climbing through
+urgency; the boost is for the tasks that would fix the standard, not for
+everything that shares a tag.
+
+### D7 — Measures and tripwires are evaluated on the daily tick
+
+`handlers/prioritize.py::handle_day_changed` gains a step after the heal
+and before the rescore: `services/goal_state.py::evaluate(strategy, facts,
+reports, today) -> list[GoalState]` (pure), written to `goal_state`.
+
+**Lead rate.** For `lead: conversation >= 3 per week`: the count of
+`task_facts` rows that are completed, carry tag `conversation` and tag
+`serves:<id>`, with `completed_at` in the trailing window (7 / 30 days;
+`day` is the trailing 1). The rate and the threshold are both stored, with
+`met: bool`.
+
+**Lag.** The most recent `goal_reports` row for the goal; `met` against the
+`lag` line's threshold; `null` when never reported.
+
+**Tripwire.** For each `tripwire:` line: evaluated only when `today >= by`;
+the measured value is the lead-style count since `last reviewed` (or the
+latest lag report when the text is `lag`); `fired` when the comparison
+holds. A tripwire has an ordinal (its position in the block, 1-based) so
+its identity survives re-ordering of prose but not of tripwire lines —
+acceptable, because a tripwire edit is a strategy change.
+
+**Next step.** The highest-scored `next`-bucket task whose effective role is
+`path` for the goal, after the rescore; `null` means **stalled** and the
+review says so.
+
+**Below the line** for an area: any signal's effective value true and the area not muted (D9); each signal's raw value, effective value, `no_data` state and evidence gids are stored.
+
+### D8 — A fired tripwire becomes a task
+
+When `evaluate` reports a tripwire `fired` that `goal_state` did not record
+as fired yesterday, the handler creates one Asana task in the default
+project: name `[P1] {action text}` (e.g. `[P1] Revisit consulting niche and
+offer`), notes carrying the tripwire line, the measured value, and a link to
+the review; tags `serves:<id>`, `role:derisk`, `tripwire`; section Review;
+`external.gid = tripwire:{goal-id}:{ordinal}:{by-date}`. The external id is
+the idempotency guard against redelivery and against the tripwire staying
+true on later days — the same pattern as `recur:{gid}`. Creation goes
+through the existing `create_task` path so it publishes `task_changed` and
+is judged and ranked like anything else.
+
+Why a task and not a notification: the ranked list is the one place Ben
+reliably looks, and the research's finding is that strategy-change signals
+are missed precisely because they live somewhere else.
+
+### D9 — Below-the-line signals: a closed grammar, debounced, with a baseline
+
+`below-the-line:` accepts a `;`-separated list of signals. The grammar is
+closed on purpose: a signal must be computable from `task_facts` and
+`goal_state` alone, so the daily tick needs neither Asana nor a model. The
+design goal here is **few false positives**: a slipping area should be rare
+and, when reported, obviously true from its evidence.
+
+**Two classes of signal.**
+
+| Class | Signals | Says | Effect |
+|---|---|---|---|
+| **Evidence** | `overdue`, `undated` | something concrete is wrong | review finding **and** scoring boost (D6) |
+| **Absence** | `stale`, `lead` | nothing happened | review finding **only** — never moves the ranking, because absence of activity is too often absence of need |
+
+**Grammar.**
+
+| Signal | True when |
+|---|---|
+| `overdue[:<min-priority>+] [grace <n>]` | an open task serving this area with role `path` or `derisk` (never `support`), priority at or above `<min-priority>` (default `P1`, i.e. P0 or P1), **actionable** (bucket `next`: not snoozed, blocked, waiting or a parent), has a hard `due_on` more than `<n>` days before today (default `grace 3`) |
+| `overdue:<tag> [grace <n>]` | as above, restricted to tasks carrying `<tag>`; priority filter not applied |
+| `undated:<tag> after YYYY-MM-DD` | today is after the date and an open actionable task serving this area carries `<tag>` with no hard due date |
+| `stale > <n> days` | no task serving this area has been completed in `n` days, **and** the area has at least one open actionable task — an area with nothing to do is not slipping |
+| `lead <tag> < <n> per <period>` | the area's lead-style count is below `n`, **and** `<tag>` has appeared on a completed task serving this area within the last 90 days — a tag never adopted is not a measure |
+
+Anything else is a parse warning and the signal is ignored. When a
+signal's baseline condition fails (no actionable tasks for `stale`, no
+tag history for `lead`) its state is `no_data`, not false, and the review
+says so.
+
+**Rollout guard.** Until at least `config.strategy.min_tagged_for_signals`
+(5) tasks carry `serves:<area>`, every signal of that area is `no_data`.
+This stops every area flipping on the first morning before the heal has
+tagged anything.
+
+**Debounce with hysteresis.** A signal's **raw** value is evaluated daily
+and stored. Its **effective** value flips to true only after
+`config.strategy.signal_debounce_days` (3) consecutive raw-true days, and
+flips back to false only after the same number of consecutive raw-false
+days. `goal_state` holds both, so one bad day never flips anything and one
+good day never clears it. An area is below the line when any signal's
+effective value is true.
+
+**Mute.** `POST /goals/{id}/mute {until}` writes `goal_overrides.mute_until`.
+While muted, signals keep evaluating (raw and effective are still stored,
+so the state is correct the day the mute ends) but the area is never
+reported below the line and never boosts. The review shows "muted until
+<date>". `POST /goals/{id}/mute {until: null}` clears it.
+
+**Evidence, always.** `goal_state.state.signals[*].tasks` lists the gids
+that made each raw-true signal true, and `GET /review` renders them, so a
+false positive is diagnosable in one glance and the fix is a tag or
+priority edit.
+
+What this does not prevent is a signal written too loosely —
+`overdue:P3+ grace 0` is legal. The evidence list is the defence there.
+
+### D10 — Necessity judgments are calibrated like points
+
+`GET /calibrate` gains a `necessity` section: for every task with a
+non-null `serves_estimated`, compare the model's draft against the task's
+current effective `serves`/`role` (which, if different, Ben changed).
+Report agreement rate by `necessity_confidence` band, by `strategy_hash`
+and by source (`gate2` from `tasks.serves_estimated`, `enrichment` from
+`task_facts.serves_estimated`), plus the count of grooming-list tasks Ben
+attached versus removed, the gate-2 / enrichment agreement rate where both
+judged the same task, and the necessity-suppression restore rate by
+confidence band (D14). This is the number that moves `mode` (D6).
+
+`task_override_events` (audit-trail spec) already records override writes;
+tag edits arrive as `task_changed` and are visible as a changed effective
+value against `serves_estimated`, so no new audit table is needed.
+
+### D11 — The weekly review is a task, and an endpoint
+
+`GET /review` on tasks-api returns, from `goal_state`, `task_scores`,
+`task_facts` and the loaded `findings`:
+
+```json
+{
+  "reviewed_at": "...", "strategy_last_reviewed": "2026-10-09",
+  "findings": ["consulting: no tripwire", "strategy last reviewed 112 days ago"],
+  "goals": [{
+    "id": "consulting", "kind": "outcome", "next_step": {gid, name} | null,
+    "stalled": false,
+    "leads": [{"tag": "conversation", "window": "week", "value": 1, "threshold": 3, "met": false}],
+    "lag": {"value": 0, "threshold": 15000, "reported_at": "..."} | null,
+    "tripwires": [{"ordinal": 1, "text": "...", "by": "2026-12-31", "value": 0, "fired": false}],
+    "diagnosis": "lead weak" | "lead strong, lag flat" | "on track" | "insufficient data"
+  }, {
+    "id": "finances", "kind": "area", "below_the_line": true,
+    "muted_until": null,
+    "signals": [{"signal": "overdue grace 3", "class": "evidence",
+                 "raw": true, "effective": true, "consecutive_days": 4,
+                 "state": "true" | "false" | "no_data", "tasks": [gid, ...]}],
+    "next_step": {...} | null
+  }],
+  "grooming": [{gid, name, serves_suggested, confidence, reason}],
+  "stop_doing": {
+    "tasks": [{gid, name, reason}],
+    "suppressed_emails": [{message_id, subject, sender, web_link, reason, created_at}]
+  }
+}
+```
+
+`diagnosis` is the lead/lag rule from the research: leads met and lag not
+met for two consecutive lag periods → "lead strong, lag flat" (the theory is
+wrong — change strategy); leads not met → "lead weak" (execution, not
+strategy); fewer than two lag reports → "insufficient data".
+
+A Cloud Scheduler job `tasks-weekly-review` (`0 7 * * 1` America/New_York)
+posts `POST <webhook-url>/review` (escalate bearer), which renders the
+response as a comment on a standing task `[P2] Weekly strategy review`
+(`external.gid = review:weekly`, created if missing, never completed by the
+service). The cadence is a thing in the list, not a habit.
+
+### D12 — Lag values are reported by hand
+
+`POST /goals/{id}/reports` `{value, period_start?}` writes `goal_reports`.
+`POST /goals/{id}/mute` `{until}` writes `goal_overrides.mute_until` (D9).
+The `task-next` agent gains `report <goal> <value>`, `mute <area> until
+<date>` and `review` (prints `GET /review`). No revenue integration; the
+number comes from Ben monthly.
+
+### D13 — The subscriber requires the database, as before
+
+Prioritizer D7 holds: a DB or Asana failure raises so Pub/Sub redelivers.
+An unreadable strategy section is **not** a failure: `Strategy((), None,
+())` loads, necessity is neutral, and a warning is logged with the path.
+A failed model call leaves `serves` unenriched and neutral, as the existing
+fields are.
+
+### D14 — Gate 2 reads the strategy and tags at creation
+
+`services/triage.py::decide` already reads the `Roles` section of the
+declared facts and decides whether an email still requires anything. It
+gains the `## Strategy` section as a second cached system block, after the
+static instructions and the `Roles` facts, and the same three output fields
+as enrichment (D4): `serves`, `necessity_confidence`, `necessity_reason`.
+One call, no second agent run.
+
+`actionable` is decided as today — strategy never makes a non-actionable
+email actionable. Strategy adds a second axis to an actionable email:
+
+| Gate-2 judgment | `flag` / `demote` | `suppress` |
+|---|---|---|
+| `serves` non-empty, confidence medium/high | create with `serves:`/`role:` tags | same |
+| `serves` non-empty, confidence low | create without tags; enrichment judges again (D5) → grooming | same |
+| `serves` empty, confidence **high** | **no task**: `suppressed_emails` row, `source = "necessity"`, reason = `necessity_reason` | same |
+| `serves` empty, confidence medium | create without tags; enrichment judges again → stop-doing | **no task**, as the high row |
+| `serves` empty, confidence low | create without tags → grooming | same |
+
+A high-confidence "serves nothing" never becomes a task, in any mode, from
+the first deploy: Ben's instruction is that the list should not fill with
+things the model is sure do not matter. Only the medium band waits for
+`suppress` mode, governed by the same calibrate number as the scorer (D6).
+
+This is the one place in the design where a necessity judgment acts without
+Ben seeing a card, so it carries its own reversal path. Every necessity
+suppression is listed by `GET /review` under `stop_doing.suppressed_emails`
+with the email's `web_link` and the reason, and
+`POST /suppressions/{message_id}/restore` creates the task from the stored
+subject, sender, reason and `web_link` through `create_task_from_fields`,
+with `external.gid = message_id` so the pipeline's dedupe holds and with no
+`serves:` tag, so enrichment judges it afresh; it then marks the row
+`restored_at`. (It does not re-run summary or deadline extraction: the
+suppressed row holds no body and the API has no inbox credentials.) A restore is a labelled
+disagreement for `calibrate` (D10); a suppression that is never restored
+counts as agreement after `config.strategy.suppression_settle_days` (30).
+
+The gate-2 draft is recorded on the pipeline's `tasks` row
+(`tasks.serves_estimated`, same JSON shape as `task_facts.serves_estimated`)
+so `calibrate` (D10) can score it against Ben's final tags, and against
+enrichment's own judgment of the same task when both ran — disagreement
+between the two gates is itself a signal about the prompt.
+
+Gate 1 is untouched: it runs over every email inbox publishes, the strategy
+section is long, and screening's job is "is there anything here", not
+"does it matter". Fail-open holds: an unreadable strategy section leaves
+gate 2 exactly as it is today, and a gate-2 failure already degrades to the
+category rule.
+
+## Model calls
+
+Every Claude call in this service, what this spec does to it, and the
+model it should run on. Prices are first-party API rates as of 2026-10-06
+(input / output per million tokens; cache reads are about a tenth of input
+on every current model).
+
+| Call | Where | Today | This spec | Model after |
+|---|---|---|---|---|
+| Gate 1 screening | `services/screening.py` → `claude.classify` | Haiku 4.5, temp 0, 512 tokens, every email | **unchanged** | as today |
+| Relating | `services/relating.py` → `claude.classify` | Haiku 4.5 | **unchanged** | as today |
+| **Gate 2 triage** | `services/triage.py` → `claude.run_agent` | `claude-sonnet-5` tool runner, adaptive thinking, effort `medium`, 4,096 max tokens, 6 iterations | **updated**: strategy as a second cached system block; schema gains `serves`, `necessity_confidence`, `necessity_reason` (D14) | `claude-sonnet-5`, unchanged |
+| Email summary | `services/email_summary.py` → `claude.summarize` | Haiku 4.5 | **unchanged** | as today |
+| Deadline extraction | `services/deadline.py` → `claude.extract` | Sonnet 4.6, temp 0 | **unchanged** | as today |
+| Digest bullets | `services/task_bullets.py` → `claude.summarize` | Haiku 4.5 | **unchanged** | as today |
+| **Enrichment** | `services/enrichment.py` → `claude.extract_structured` | `claude-opus-5`, adaptive thinking, effort `low`, JSON schema | **updated**: strategy as a second cached system block; schema gains the same three fields (D4); effort `medium` | **`claude-opus-5-5`**, effort `medium` |
+
+**No new model calls.** The parser (D3), goal-state evaluation (D7),
+tripwire tasks (D8), the weekly review render (D11) and calibrate (D10) are
+all deterministic. The review is a table of numbers and task links; a
+narrative paragraph on top is a follow-up, not part of this spec.
+
+**Why Opus 5.5 for enrichment.** Enrichment is the call whose output Ben
+reads on every card — the points draft today, the `serves:` draft after
+this spec — and the necessity judgment is harder than the point estimate:
+it reads a ~1,500-word strategy and decides whether a task is a
+precondition, a safeguard, or noise. That is the judgment the whole design
+rests on. `claude-opus-5-5` is the current Opus, at $4 / $20 against
+Opus 5's $5 / $25, with the same context, output cap and tokenizer; the
+only Opus 5 → 5.5 changes that could bite are that thinking cannot be
+disabled (this call already runs adaptive), forced `tool_choice` is gone
+(not used), and effort defaults to `medium` rather than `high` (set it
+explicitly). Effort moves from `low` to `medium` because the task got
+harder; `calibrate` is what says whether `low` would have done — run the
+first full re-judge at `medium`, and step down only if the agreement rate
+holds. Turn on the server-side refusal fallback (`fallbacks: "default"`
+with beta `server-side-fallback-2026-07-01`) so a classifier decline
+degrades to a judgment from the fallback model rather than an unenriched
+row; `extract_structured` already raises on `refusal`, so this is purely
+additive.
+
+**Why Sonnet 5 stays for gate 2.** The strategy adds a cached system block
+and three schema fields to an agent loop that already works; nothing about
+the loop gets harder. Moving it to `claude-sonnet-5-5` is a model migration
+with its own breaking changes (recalibrated effort levels, `between_tools`
+thinking, a different safeguard set) and belongs in its own PR, not coupled
+to a feature change whose output needs to be compared before and after.
+
+**Cost.** A full re-judge of ~100 tasks on Opus 5.5 at `medium`: per task
+roughly 1k static system + 2k strategy, both cached after the first call,
+plus up to 9k of notes and comments uncached, plus a few hundred output
+tokens and some thinking. About $3–6 per strategy edit, then pennies a day
+as tasks change. Gate 2's extra cost is the strategy block as a cache read
+on every actionable email — well under a tenth of a cent each.
+
+**Prompt caching.** Both calls already put the system prompt in a
+`cache_control` block. The strategy becomes a second block: render order is
+static instructions, then `Roles` (gate 2 only), then strategy, then the
+per-task or per-email content. Nothing volatile — today's date included —
+may sit before the strategy block, or the cache never hits; today's date
+goes in the user message, where enrichment already puts it.
+
+## Components
+
+| File | Change |
+|---|---|
+| `services/strategy.py` | **new, pure** — `parse`, `Goal`, `Strategy`, `strategy_hash` |
+| `services/goal_state.py` | **new, pure** — `evaluate`, lead/lag/tripwire/below-the-line logic |
+| `services/enrichment.py` | prompt + schema additions (D4); `MODEL = "claude-opus-5-5"`, `EFFORT = "medium"`; `is_estimate_comment` recognises the attach comment |
+| `clients/claude.py` | `extract_structured` gains the second cached system block and the refusal fallback (§Model calls) |
+| `services/triage.py` | strategy in the system prompt; `serves`/`necessity_confidence`/`necessity_reason` in the schema (D14) |
+| `handlers/task_create.py` | tag at creation; necessity suppression in `suppress` mode; record the draft on the `tasks` row (D14) |
+| `repo/tasks.py` | `serves_estimated` on the pipeline row |
+| `services/prioritize.py` | `necessity` term, `stop_doing` bucket, goal-horizon due, below-the-line boost, `flag` renormalisation (D6) |
+| `services/prioritize_config.py` | `[necessity]`, `[strategy]`, `weights.necessity` |
+| `handlers/prioritize.py` | draft write-back (D5); `evaluate` + tripwire tasks on `day_changed` (D7, D8) |
+| `handlers/weekly_review.py` | **new** — renders `GET /review` as the standing-task comment (D11) |
+| `repo/prioritize.py` | `serves_estimated` claim; `strategy_hash` on enrichment |
+| `repo/goals.py` | **new** — `goal_state`, `goal_reports`, `goal_overrides` |
+| `api/routers/next.py` | `/calibrate` necessity section (D10) |
+| `api/routers/review.py` | **new** — `GET /review`, `POST /goals/{id}/reports`, `POST /goals/{id}/mute`, `POST /suppressions/{message_id}/restore` |
+| `main.py` | `review` route on the webhook CF |
+| `terraform/cloud_functions.tf` | mount `standing-context` on `tasks-prioritize`; scheduler `tasks-weekly-review` |
+| `context/standing-context.example.md` | `## Strategy` example |
+| `.claude/agents/task-next.md`, `task-builder.md`, skill `prioritizing-tasks` | `review`, `report`; `serves:`/`role:` tagging rule |
+| `config/prioritize.toml` | see Config |
+
+## Data model
+
+```sql
+ALTER TABLE task_facts ADD COLUMN serves_estimated JSONB;   -- NULL = never judged for write-back (D5)
+ALTER TABLE tasks ADD COLUMN serves_estimated JSONB;        -- gate-2 draft at creation (D14)
+ALTER TABLE task_enrichment ADD COLUMN strategy_hash TEXT;  -- D4
+
+CREATE TABLE IF NOT EXISTS goal_reports (
+    id            BIGSERIAL PRIMARY KEY,
+    goal_id       TEXT NOT NULL,
+    value         DOUBLE PRECISION NOT NULL,
+    period_start  DATE,
+    reported_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS goal_reports_goal_idx ON goal_reports (goal_id, reported_at DESC);
+
+CREATE TABLE IF NOT EXISTS goal_overrides (
+    goal_id       TEXT PRIMARY KEY,
+    mute_until    DATE,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS goal_state (
+    goal_id       TEXT NOT NULL,
+    day           DATE NOT NULL,
+    kind          TEXT NOT NULL,            -- outcome | area
+    state         JSONB NOT NULL,           -- leads, lag, tripwires, below_the_line, muted_until, signals (raw, effective, consecutive_days, state, tasks), next_step, diagnosis
+    strategy_hash TEXT NOT NULL,
+    PRIMARY KEY (goal_id, day)
+);
+```
+
+`suppressed_emails.source` gains the value `necessity`, and the table gains `restored_at TIMESTAMPTZ` and `restored_task_gid TEXT` (D14). `task_scores.bucket` gains the value `stop_doing`. `components` gains
+`necessity`, `serves` (effective), `role` (effective), `necessity_source`
+(`tag | override | model | default`), `grooming: bool`,
+`below_the_line: bool`, and `due_source` gains the value `goal_horizon`.
+
+## Config (`config/prioritize.toml`)
+
+```toml
+[weights]                     # sum to 1.0
+priority = 0.20               # each of the six is today's value × 0.8 (flag mode divides back)
+urgency = 0.24
+impact = 0.12
+unblock = 0.08
+aging = 0.04
+category = 0.12
+necessity = 0.20
+
+[necessity]
+mode = "flag"                 # flag | demote | suppress  (D6)
+path = 1.0
+derisk = 0.9
+support = 0.5
+unattached = 0.2              # serves empty with low confidence; unenriched; no strategy
+below_the_line_boost = 1.15   # multiplier on cost of delay for a slipping area's path/derisk tasks (evidence signals only)
+
+[strategy]
+stale_after_days = 90         # 'last reviewed' older than this is a review finding
+suppression_settle_days = 30  # a necessity suppression not restored by then counts as agreement
+signal_debounce_days = 3      # consecutive raw-true days before a below-the-line signal flips, and raw-false before it clears
+min_tagged_for_signals = 5    # an area with fewer serves:<area> tasks reports no_data for every signal
+lag_flat_periods = 2          # consecutive unmet lag periods, with leads met, before "lead strong, lag flat"
+```
+
+## Event handling
+
+- `email_classified` (existing, events CF): screen → triage (now with
+  strategy; D14) → create with `serves:`/`role:` tags, or suppress on
+  necessity in `suppress` mode → `task_changed` as today.
+- `task_changed` (existing): gather → enrich (now with strategy) → claim and
+  draft write-back of `serves:`/`role:` (D5) → rescore. The rescore loads the
+  strategy once per process (cached with the standing-context text; a cold
+  start picks up a new version).
+- `day_changed` (existing): heal → settle deferrals → **evaluate goal state
+  (D7) → create tripwire tasks (D8)** → rescore → run log.
+- `POST /review` (new, webhook CF, escalate bearer): read `GET /review`'s
+  data from the DB, render markdown, upsert the standing review task and
+  post the comment (D11).
+
+## Observability
+
+Metrics (prefix `asana_`): `strategy_goals_loaded` (gauge, by kind),
+`strategy_findings` (gauge), `necessity_judgments` (counter, by
+confidence × outcome: attached | grooming | none), `tripwire_fired`
+(counter, by goal), `goal_lead_value` (gauge, by goal × tag × window),
+`area_below_the_line` (gauge, by area). Spans: `strategy.parse`,
+`goal_state.evaluate`, `review.render`.
+
+## Failure modes
+
+| Failure | Behaviour |
+|---|---|
+| Strategy section missing/unreadable | no goals; necessity neutral; warning; ranking as today |
+| A goal block malformed | that block skipped, rest loads; finding on the review |
+| Model call fails | `serves` unenriched → neutral; no write-back; retried on next content change as today |
+| Gate 2 fails or strategy unreadable there | gate 2 behaves exactly as today (fail-open); the task is judged by enrichment after creation |
+| Asana write-back fails | claim already taken (same as points): logged, never retried — the grooming list shows the task as unattached |
+| Tripwire task creation fails | raises → redelivery; external id prevents a duplicate on retry |
+| DB down on `day_changed` | raises (prioritizer D7) |
+| Lag never reported | `lag: null`, diagnosis `insufficient data`, no tripwire on `lag` can fire |
+
+## Testing
+
+- `tests/test_strategy.py`: parse a full example; a block missing `kind`;
+  unknown kind; bad header line; duplicate id; empty section; every
+  `lead`/`tripwire`/`below-the-line` grammar form, valid and invalid;
+  `findings` for no-tripwire, no-lead, stale.
+- `tests/test_goal_state.py`: lead counts over window edges; lag met/unmet;
+  tripwire before/after `by`; next-step and stalled; diagnosis rule
+  including the two-period requirement. Below-the-line, per signal:
+  `overdue` ignores `support` role, P2/P3 by default, snoozed/blocked/
+  waiting tasks and anything inside the grace period; `overdue:P2+ grace 0`
+  widens it; `stale` is `no_data` with no open actionable task; `lead` is
+  `no_data` with no tag history; the rollout guard; debounce needs exactly
+  `signal_debounce_days` consecutive raw-true days to flip and the same
+  raw-false to clear; a mute suppresses the effective state but not the
+  stored raw values; evidence gids are listed.
+- `tests/test_prioritize.py` (extend): each role × weight; `unattached`;
+  `flag` renormalisation reproduces today's ordering on the existing
+  fixtures; `stop_doing` bucket only in `suppress`; pin overrides it;
+  goal-horizon due replaces priority horizon only when earlier and never when
+  a hard or inferred date exists; below-the-line boost applies to path/derisk
+  tasks only, from evidence signals only, and not while muted.
+- `tests/test_enrichment.py` (extend): schema round-trip with `serves`;
+  unknown goal id dropped; `content_hash` changes with strategy text;
+  attach comment excluded from the hash.
+- `tests/test_prioritize_handler.py` (extend, fakes): the four write-back
+  rows of D5; the claim guard under redelivery; tripwire task created once
+  across two days of `fired`; day-changed ordering.
+- `tests/test_triage.py` (extend): schema round-trip with `serves`; unknown
+  goal id dropped; strategy absent leaves the prompt and parse as today.
+- `tests/test_task_create.py` (extend): the five rows of D14's table in each
+  mode, including high-confidence suppression in `flag` mode; the suppressed
+  row's `source`; the `tasks` row carries the draft.
+- `tests/test_api_review.py`: restore creates through the normal path once,
+  sets `restored_at`, and is idempotent on a second call.
+- `tests/test_api_review.py`: `GET /review` shape including
+  `stop_doing.suppressed_emails` and per-signal raw/effective/evidence;
+  `POST /goals/{id}/reports`; `POST /goals/{id}/mute` sets and clears.
+- `scripts/test-review.py --dry-run`: renders the review against the live DB
+  without posting.
+
+## Rollout
+
+1. Land the parser, config and schema with `mode = "flag"`; the scorer's
+   output is unchanged by construction (renormalisation test).
+2. Write `strategy.md` in the context repo (a separate piece of work, done
+   with Ben: the consulting goal's diagnosis, guiding policy, path and
+   tripwires; one block per area). Merge; cold start.
+3. Run the heal; every task is judged once. Read the grooming and stop-doing
+   lists; correct tags.
+4. After a few weeks, read `calibrate`'s necessity agreement. Move to
+   `demote`, then `suppress`, by config edit.
+
+## Follow-ups (not in this spec)
+
+- Lead tags that count *events* rather than tasks (a calendar conversation
+  that never had a task). The schedule repo could publish `task-events`.
+- A `task-review` agent that walks the grooming list interactively.
+- Moving `[PX]` into a custom field, as the prioritizer spec already lists.
+- Move gate 2 from `claude-sonnet-5` to `claude-sonnet-5-5` in its own PR,
+  with a before/after comparison on the backtest script.
+- A model-written narrative paragraph on top of the weekly review.

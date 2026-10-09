@@ -7,6 +7,13 @@ from typing import ClassVar
 
 
 @dataclass(frozen=True)
+class Serve:
+    goal: str
+    role: str  # path | derisk | support
+    confidence: str  # low | medium | high
+
+
+@dataclass(frozen=True)
 class TaskFacts:
     gid: str
     project_gid: str | None
@@ -30,6 +37,9 @@ class TaskFacts:
     dependents: tuple[str, ...]
     num_open_subtasks: int
     content_hash: str
+    serves_estimated: dict | None = (
+        None  # the serves draft, once; NULL = never judged for write-back
+    )
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,9 @@ class Enrichment:
     latest_comment_signal: str
     reason: str | None
     unenriched: bool
+    serves: tuple[Serve, ...] = ()
+    necessity_confidence: str = "low"
+    necessity_reason: str | None = None
 
     DEFAULT: ClassVar["Enrichment"]
 
@@ -61,6 +74,9 @@ Enrichment.DEFAULT = Enrichment(
     latest_comment_signal="none",
     reason=None,
     unenriched=True,
+    serves=(),
+    necessity_confidence="low",
+    necessity_reason=None,
 )
 
 

@@ -2,6 +2,8 @@ from repo import tasks as repo_tasks
 
 
 class FakeCursor:
+    rowcount = 1  # a conditional UPDATE is assumed to have matched
+
     def __init__(self, row=None):
         self._row = row
 
@@ -34,7 +36,7 @@ def test_insert_is_idempotent_on_message_id():
     query, params = conn.executed[0]
     assert "INSERT INTO tasks" in query
     assert "ON CONFLICT (message_id) DO NOTHING" in query
-    assert params == ("42", "m1", "review", "P1")
+    assert params == ("42", "m1", "review", "P1", None)  # serves_estimated defaults to NULL
 
 
 def test_get_gid_by_message():
@@ -93,3 +95,25 @@ def test_email_context_by_gids_empty_input_skips_query():
     conn = _FakeConn([])
     assert repo_tasks.email_context_by_gids(conn, []) == {}
     assert conn.queries == []
+
+
+def test_insert_stores_serves_estimated_draft():
+    conn = FakeConn()
+    repo_tasks.insert(
+        conn,
+        task_gid="42",
+        message_id="m1",
+        category="review",
+        importance="P1",
+        serves_estimated={"role": "path"},
+    )
+    q, p = conn.executed[0]
+    assert "serves_estimated" in q and p[-1] == '{"role": "path"}'
+
+
+def test_tasks_necessity_rows_selects_gate2_drafts():
+    conn = _FakeConn([{"task_gid": "42"}])
+    assert repo_tasks.necessity_rows(conn) == [{"task_gid": "42"}]
+    q = " ".join(conn.queries[0][0].split())
+    assert "'gate2' AS source" in q and "t.serves_estimated IS NOT NULL" in q
+    assert "LEFT JOIN task_enrichment e USING (task_gid)" in q

@@ -9,11 +9,14 @@ from typing import Callable, Literal
 from pydantic import BaseModel, ValidationError
 
 import clients.claude as claude
-from models.prioritize import Enrichment
+from models.prioritize import Enrichment, Serve
+from models.strategy import ROLES
 from services.task_bullets import description_text
 
-MODEL = "claude-opus-5"
-EFFORT = "low"
+MODEL = "claude-opus-5-5"
+EFFORT = "medium"
+ATTACH_COMMENT_PREFIX = "Attached to "
+ATTACH_COMMENT_SUFFIX = " — adjust the tags if wrong."
 ESTIMATE_COMMENT_PREFIX = "Estimated "
 ESTIMATE_COMMENT_SUFFIX = " points — adjust if wrong."
 NOTES_CAP = 6000
@@ -40,6 +43,21 @@ SCHEMA: dict = {
             "enum": ["none", "unblocked", "new_deadline", "scope_change"],
         },
         "reason": {"type": "string"},
+        "serves": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "goal": {"type": "string"},
+                    "role": {"type": "string", "enum": ["path", "derisk", "support"]},
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                },
+                "required": ["goal", "role", "confidence"],
+            },
+        },
+        "necessity_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "necessity_reason": {"type": "string"},
     },
     "required": [
         "story_points_suggested",
@@ -52,6 +70,9 @@ SCHEMA: dict = {
         "energy",
         "latest_comment_signal",
         "reason",
+        "serves",
+        "necessity_confidence",
+        "necessity_reason",
     ],
 }
 
@@ -73,6 +94,16 @@ Comments marked (automated) were posted by the task service itself — related e
 
 reason — one sentence a person could read to see why you judged as you did."""
 
+SYSTEM_PROMPT += """
+
+If a ## Strategy section follows, judge what this task serves. serves — a list of {goal, role, confidence}; goal is a ### id from the strategy; role is path (a precondition on the goal's written path, or the obvious next step toward one), derisk (its absence puts the outcome or the area's standard at significant risk) or support (helps, but the goal is reachable without it). An empty list means the task serves no goal or area; with high confidence that is a real and useful answer, not a failure. necessity_confidence — how sure you are of the serves list as a whole, including an empty one. necessity_reason — one sentence. If no ## Strategy section follows, return an empty serves list with low confidence."""
+
+
+class _ServeOut(BaseModel):
+    goal: str
+    role: Literal["path", "derisk", "support"]
+    confidence: Literal["low", "medium", "high"]
+
 
 class _Out(BaseModel):
     story_points_suggested: Literal[1, 2, 3, 5, 8]
@@ -85,14 +116,43 @@ class _Out(BaseModel):
     energy: Literal["deep", "shallow"]
     latest_comment_signal: Literal["none", "unblocked", "new_deadline", "scope_change"]
     reason: str
+    serves: list[_ServeOut] = []
+    necessity_confidence: Literal["low", "medium", "high"] = "low"
+    necessity_reason: str | None = None
 
 
-def is_estimate_comment(text: str | None) -> bool:
+def is_service_comment(text: str | None) -> bool:
+    """Comments this service posts: the points estimate and the attach note.
+    Both are excluded from the content hash so a write-back cannot re-trigger
+    enrichment (D5, D6)."""
+    if text is None:
+        return False
     return (
-        text is not None
-        and text.startswith(ESTIMATE_COMMENT_PREFIX)
-        and text.endswith(ESTIMATE_COMMENT_SUFFIX)
-    )
+        text.startswith(ESTIMATE_COMMENT_PREFIX) and text.endswith(ESTIMATE_COMMENT_SUFFIX)
+    ) or (text.startswith(ATTACH_COMMENT_PREFIX) and text.endswith(ATTACH_COMMENT_SUFFIX))
+
+
+is_estimate_comment = is_service_comment
+
+
+def attach_comment(goal_ids: list[str], role: str) -> str:
+    return f"{ATTACH_COMMENT_PREFIX}{', '.join(goal_ids)} as {role}{ATTACH_COMMENT_SUFFIX}"
+
+
+def system_blocks(strategy_text: str) -> list[dict]:
+    """Static instructions first, the strategy second, both cached — the
+    strategy is identical for every task, so a full re-judge reads it from
+    cache (spec §Model calls)."""
+    blocks = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
+    if strategy_text.strip():
+        blocks.append(
+            {
+                "type": "text",
+                "text": "## Strategy\n\n" + strategy_text.strip(),
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    return blocks
 
 
 def estimate_comment(points: int) -> str:
@@ -103,14 +163,16 @@ def _comment_lines(comments: list[dict]) -> list[str]:
     out = []
     for c in comments:
         text = c.get("text") or ""
-        if is_estimate_comment(text):
+        if is_service_comment(text):
             continue
         out.append(f"[{(c.get('created_at') or '')[:10]}] {c.get('created_by') or '?'}: {text}")
     return out
 
 
-def content_hash(name: str, notes: str, comments: list[dict]) -> str:
+def content_hash(name: str, notes: str, comments: list[dict], strategy_hash: str = "") -> str:
     body = "\n".join([HASH_VERSION, name or "", notes or "", *_comment_lines(comments)])
+    if strategy_hash:
+        body += "\n" + strategy_hash
     return hashlib.sha256(body.encode()).hexdigest()
 
 
@@ -147,11 +209,16 @@ def user_prompt(
     )
 
 
-def parse(raw: str) -> Enrichment:
+def parse(raw: str, *, known_goals: tuple[str, ...] = ()) -> Enrichment:
     try:
         data = _Out.model_validate_json(raw)
     except ValidationError as exc:
         raise ValueError(f"enrichment output failed validation: {exc}") from exc
+    serves = tuple(
+        Serve(s.goal, s.role, s.confidence)
+        for s in data.serves
+        if s.goal in known_goals and s.role in ROLES
+    )
     return Enrichment(
         story_points_suggested=data.story_points_suggested,
         points_confidence=data.points_confidence,
@@ -163,6 +230,9 @@ def parse(raw: str) -> Enrichment:
         energy=data.energy,
         latest_comment_signal=data.latest_comment_signal,
         reason=data.reason or None,
+        serves=serves,
+        necessity_confidence=data.necessity_confidence,
+        necessity_reason=(data.necessity_reason or None),
         unenriched=False,
     )
 
@@ -177,13 +247,15 @@ def extract(
     start_on: date | None,
     tags: list[str],
     today: date,
+    strategy_text: str = "",
+    known_goals: tuple[str, ...] = (),
     call: Callable[..., str] | None = None,
 ) -> Enrichment:
     """Raises on any failure — the handler owns fail-open."""
     call = call or claude.extract_structured
     raw = call(
         model=MODEL,
-        system=SYSTEM_PROMPT,
+        system=system_blocks(strategy_text),
         user=user_prompt(
             name=name,
             project=project,
@@ -197,4 +269,4 @@ def extract(
         schema=SCHEMA,
         effort=EFFORT,
     )
-    return parse(raw)
+    return parse(raw, known_goals=known_goals)

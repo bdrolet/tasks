@@ -2,7 +2,9 @@ import json
 
 import clients.claude as claude
 from models.events import Decision
+from models.strategy import Goal, Strategy
 from services import standing_context, triage
+from services import strategy as st_service
 from tests.test_events import make_email_event
 
 
@@ -63,7 +65,7 @@ def test_suppression_decision_parsed(monkeypatch):
     assert captured["output_schema"] is triage.OUTPUT_SCHEMA
     assert captured["max_iterations"] == triage.MAX_ITERATIONS
     assert captured["deadline_s"] == triage.DEADLINE_S
-    assert captured["system"] == triage.SYSTEM_PROMPT
+    assert [b["text"] for b in captured["system"]] == [triage.SYSTEM_PROMPT]
 
 
 def test_user_message_has_date_roles_and_email(monkeypatch):
@@ -195,6 +197,9 @@ def test_output_schema_is_strict_object():
         "related_task_gid",
         "resolves",
         "evidence",
+        "serves",
+        "necessity_confidence",
+        "necessity_reason",
     }
 
 
@@ -278,3 +283,146 @@ def test_decide_forwards_the_screening_verdict(monkeypatch):
         screening=Screening(priority="P0", reason="signed form requested"),
     )
     assert "Screened: task / P0 — signed form requested" in captured["user"]
+
+
+STRAT = Strategy(goals=(Goal(id="consulting", kind="outcome"),), text_hash="h")
+
+
+def _strategy(monkeypatch, loaded=STRAT, text="### consulting\n- kind: outcome\n"):
+    monkeypatch.setattr(st_service, "load", lambda **kw: loaded)
+    monkeypatch.setattr(st_service, "section_text", lambda: text)
+
+
+def _ok_serves(**kw):
+    base = json.loads(_ok(actionable=True))
+    base.update(
+        {
+            "serves": [{"goal": "consulting", "role": "path", "confidence": "high"}],
+            "necessity_confidence": "high",
+            "necessity_reason": "next step",
+        }
+    )
+    base.update(kw)
+    return json.dumps(base)
+
+
+def test_strategy_is_a_second_cached_system_block(monkeypatch):
+    _roles(monkeypatch, "### R\nfact")
+    _strategy(monkeypatch)
+    captured = {}
+    _agent(monkeypatch, _ok_serves(), capture=captured)
+    _gid_verifies(monkeypatch, True)
+    triage.decide(make_email_event(), today="2026-10-09")
+    system = captured["system"]
+    assert isinstance(system, list) and system[0]["text"] == triage.SYSTEM_PROMPT
+    assert system[1]["text"].startswith("## Strategy") and system[1]["cache_control"] == {
+        "type": "ephemeral"
+    }
+
+
+def test_serves_is_parsed_and_unknown_goals_dropped(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch)
+    _agent(
+        monkeypatch,
+        _ok_serves(
+            serves=[
+                {"goal": "consulting", "role": "path", "confidence": "high"},
+                {"goal": "ghost", "role": "support", "confidence": "low"},
+            ]
+        ),
+    )
+    _gid_verifies(monkeypatch, True)
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.actionable and d.serves == [
+        {"goal": "consulting", "role": "path", "confidence": "high"}
+    ]
+    assert d.necessity_confidence == "high" and d.necessity_reason == "next step"
+
+
+def test_no_strategy_means_one_system_block_and_defaults(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch, loaded=Strategy.EMPTY, text="")
+    captured = {}
+    _agent(monkeypatch, _ok(actionable=True), capture=captured)
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert len(captured["system"]) == 1
+    assert d.serves == [] and d.necessity_confidence == "low"
+
+
+def test_schema_requires_the_three_fields():
+    assert {"serves", "necessity_confidence", "necessity_reason"} <= set(
+        triage.OUTPUT_SCHEMA["required"]
+    )
+
+
+def _ok_with(**kw):
+    return _ok_serves(**kw)
+
+
+def test_no_strategy_forces_default_necessity_even_if_model_claims_high(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch, loaded=Strategy.EMPTY, text="")
+    _agent(monkeypatch, _ok_serves(serves=[], necessity_confidence="high", necessity_reason="x"))
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.serves == [] and d.necessity_confidence == "low" and d.necessity_reason == ""
+
+
+def test_raising_strategy_load_fails_open_with_default_necessity(monkeypatch):
+    _roles(monkeypatch, "")
+
+    def boom(**kw):
+        raise RuntimeError("strategy down")
+
+    monkeypatch.setattr(st_service, "load", boom)
+    _agent(monkeypatch, _ok_serves())
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.outcome == "fail_open"
+    assert d.serves == [] and d.necessity_confidence == "low" and d.necessity_reason == ""
+
+
+def test_invalid_role_and_confidence_dropped_valid_sibling_kept(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch)
+    good = {"goal": "consulting", "role": "support", "confidence": "medium"}
+    _agent(
+        monkeypatch,
+        _ok_serves(
+            serves=[
+                {"goal": "consulting", "role": "owner", "confidence": "high"},
+                {"goal": "consulting", "role": "path", "confidence": "certain"},
+                good,
+            ]
+        ),
+    )
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.serves == [good]
+
+
+def test_necessity_survives_attached_outcome(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch)
+    _agent(monkeypatch, _ok_serves(actionable=False, related_task_gid="123", reason="same matter"))
+    _gid_verifies(monkeypatch, True)
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.outcome == "attached" and d.related_task_gid == "123"
+    assert d.serves == [{"goal": "consulting", "role": "path", "confidence": "high"}]
+    assert d.necessity_confidence == "high" and d.necessity_reason == "next step"
+
+
+def test_necessity_survives_suppressed_outcome(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch)
+    _agent(monkeypatch, _ok_serves(actionable=False, reason="nothing required"))
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.outcome == "suppressed"
+    assert d.serves == [{"goal": "consulting", "role": "path", "confidence": "high"}]
+    assert d.necessity_confidence == "high" and d.necessity_reason == "next step"
+
+
+def test_bad_necessity_confidence_normalises_to_low_with_strategy(monkeypatch):
+    _roles(monkeypatch, "")
+    _strategy(monkeypatch)
+    _agent(monkeypatch, _ok_serves(necessity_confidence="certain"))
+    d = triage.decide(make_email_event(), today="2026-10-09")
+    assert d.necessity_confidence == "low" and len(d.serves) == 1

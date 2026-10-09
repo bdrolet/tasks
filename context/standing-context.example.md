@@ -18,3 +18,29 @@ terms from that date on.**
 ## Calendar
 
 - Some term that deadlines are relative to: 2026-08-17 to 2026-12-18.
+
+## Strategy
+
+- last reviewed: 2026-01-01
+
+### example-goal
+- kind: outcome
+- weight: 1.0
+- horizon: 2027-01-01
+- lag: revenue >= 1000 per month
+- lead: conversation >= 1 per week
+- tripwire: signed-client = 0 by 2026-06-30 -> Revisit the offer
+
+**Diagnosis.** One sentence on the obstacle.
+**Guiding policy.** How, and what is not being done.
+**Path.** 1. First precondition — assumes X (untested). 2. Second …
+**Derisks.** It failed because … (catch early: …).
+
+### example-area
+- kind: area
+- weight: 0.8
+- standard: one sentence the model applies
+- below-the-line: overdue; stale > 30 days
+
+**Standard.** …
+**Not doing.** …

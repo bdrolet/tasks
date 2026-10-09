@@ -8,12 +8,13 @@ low_confidence_multiplier = 1.5
 min_effort_days = 0.25
 
 [weights]                     # cost_of_delay terms; sum to 1.0
-priority = 0.25
-urgency = 0.30
-impact = 0.15
-unblock = 0.10
-aging = 0.05
-category = 0.15
+priority = 0.20               # each of the six is the pre-strategy value × 0.8; flag mode divides back
+urgency = 0.24
+impact = 0.12
+unblock = 0.08
+aging = 0.04
+category = 0.12
+necessity = 0.20
 
 [priority]
 P0 = 1.0
@@ -68,3 +69,18 @@ max_boost = 0.5
 [stale]
 after_days = 45
 deferred_limit = 5
+
+[necessity]                   # spec D6
+mode = "flag"                 # flag | demote | suppress
+path = 1.0
+derisk = 0.9
+support = 0.5
+unattached = 0.2              # serves empty with low confidence; unenriched; no strategy loaded
+below_the_line_boost = 1.15   # cost-of-delay multiplier for a slipping area's path/derisk tasks (evidence signals only)
+
+[strategy]                    # spec D3, D9, D11, D14
+stale_after_days = 90         # 'last reviewed' older than this is a review finding
+lag_flat_periods = 2          # consecutive unmet lag periods, with leads met, before "lead strong, lag flat"
+suppression_settle_days = 30  # a necessity suppression not restored by then counts as agreement
+signal_debounce_days = 3      # consecutive raw-true days before a signal flips, and raw-false before it clears
+min_tagged_for_signals = 5    # an area with fewer serves:<area> tasks reports no_data for every signal

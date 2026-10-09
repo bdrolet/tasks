@@ -6,20 +6,26 @@ and Pub/Sub redelivers. A Claude failure never raises — facts and scores
 still land, the task is flagged unenriched, and the daily heal retries it.
 Design: docs/superpowers/specs/2026-09-23-next-prioritizer-design.md"""
 
+import html
 import logging
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import clients.asana as asana
 import clients.otel as otel
 import clients.pubsub as pubsub
 from clients.db import get_conn
-from models.prioritize import Enrichment, ScoredSet, TaskFacts
+from models.prioritize import Enrichment, ScoredSet, Serve, TaskFacts
+from models.strategy import GoalState, Strategy
+from repo import goals as repo_goals
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
-from services import managed_projects, prioritize_config
+from services import goal_state as gs
+from services import managed_projects, prioritize_config, sections
 from services import prioritize as pz
+from services import strategy as strategy_service
+from services import tags as tags_service
 from services.due_digest import today_local
 
 logger = logging.getLogger(__name__)
@@ -29,6 +35,7 @@ TOP_N_LOGGED = 10
 # many parents; gather and heal descend at most this many levels below a task.
 # The scorer's ancestor inheritance (D16) walks the same bound.
 MAX_SUBTASK_DEPTH = pz.MAX_SUBTASK_DEPTH
+TRIPWIRE_EXTERNAL = "tripwire:{goal}:{ordinal}:{by}"
 
 
 def handle(message: dict) -> None:
@@ -118,6 +125,7 @@ def facts_from(
     *,
     parent: dict | None = None,
     inherited: tuple[str | None, str | None] | None = None,
+    strategy_hash: str = "",
 ) -> tuple[TaskFacts, list[dict]]:
     """The task's project, resolved as managed_projects.project_of does; a
     subtask with no managed membership of its own takes its parent's, and
@@ -161,7 +169,9 @@ def facts_from(
         dependencies=tuple(d["gid"] for d in task.get("dependencies") or [] if d.get("gid")),
         dependents=tuple(d["gid"] for d in task.get("dependents") or [] if d.get("gid")),
         num_open_subtasks=0,  # filled by gather()
-        content_hash=en.content_hash(name, task.get("notes") or "", comments),
+        content_hash=en.content_hash(
+            name, task.get("notes") or "", comments, strategy_hash=strategy_hash
+        ),
     )
     return facts, comments
 
@@ -171,6 +181,7 @@ def _gather_subtasks(
     project: tuple[str | None, str | None],
     level: int,
     out: list[tuple[TaskFacts, dict, list[dict]]],
+    strategy_hash: str = "",
 ) -> int:
     """Append the open subtasks of `task` (and theirs, while level stays
     within MAX_SUBTASK_DEPTH) to `out`, each carrying the root's project.
@@ -186,11 +197,11 @@ def _gather_subtasks(
             continue
         open_subs += 1
         sub_facts, sub_comments = facts_from(
-            detail, asana.get_stories(sub["gid"]), inherited=project
+            detail, asana.get_stories(sub["gid"]), inherited=project, strategy_hash=strategy_hash
         )
         idx = len(out)
         out.append((sub_facts, detail, sub_comments))
-        n = _gather_subtasks(detail, project, level + 1, out)
+        n = _gather_subtasks(detail, project, level + 1, out, strategy_hash)
         out[idx] = (
             TaskFacts(**(sub_facts.__dict__ | {"num_open_subtasks": n})),
             detail,
@@ -199,7 +210,7 @@ def _gather_subtasks(
     return open_subs
 
 
-def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
+def gather(gid: str, strategy_hash: str = "") -> list[tuple[TaskFacts, dict, list[dict]]] | None:
     task = asana.get_task_detail(gid, opt_fields=asana.PRIORITIZE_OPT_FIELDS)
     if task is None:
         return None
@@ -207,13 +218,17 @@ def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
     # gid may itself be a subtask at any level (e.g. republished directly by
     # heal); it carries no memberships, so its project comes up the chain.
     project_gid, project_name, level = _resolve_project(task)
-    facts, comments = facts_from(task, stories, inherited=(project_gid, project_name))
+    facts, comments = facts_from(
+        task, stories, inherited=(project_gid, project_name), strategy_hash=strategy_hash
+    )
     out: list[tuple[TaskFacts, dict, list[dict]]] = []
     # Depth counts from the tree top, as heal's walk does: gathering a level-1
     # subtask descends to level MAX_SUBTASK_DEPTH, never beyond, so it cannot
     # store rows heal never lists (which heal would then republish, fail to
     # resolve, and delete — an oscillation).
-    open_subs = _gather_subtasks(task, (facts.project_gid, facts.project_name), level + 1, out)
+    open_subs = _gather_subtasks(
+        task, (facts.project_gid, facts.project_name), level + 1, out, strategy_hash
+    )
     facts = TaskFacts(**(facts.__dict__ | {"num_open_subtasks": open_subs}))
     return [(facts, task, comments), *out]
 
@@ -222,7 +237,12 @@ def gather(gid: str) -> list[tuple[TaskFacts, dict, list[dict]]] | None:
 
 
 def enrich_one(
-    conn, facts: TaskFacts, raw_task: dict, comments: list[dict], today: date
+    conn,
+    facts: TaskFacts,
+    raw_task: dict,
+    comments: list[dict],
+    today: date,
+    strategy: Strategy = Strategy.EMPTY,
 ) -> tuple[Enrichment | None, str]:
     """(enrichment or None, result label). A cache hit returns the stored
     enrichment — so a write-back that could not claim last time (e.g. the
@@ -240,12 +260,21 @@ def enrich_one(
             start_on=facts.start_on,
             tags=list(facts.tags),
             today=today,
+            strategy_text=strategy_service.section_text() if strategy.goals else "",
+            known_goals=tuple(g.id for g in strategy.goals),
         )
     except Exception:
         logger.exception("enrichment failed for gid=%s — scoring with defaults", facts.gid)
         otel.errors.add(1, {"handler": "prioritize.enrich"})
         return None, "failed"
-    repo.upsert_enrichment(conn, facts.gid, facts.content_hash, _raw(enrichment), en.MODEL)
+    repo.upsert_enrichment(
+        conn,
+        facts.gid,
+        facts.content_hash,
+        _raw(enrichment),
+        en.MODEL,
+        strategy_hash=strategy.text_hash,
+    )
     return enrichment, "ok"
 
 
@@ -254,6 +283,7 @@ def _raw(e: Enrichment) -> dict:
     d.pop("unenriched", None)
     if d.get("due_date_inferred"):
         d["due_date_inferred"] = d["due_date_inferred"].isoformat()
+    d["serves"] = [dict(s.__dict__) for s in e.serves]
     return d
 
 
@@ -279,6 +309,53 @@ def claim_write_back(conn, facts: TaskFacts, enrichment: Enrichment) -> int | No
     return points
 
 
+def claim_serves_write_back(
+    conn, facts: TaskFacts, enrichment: Enrichment, strategy: Strategy
+) -> dict | None:
+    """Spec D5. Returns the payload to write to Asana (serves + role) when
+    the claim wins and the judgment is confident; records grooming / none
+    outcomes with no Asana write; None when nothing was claimed."""
+    if not strategy.goals or facts.serves_estimated is not None:
+        return None
+    if any(t.casefold().startswith("serves:") for t in facts.tags):
+        return None
+    conf = enrichment.necessity_confidence
+    known = {g.id for g in strategy.goals}
+    served = [s for s in enrichment.serves if s.goal in known]
+    if served and conf in ("medium", "high"):
+        role = max((s.role for s in served), key=lambda r: pz.ROLE_RANK[r])
+        payload = {"serves": [s.goal for s in served], "role": role, "confidence": conf}
+        if not repo.claim_serves(conn, facts.gid, payload):
+            return None
+        otel.necessity_judgments.add(1, {"confidence": conf, "outcome": "attached"})
+        return payload
+    if not served and conf in ("medium", "high"):
+        if repo.claim_serves(conn, facts.gid, {"none": True, "confidence": conf}):
+            otel.necessity_judgments.add(1, {"confidence": conf, "outcome": "none"})
+        return None
+    if repo.claim_serves(conn, facts.gid, {"grooming": True}):
+        otel.necessity_judgments.add(1, {"confidence": conf, "outcome": "grooming"})
+    return None
+
+
+def write_back_serves(gid: str, payload: dict) -> list[str] | None:
+    """After commit: tags, then the comment. A failure logs and keeps the
+    claim (D5)."""
+    names = [f"serves:{g}" for g in payload["serves"]] + [f"role:{payload['role']}"]
+    try:
+        gids = tags_service.resolve_gids(names)
+        if len(gids) != len(names):
+            raise RuntimeError("tag resolution incomplete")
+        for tag_gid in gids:
+            asana.add_tag(gid, tag_gid)
+        asana.create_story(gid, text=en.attach_comment(payload["serves"], payload["role"]))
+    except Exception:
+        logger.exception("serves write-back failed for gid=%s (claim kept)", gid)
+        otel.errors.add(1, {"handler": "prioritize.write_back_serves"})
+        return None
+    return names
+
+
 def write_back(gid: str, points: int) -> bool:
     """After commit: field first, then the comment. A failure logs and keeps
     the claim — the estimate is never written twice (D6)."""
@@ -298,6 +375,8 @@ def write_back(gid: str, points: int) -> bool:
 def _enrichment_from_raw(raw: dict) -> Enrichment:
     d = dict(Enrichment.DEFAULT.__dict__)
     d.update({k: v for k, v in raw.items() if k in d})
+    if isinstance(d.get("serves"), list):
+        d["serves"] = tuple(Serve(**s) for s in d["serves"] if isinstance(s, dict))
     if "waiting_confidence" not in raw:
         # Rows written before the field existed: keep today's behaviour
         # (a stored wait counts) until the heal re-enriches them.
@@ -308,10 +387,23 @@ def _enrichment_from_raw(raw: dict) -> Enrichment:
     return Enrichment(**d)
 
 
-def rescore(conn, *, kind: str, trigger_gid: str | None, today: date) -> ScoredSet:
+def rescore(
+    conn, *, kind: str, trigger_gid: str | None, today: date, strategy: Strategy | None = None
+) -> ScoredSet:
     t0 = time.monotonic()
     repo.lock_rescore(conn)  # held to commit: concurrent rescores serialise
     config = prioritize_config.load()
+    strategy = strategy or strategy_service.load(
+        stale_after_days=config.strategy_stale_after_days, today=today
+    )
+    # Only evidence signals boost an area (spec D6/D9), and a muted area never.
+    below = frozenset(
+        gid
+        for gid, s in repo_goals.get_states(conn, today).items()
+        if s.kind == "area"
+        and s.state.get("evidence_below_the_line")
+        and not s.state.get("muted_until")
+    )
     facts = repo.list_facts(conn)
     enrichments = {
         gid: _enrichment_from_raw(raw) for gid, (hsh, raw) in repo.list_enrichment(conn).items()
@@ -326,11 +418,14 @@ def rescore(conn, *, kind: str, trigger_gid: str | None, today: date) -> ScoredS
         config,
         today,
         project_last_offered=repo.project_last_offered(conn, today=today),
+        strategy=strategy,
+        below_the_line=below,
     )
     current = {f.gid: f.content_hash for f in facts}
-    stored = {gid: hsh for gid, (hsh, _) in repo.list_enrichment(conn).items()}
+    stored = repo.list_enrichment_hashes(conn)
     for t in scored.tasks:
-        if stored.get(t.gid) != current.get(t.gid):
+        hashes = stored.get(t.gid)
+        if hashes is None or hashes[0] != current.get(t.gid) or hashes[1] != strategy.text_hash:
             t.components["enrichment_stale"] = True
     repo.replace_scores(conn, scored)
     top = [
@@ -373,14 +468,13 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
     write-back, so a failed rescore can never roll back a claim whose
     estimate is already in Asana; transaction B rescores."""
     today = today or today_local()
-    gathered = gather(gid)
+    config = prioritize_config.load()
+    strategy = strategy_service.load(stale_after_days=config.strategy_stale_after_days, today=today)
+    gathered = gather(gid, strategy_hash=strategy.text_hash)
     # An excluded project (D15) is gathered and stored but never ranked, so
     # the model call and the points write-back would be spend for nothing. A
     # task moved out of it enriches on that move's own event.
-    excluded = (
-        gathered is not None
-        and gathered[0][0].project_name in prioritize_config.load().excluded_projects
-    )
+    excluded = gathered is not None and gathered[0][0].project_name in config.excluded_projects
     if gathered is not None and gathered[0][0].project_gid not in managed_projects.gids():
         with get_conn() as conn:
             repo.delete_task(conn, gid)
@@ -388,6 +482,7 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
         logger.info("task %s is in no managed project — rows dropped", gid)
         return
     to_write: list[tuple[str, int]] = []
+    to_tag: list[tuple[str, dict]] = []
     results: list[tuple[str, str]] = []
     with get_conn() as conn:
         if gathered is None:
@@ -421,14 +516,24 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
                 merged = TaskFacts(
                     **(
                         facts.__dict__
-                        | {"points_estimated": previous.points_estimated if previous else None}
+                        | {
+                            "points_estimated": previous.points_estimated if previous else None,
+                            "serves_estimated": previous.serves_estimated if previous else None,
+                        }
                     )
                 )
-                enrichment, result = enrich_one(conn, merged, raw_task, comments, today)
+                enrichment, result = enrich_one(conn, merged, raw_task, comments, today, strategy)
                 points = claim_write_back(conn, merged, enrichment) if enrichment else None
                 if points is not None:
                     to_write.append((facts.gid, points))
                     result = "claimed"
+                serves_payload = (
+                    claim_serves_write_back(conn, merged, enrichment, strategy)
+                    if enrichment
+                    else None
+                )
+                if serves_payload is not None:
+                    to_tag.append((facts.gid, serves_payload))
                 results.append((facts.gid, result))
     # Transaction A has committed: the claim stands whatever Asana does now.
     written = {g for g, points in to_write if write_back(g, points)}
@@ -439,12 +544,18 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
             for g, points in to_write:
                 if g in written:
                     repo.set_story_points(conn, g, points)
+    for g, payload in to_tag:
+        names = write_back_serves(g, payload)
+        if names:
+            with get_conn() as conn:
+                current = repo.get_facts(conn, g)
+                repo.set_tags(conn, g, [*(current.tags if current else ()), *names])
     for g, result in results:
         if result == "claimed":
             result = "written_back" if g in written else "ok"
         otel.prioritize_enrich.add(1, {"result": result})
     with get_conn() as conn:
-        rescore(conn, kind="event", trigger_gid=gid, today=today)
+        rescore(conn, kind="event", trigger_gid=gid, today=today, strategy=strategy)
 
 
 def settle_deferrals(conn, today: date) -> tuple[int, int]:
@@ -489,14 +600,15 @@ def _open_descendants(task: dict, level: int) -> list[dict]:
     return found
 
 
-def heal() -> int:
+def heal(current_strategy_hash: str = "") -> int:
     """Spec D8 step 2: republish anything Asana knows that we do not, and
     anything we still hold open that Asana's open-task listing no longer
     mentions — a completion or deletion whose event was lost. Reads in its
     own short transaction, then lists and publishes outside any."""
     with get_conn() as conn:
         index = repo.list_facts_index(conn)
-        enrichment = repo.list_enrichment(conn)
+        enrichment = repo.list_enrichment_hashes(conn)
+        raws = repo.list_enrichment(conn)
         open_gids = repo.list_open_gids(conn)
     required = set(en.SCHEMA["required"])
 
@@ -508,11 +620,15 @@ def heal() -> int:
         if modified and modified > fetched_at:
             return True
         stored = enrichment.get(gid)
-        if stored is None or stored[0] != content_hash:
+        if (
+            stored is None
+            or stored[0] != content_hash
+            or stored[1] != current_strategy_hash  # spec D4: a strategy edit re-judges
+        ):
             return True
         # Schema drift: a row written before a field became required is
         # re-enriched even though nothing about the task changed (spec D6).
-        return not required <= set(stored[1])
+        return not required <= set(raws.get(gid, ("", {}))[1])
 
     republished = 0
     seen: set[str] = set()
@@ -532,14 +648,122 @@ def heal() -> int:
     return republished
 
 
+def evaluate_goals(conn, strategy: Strategy, today: date) -> list[GoalState]:
+    """Spec D7: views from facts plus yesterday's score rows (bucket, serves,
+    role); previous day's states for the debounce; writes today's rows."""
+    repo_goals.save_snapshot(
+        conn, strategy
+    )  # the API and webhook CF read goals from here, never the secret
+    if not strategy.goals:
+        return []
+    scores = {
+        r["task_gid"]: {"bucket": r["bucket"], "components": r["components"]}
+        for r in repo.list_scores(conn)
+    }
+    views = gs.views_from(repo.list_facts(conn), scores)
+    config = prioritize_config.load()
+    states = gs.evaluate(
+        strategy,
+        views,
+        repo_goals.all_latest_reports(conn),
+        repo_goals.get_mutes(conn),
+        repo_goals.get_states(conn, today - timedelta(days=1)),
+        today,
+        config,
+    )
+    for s in states:
+        repo_goals.upsert_state(conn, s)
+        if s.kind == "area":
+            otel.area_below_the_line.set(
+                1 if s.state.get("below_the_line") else 0, {"area": s.goal_id}
+            )
+    otel.strategy_goals_loaded.set(len(strategy.outcome_goals()), {"kind": "outcome"})
+    otel.strategy_goals_loaded.set(len(strategy.areas()), {"kind": "area"})
+    return states
+
+
+def fire_tripwires(
+    strategy: Strategy, states: list[GoalState], previous: dict[str, GoalState]
+) -> list[str]:
+    """Spec D8: a tripwire newly fired today becomes one task, guarded by an
+    external id that includes the `by` date. Asana failure raises (D7)."""
+    fired: list[str] = []
+    for s in states:
+        goal = strategy.get(s.goal_id)
+        if goal is None or goal.kind != "outcome":
+            continue
+        prev_state = previous.get(s.goal_id)
+        prev = {
+            (t["ordinal"], t["by"]): t
+            for t in (prev_state.state.get("tripwires") if prev_state else []) or []
+        }
+        for t in s.state.get("tripwires") or []:
+            if not t["fired"] or prev.get((t["ordinal"], t["by"]), {}).get("fired"):
+                continue
+            external = TRIPWIRE_EXTERNAL.format(goal=goal.id, ordinal=t["ordinal"], by=t["by"])
+            if asana.find_task_by_external(external):
+                continue
+            fields = {
+                "name": f"[P1] {t['action']}",
+                "html_notes": (
+                    f"<body>Tripwire fired for <b>{html.escape(goal.id)}</b>: {html.escape(str(t['text']))} "
+                    f"(measured {html.escape(str(t['value']))}).\n"
+                    f"Review: task-next review</body>"
+                ),
+                "projects": [asana.ASANA_PROJECT_ID],
+                "external": {"gid": external, "data": "tasks"},
+                "tags": tags_service.resolve_gids([f"serves:{goal.id}", "role:derisk", "tripwire"]),
+            }
+            created = asana.create_task_from_fields(fields)
+            section = sections.for_category("review")
+            if section:
+                asana.add_task_to_section(created.gid, section)
+            pubsub.publish_task_changed(created.gid, "pipeline")
+            otel.tripwire_fired.add(1, {"goal": goal.id})
+            fired.append(external)
+    return fired
+
+
 def handle_day_changed(*, today: date | None = None) -> dict:
     today = today or today_local()
+    config = prioritize_config.load()
+    strategy = strategy_service.load(stale_after_days=config.strategy_stale_after_days, today=today)
     with get_conn() as conn:
         deferred, started = settle_deferrals(conn, today)
-    healed = heal()
+    healed = heal(strategy.text_hash)
     with get_conn() as conn:
-        rescore(conn, kind="daily", trigger_gid=None, today=today)
+        previous = repo_goals.get_states(conn, today - timedelta(days=1))
+        states = evaluate_goals(conn, strategy, today)
+    fired = fire_tripwires(strategy, states, previous)
+    with get_conn() as conn:
+        scored = rescore(conn, kind="daily", trigger_gid=None, today=today, strategy=strategy)
+        if states:
+            steps = {}
+            for g in strategy.goals:
+                step = next(
+                    (
+                        t
+                        for t in scored.next()
+                        if t.components.get("role") == "path"
+                        and g.id in (t.components.get("serves") or [])
+                    ),
+                    None,
+                )
+                steps[g.id] = step.gid if step else None
+            repo_goals.set_next_steps(conn, today, steps)
     logger.info(
-        "day_changed %s: %d deferred, %d started, %d republished", today, deferred, started, healed
+        "day_changed %s: %d deferred, %d started, %d republished, %d goals, %d tripwires",
+        today,
+        deferred,
+        started,
+        healed,
+        len(states),
+        len(fired),
     )
-    return {"deferred": deferred, "started": started, "healed": healed}
+    return {
+        "deferred": deferred,
+        "started": started,
+        "healed": healed,
+        "goals": len(states),
+        "tripwires_fired": len(fired),
+    }

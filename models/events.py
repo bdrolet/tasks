@@ -70,6 +70,11 @@ class Decision:
     resolves: bool = False  # related task's matter is settled by this email
     evidence: list = field(default_factory=list)
     outcome: str = "actionable"  # actionable | suppressed | attached | fail_open
+    serves: list = field(
+        default_factory=list
+    )  # [{goal, role, confidence}], unknown goals dropped (D14)
+    necessity_confidence: str = "low"
+    necessity_reason: str = ""
 
 
 @dataclass

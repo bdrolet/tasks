@@ -21,7 +21,8 @@ stays in inbox; task-serving work lives here.
 | **Digest** | Cloud Scheduler `tasks-digest`, `*/10 * * * *` → `POST <webhook-url>/digest` (same bearer as escalate) — rebuilds the due-day calendar digest when the Asana webhook has set `digest_state.dirty_at` or the last rebuild is > 60 min old; writes through `clients/schedule_api.py` (`SCHEDULE_API_URL`; auth is a Google ID token for the `tasks-webhook-cf` SA via `clients/gcp_auth.py` — schedule-api is behind Cloud Run IAM) |
 | **Webhook sync** | Cloud Scheduler `tasks-webhook-sync`, `30 5 * * *` America/New_York → `POST <webhook-url>/webhook-sync` (same bearer as escalate) — reconciles per-project Asana webhook registrations against `ASANA_MANAGED_PROJECTS`, self-healing a registration Asana dropped after 24h of failed delivery |
 | **Prioritizer** | `tasks-prioritize` CF — Pub/Sub trigger on the `task-events` topic (this repo's), entry point `prioritize` in `main.py`; Cloud Scheduler `tasks-day-changed` `45 5 * * *` America/New_York publishes `day_changed`; read side `GET /ranking`, `POST /next`, `GET /calibrate`, `PUT /tasks/{gid}/overrides` on tasks-api; `config/prioritize.toml` holds every weight. Design: `docs/superpowers/specs/2026-09-23-next-prioritizer-design.md` |
-| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets), `task_facts`, `task_enrichment`, `task_overrides`, `task_scores`, `prioritize_runs`, `task_stats` (prioritizer), `task_scores_history`, `task_override_events` (prioritizer audit trail — `docs/prioritize-audit.md`); schema in `repo/schema.sql` |
+| **Weekly review** | Cloud Scheduler `tasks-weekly-review`, `0 7 * * 1` America/New_York → `POST <webhook-url>/review` (same bearer as escalate) — posts the rendered strategy review as a comment on the `review:weekly` standing task |
+| **Database** | `tasks` DB + `tasks` user on Cloud SQL `bens-project-462804:us-central1:inbox` (Postgres 16, instance owned by inbox terraform) — tables `tasks`, `asana_tag_cache`, `task_index` (pgvector semantic-search corpus), `due_day_events`, `task_bullets`, `digest_state`, `asana_webhooks` (per-project webhook secrets), `task_facts`, `task_enrichment`, `task_overrides`, `task_scores`, `prioritize_runs`, `task_stats` (prioritizer), `goal_state`, `goal_reports`, `goal_overrides`, `strategy_snapshot` (strategy layer), `task_scores_history`, `task_override_events` (prioritizer audit trail — `docs/prioritize-audit.md`); schema in `repo/schema.sql` |
 | **Observability** | OTel → Grafana Cloud OTLP; metrics prefixed `asana_` |
 | **Infra** | `terraform/` — GCS backend `bens-project-462804-tf-state`, prefix `tasks` |
 
@@ -153,6 +154,29 @@ Completing strips the `repeat:` tag from the finished occurrence, so exactly
 one open task per series carries it. Design:
 `docs/superpowers/specs/2026-09-03-recurring-tasks-design.md`.
 
+## Strategy layer
+
+A `## Strategy` section of the private standing context (authoring guide:
+the context repo's `docs/strategy.md`) declares outcome goals and areas.
+`services/strategy.py` parses it; enrichment and gate 2 read it as a cached
+system block and return what a task `serves` and in what `role`
+(`path|derisk|support`), written to the task as `serves:<id>` / `role:<r>`
+tags once (same claim guard as story points). `services/prioritize.py`
+scores a `necessity` term behind `[necessity].mode` in `config/prioritize.toml`
+— `flag` (ships; ranking unchanged), `demote`, `suppress` (adds the
+`stop_doing` bucket and medium-confidence gate-2 suppression). A
+high-confidence "serves nothing" at gate 2 never becomes a task in any mode;
+`POST /suppressions/{message_id}/restore` reverses one. The daily tick
+evaluates lead measures, lag reports, tripwires (fired → one `[P1]` task
+with `external.gid = tripwire:{goal}:{n}:{by}`) and below-the-line signals
+(debounced over 3 days; evidence signals boost path/derisk tasks, absence
+signals only report), and saves a `strategy_snapshot` so tasks-api and the
+webhook CF never mount the secret. `GET /review` and the Monday
+`tasks-weekly-review` scheduler (comment on the `review:weekly` task) are
+the read side; `GET /calibrate` reports necessity agreement, which is what
+justifies moving `mode`. Design:
+`docs/superpowers/specs/2026-10-09-strategy-layer-design.md`.
+
 ## Due-day digest
 
 One all-day event per day that has open tasks due, for a rolling 30-day
@@ -217,8 +241,8 @@ here. (Ownership moves to a platform state in `~/src/infra` eventually — see
 are owned here — the Anthropic key is **dedicated to this
 service** (Console key name `tasks-cf`), deliberately separate from inbox's
 `anthropic-api-key` for independent spend tracking and rotation; the escalate
-token is the bearer credential Cloud Scheduler sends on `POST /escalate` and
-`POST /digest` (webhook CF only — IAM can't restrict that route since the CF
+token is the bearer credential Cloud Scheduler sends on `POST /escalate`,
+`POST /digest`, `POST /review` and `POST /webhook-sync` (webhook CF only — IAM can't restrict that route since the CF
 must stay publicly invokable for Asana's unauthenticated webhook posts).
 `ASANA_PROJECT_ID` and section GIDs are plain env
 vars, not secrets. Per-project webhook secrets (one `X-Hook-Secret` per

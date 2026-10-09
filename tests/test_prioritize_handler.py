@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace as replace_facts
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -7,10 +8,14 @@ import clients.asana as asana
 import clients.pubsub as ps
 from handlers import prioritize as h
 from models.prioritize import TaskFacts
+from models.strategy import Goal, GoalState, Measure, Strategy, Tripwire
+from repo import goals as repo_goals
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
 from services import managed_projects
+from services import strategy as st
+from services import tags as tags_service
 
 TODAY = date(2026, 9, 23)
 # A stored enrichment `raw` carrying every key the current schema requires.
@@ -76,6 +81,7 @@ class MemConn:
         self.scores, self.runs, self.estimated = [], [], set()
         self.deleted = []
         self.last_offered = {}
+        self.goal_states = {}
 
     def __enter__(self):
         return self
@@ -105,9 +111,20 @@ def db(monkeypatch):
     monkeypatch.setattr(
         repo,
         "upsert_enrichment",
-        lambda c, gid, hsh, raw, model: c.enrichment.__setitem__(gid, (hsh, raw)),
+        lambda c, gid, hsh, raw, model, strategy_hash="": (
+            c.enrichment.__setitem__(gid, (hsh, raw)),
+            c.__dict__.setdefault("strategy_hashes", {}).__setitem__(gid, strategy_hash),
+        ),
     )
     monkeypatch.setattr(repo, "list_enrichment", lambda c: dict(c.enrichment))
+    monkeypatch.setattr(
+        repo,
+        "list_enrichment_hashes",
+        lambda c: {
+            g: (hsh, c.__dict__.get("strategy_hashes", {}).get(g) or "")
+            for g, (hsh, _) in c.enrichment.items()
+        },
+    )
     monkeypatch.setattr(repo, "list_overrides", lambda c: dict(c.overrides))
     monkeypatch.setattr(repo, "list_stats", lambda c: dict(c.stats))
 
@@ -147,6 +164,12 @@ def db(monkeypatch):
             c.facts[gid] = TaskFacts(**(c.facts[gid].__dict__ | {"story_points": pts}))
 
     monkeypatch.setattr(repo, "set_story_points", set_points)
+    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
+    monkeypatch.setattr(repo_goals, "save_snapshot", lambda c, strategy: None)
+    monkeypatch.setattr(repo_goals, "upsert_state", lambda c, s: None)
+    monkeypatch.setattr(repo_goals, "all_latest_reports", lambda c, limit=3: {})
+    monkeypatch.setattr(repo_goals, "get_mutes", lambda c: {})
+    monkeypatch.setattr(repo_goals, "set_next_steps", lambda c, day, steps: None)
     return conn
 
 
@@ -182,7 +205,9 @@ def model(monkeypatch):
         calls.append(kw)
         return json.dumps(GOOD)
 
-    monkeypatch.setattr(en, "extract", lambda **kw: en.parse(fake(**kw)))
+    monkeypatch.setattr(
+        en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ()))
+    )
     return calls
 
 
@@ -399,7 +424,7 @@ def _facts(gid, **kw):
 
 def test_day_changed_first_run_has_nothing_to_defer(db, monkeypatch):
     monkeypatch.setattr(repo, "last_daily_run", lambda c: None)
-    monkeypatch.setattr(h, "heal", lambda: 0)
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
     out = h.handle_day_changed(today=TODAY)
@@ -425,9 +450,15 @@ def test_day_changed_bumps_unstarted_offers_and_marks_started(db, monkeypatch):
     monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: tops.append((rid, top)))
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
-    monkeypatch.setattr(h, "heal", lambda: 0)
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     out = h.handle_day_changed(today=TODAY)
-    assert bumped == ["a"] and out == {"deferred": 1, "started": 2, "healed": 0}
+    assert bumped == ["a"] and out == {
+        "deferred": 1,
+        "started": 2,
+        "healed": 0,
+        "goals": 0,
+        "tripwires_fired": 0,
+    }
     assert [t["started"] for t in tops[0][1]] == [False, True, True]
 
 
@@ -460,6 +491,18 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
             "parent": (old, "h4"),
             "child": (old, "h5"),
             "vanished": (old, "h6"),
+        },
+    )
+    monkeypatch.setattr(
+        repo,
+        "list_enrichment_hashes",
+        lambda c: {
+            "fresh": ("h1", ""),
+            "newer": ("h2", ""),
+            "stale-enrich": ("OLD", ""),
+            "parent": ("h4", ""),
+            "child": ("h5", ""),
+            "vanished": ("h6", ""),
         },
     )
     monkeypatch.setattr(
@@ -504,6 +547,9 @@ def test_heal_republishes_enrichment_missing_a_required_field(db, monkeypatch):
     pre_v2 = {k: v for k, v in FULL_RAW.items() if k != "waiting_confidence"}
     monkeypatch.setattr(
         repo, "list_enrichment", lambda c: {"v1": ("h1", pre_v2), "v2": ("h2", FULL_RAW)}
+    )
+    monkeypatch.setattr(
+        repo, "list_enrichment_hashes", lambda c: {"v1": ("h1", ""), "v2": ("h2", "")}
     )
     monkeypatch.setattr(repo, "list_open_gids", lambda c: {"v1", "v2"})
     published = []
@@ -601,8 +647,14 @@ def test_in_progress_task_started_before_the_offer_is_not_deferred(db, monkeypat
     monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: None)
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
-    monkeypatch.setattr(h, "heal", lambda: 0)
-    assert h.handle_day_changed(today=TODAY) == {"deferred": 0, "started": 1, "healed": 0}
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
+    assert h.handle_day_changed(today=TODAY) == {
+        "deferred": 0,
+        "started": 1,
+        "healed": 0,
+        "goals": 0,
+        "tripwires_fired": 0,
+    }
     assert bumped == []
 
 
@@ -752,6 +804,9 @@ def test_heal_republishes_a_modified_grandchild(db, monkeypatch):
     index = {g: (old, f"h-{g}") for g in ("top", "child", "grandchild")}
     monkeypatch.setattr(repo, "list_facts_index", lambda c: index)
     monkeypatch.setattr(
+        repo, "list_enrichment_hashes", lambda c: {g: (hsh, "") for g, (_, hsh) in index.items()}
+    )
+    monkeypatch.setattr(
         repo, "list_enrichment", lambda c: {g: (hsh, FULL_RAW) for g, (_, hsh) in index.items()}
     )
     monkeypatch.setattr(repo, "list_open_gids", lambda c: set(index))
@@ -877,6 +932,448 @@ def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkey
     # only today's run exists: the project reads as never offered, not 0 days
     assert event.by_gid()["a"].components["days_since_project_offered"] is None
     assert event.by_gid()["a"].components["starvation_boost"] == 0.5
+
+
+# ---- strategy layer: serves write-back ---------------------------------------
+
+STRAT = Strategy(
+    goals=(Goal(id="consulting", kind="outcome"), Goal(id="finances", kind="area")), text_hash="sh"
+)
+SERVES_HIGH = GOOD | {
+    "serves": [{"goal": "consulting", "role": "path", "confidence": "high"}],
+    "necessity_confidence": "high",
+    "necessity_reason": "next step",
+}
+
+
+@pytest.fixture
+def strategy(monkeypatch):
+    monkeypatch.setattr(st, "load", lambda **kw: STRAT)
+    monkeypatch.setattr(st, "section_text", lambda: "### consulting\n- kind: outcome\n")
+    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
+    return STRAT
+
+
+@pytest.fixture
+def tag_fake(monkeypatch, asana_fake):
+    asana_fake["tags"] = []
+    monkeypatch.setattr(tags_service, "resolve_gids", lambda names: [f"g-{n}" for n in names])
+    monkeypatch.setattr(
+        asana, "add_tag", lambda gid, tag_gid: asana_fake["tags"].append((gid, tag_gid))
+    )
+    monkeypatch.setattr(
+        repo,
+        "claim_serves",
+        lambda c, gid, payload: (
+            c.__dict__.setdefault("serves_claims", {}).setdefault(gid, payload) is payload
+        ),
+    )
+    monkeypatch.setattr(
+        repo,
+        "set_tags",
+        lambda c, gid, tags: c.__dict__.setdefault("tags_set", []).append((gid, tags)),
+    )
+    return asana_fake
+
+
+def _model_returning(monkeypatch, payload):
+    calls = []
+
+    def fake(**kw):
+        calls.append(kw)
+        return json.dumps(payload)
+
+    monkeypatch.setattr(
+        en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ()))
+    )
+    return calls
+
+
+def test_enrichment_receives_strategy_text_and_hash_in_facts(db, tag_fake, strategy, monkeypatch):
+    calls = _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    assert calls[0]["strategy_text"].startswith("### consulting") and calls[0]["known_goals"] == (
+        "consulting",
+        "finances",
+    )
+    assert db.facts["t1"].content_hash == en.content_hash(
+        TASK["name"],
+        TASK["notes"],
+        [{"text": "sent it", "created_by": "Ben", "created_at": "2026-09-19T00:00:00Z"}],
+        strategy_hash="sh",
+    )
+
+
+def test_confident_serves_is_written_back_once(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    h.handle_task_changed("t1", today=TODAY)  # redelivery
+    assert tag_fake["tags"] == [("t1", "g-serves:consulting"), ("t1", "g-role:path")]
+    assert [c for c in tag_fake["comments"] if c.startswith("Attached to")] == [
+        "Attached to consulting as path \u2014 adjust the tags if wrong."
+    ]
+    assert db.tags_set == [("t1", ["cheryl", "serves:consulting", "role:path"])]
+    assert db.serves_claims["t1"] == {
+        "serves": ["consulting"],
+        "role": "path",
+        "confidence": "high",
+    }
+
+
+def test_low_confidence_claims_grooming_and_writes_nothing(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"necessity_confidence": "low"})
+    h.handle_task_changed("t1", today=TODAY)
+    assert tag_fake["tags"] == [] and db.serves_claims["t1"] == {"grooming": True}
+
+
+def test_confident_none_claims_none_and_writes_nothing(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"serves": []})
+    h.handle_task_changed("t1", today=TODAY)
+    assert tag_fake["tags"] == [] and db.serves_claims["t1"] == {"none": True, "confidence": "high"}
+
+
+def test_existing_serves_tag_skips_the_draft(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    monkeypatch.setitem(TASK, "tags", [{"gid": "g", "name": "serves:finances"}])
+    try:
+        h.handle_task_changed("t1", today=TODAY)
+    finally:
+        TASK["tags"] = [{"gid": "g", "name": "cheryl"}]
+    assert tag_fake["tags"] == [] and "serves_claims" not in db.__dict__
+
+
+def test_no_strategy_means_no_claim(db, tag_fake, monkeypatch):
+    monkeypatch.setattr(st, "load", lambda **kw: Strategy.EMPTY)
+    monkeypatch.setattr(st, "section_text", lambda: "")
+    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
+    _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    assert "serves_claims" not in db.__dict__
+
+
+def test_tag_write_failure_keeps_the_claim(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    attempts = []
+
+    def boom(gid, tag_gid):
+        attempts.append((gid, tag_gid))
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(asana, "add_tag", boom)
+    h.handle_task_changed("t1", today=TODAY)
+    h.handle_task_changed("t1", today=TODAY)  # redelivery must not retry
+    assert db.serves_claims["t1"]["serves"] == ["consulting"] and not db.__dict__.get("tags_set")
+    assert len(attempts) == 1
+    assert not [c for c in tag_fake["comments"] if c.startswith("Attached to")]
+
+
+def test_existing_serves_estimated_blocks_the_claim(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH)
+    seeded, _ = h.facts_from(TASK, [])
+    db.facts["t1"] = TaskFacts(**(seeded.__dict__ | {"serves_estimated": {"grooming": True}}))
+    claims = []
+    monkeypatch.setattr(repo, "claim_serves", lambda c, gid, payload: claims.append(gid) or True)
+    h.handle_task_changed("t1", today=TODAY)
+    assert claims == [] and tag_fake["tags"] == []
+
+
+@pytest.mark.parametrize(
+    "serves, role",
+    [
+        ([("finances", "support"), ("consulting", "path"), ("x", "derisk")], "path"),
+        ([("finances", "support"), ("consulting", "derisk")], "derisk"),
+    ],
+)
+def test_highest_role_wins_across_serves(db, tag_fake, monkeypatch, serves, role):
+    three = Strategy(
+        goals=(
+            Goal(id="consulting", kind="outcome"),
+            Goal(id="finances", kind="area"),
+            Goal(id="x", kind="outcome"),
+        ),
+        text_hash="sh",
+    )
+    monkeypatch.setattr(st, "load", lambda **kw: three)
+    monkeypatch.setattr(st, "section_text", lambda: "### consulting\n")
+    payload = SERVES_HIGH | {
+        "serves": [{"goal": g, "role": r, "confidence": "high"} for g, r in serves]
+    }
+    _model_returning(monkeypatch, payload)
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.serves_claims["t1"]["role"] == role
+    assert tag_fake["tags"][-1] == ("t1", f"g-role:{role}")
+
+
+def test_medium_confidence_attaches_like_high(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"necessity_confidence": "medium"})
+    h.handle_task_changed("t1", today=TODAY)
+    assert tag_fake["tags"] == [("t1", "g-serves:consulting"), ("t1", "g-role:path")]
+    assert db.serves_claims["t1"]["confidence"] == "medium"
+
+
+def test_empty_serves_with_low_confidence_claims_grooming(db, tag_fake, strategy, monkeypatch):
+    _model_returning(monkeypatch, SERVES_HIGH | {"serves": [], "necessity_confidence": "low"})
+    h.handle_task_changed("t1", today=TODAY)
+    assert db.serves_claims["t1"] == {"grooming": True} and tag_fake["tags"] == []
+
+
+# ---- strategy layer: daily tick ----------------------------------------------
+
+
+def _fire_strat():
+    return Strategy(
+        goals=(
+            Goal(
+                id="consulting",
+                kind="outcome",
+                horizon=date(2027, 3, 31),
+                leads=(Measure("conversation", ">=", 3, "week"),),
+                tripwires=(
+                    Tripwire(1, "signed-client", "=", 0, date(2026, 9, 1), "Revisit niche"),
+                ),
+            ),
+        ),
+        text_hash="sh",
+    )
+
+
+@pytest.fixture
+def goals_db(monkeypatch, db):
+    db.goal_states, db.reports, db.mutes, db.next_steps = {}, {}, {}, []
+    monkeypatch.setattr(
+        repo_goals, "upsert_state", lambda c, s: c.goal_states.__setitem__((s.goal_id, s.day), s)
+    )
+    monkeypatch.setattr(
+        repo_goals,
+        "get_states",
+        lambda c, day: {k[0]: v for k, v in c.goal_states.items() if k[1] == day},
+    )
+    monkeypatch.setattr(repo_goals, "all_latest_reports", lambda c, limit=3: dict(c.reports))
+    monkeypatch.setattr(repo_goals, "get_mutes", lambda c: dict(c.mutes))
+    monkeypatch.setattr(
+        repo_goals, "set_next_steps", lambda c, day, steps: c.next_steps.append((day, steps))
+    )
+    monkeypatch.setattr(
+        repo_goals, "save_snapshot", lambda c, strat: c.__dict__.__setitem__("snapshot", strat)
+    )
+    monkeypatch.setattr(repo, "list_scores", lambda c: [])
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
+    monkeypatch.setattr(h, "settle_deferrals", lambda c, today: (0, 0))
+    return db
+
+
+@pytest.fixture
+def tripwire_asana(monkeypatch):
+    class Created(list):
+        effects: dict
+
+    created, existing = Created(), {}
+    effects = {"section": [], "publish": [], "metric": []}
+    monkeypatch.setattr(
+        h.otel,
+        "tripwire_fired",
+        type("C", (), {"add": lambda self, n, a=None: effects["metric"].append((n, a))})(),
+    )
+    monkeypatch.setattr(asana, "find_task_by_external", lambda ext: existing.get(ext))
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: (
+            created.append(fields),
+            type("T", (), {"gid": f"new{len(created)}", "permalink_url": "u"})(),
+        )[1],
+    )
+    monkeypatch.setattr(
+        asana, "add_task_to_section", lambda gid, sec: effects["section"].append((gid, sec))
+    )
+    monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "proj")
+    monkeypatch.setattr(h.tags_service, "resolve_gids", lambda names: [f"g-{n}" for n in names])
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: effects["publish"].append((gid, source))
+    )
+    monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
+    created.effects = effects
+    return created, existing
+
+
+def test_day_changed_evaluates_fires_and_records_next_step(goals_db, tripwire_asana, monkeypatch):
+    created, _ = tripwire_asana
+    monkeypatch.setattr(st, "load", lambda **kw: _fire_strat())
+    out = h.handle_day_changed(today=TODAY)
+    assert out["goals"] == 1 and out["tripwires_fired"] == 1
+    assert created[0]["name"] == "[P1] Revisit niche"
+    assert created[0]["external"] == {"gid": "tripwire:consulting:1:2026-09-01", "data": "tasks"}
+    assert created[0]["tags"] == ["g-serves:consulting", "g-role:derisk", "g-tripwire"]
+    assert ("consulting", TODAY) in goals_db.goal_states
+    assert goals_db.next_steps == [(TODAY, {"consulting": None})]
+    fx = created.effects
+    assert fx["section"] == [("new1", "sec-review")]
+    assert fx["publish"] == [("new1", "pipeline")]
+    assert fx["metric"] == [(1, {"goal": "consulting"})]
+
+
+def test_tripwire_already_fired_yesterday_is_not_recreated(goals_db, tripwire_asana, monkeypatch):
+    created, _ = tripwire_asana
+    monkeypatch.setattr(st, "load", lambda **kw: _fire_strat())
+    yesterday = TODAY - timedelta(days=1)
+    goals_db.goal_states[("consulting", yesterday)] = GoalState(
+        "consulting",
+        "outcome",
+        yesterday,
+        "sh",
+        {"tripwires": [{"ordinal": 1, "by": "2026-09-01", "fired": True}]},
+    )
+    assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 0 and created == []
+
+
+def test_tripwire_external_id_dedupes_against_asana(goals_db, tripwire_asana, monkeypatch):
+    created, existing = tripwire_asana
+    existing["tripwire:consulting:1:2026-09-01"] = "old"
+    monkeypatch.setattr(st, "load", lambda **kw: _fire_strat())
+    assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 0 and created == []
+
+
+def test_edited_by_date_is_a_new_tripwire(goals_db, tripwire_asana, monkeypatch):
+    created, existing = tripwire_asana
+    existing["tripwire:consulting:1:2026-09-01"] = "old"
+    strat = _fire_strat()
+    g = strat.goals[0]
+    moved = Strategy(
+        goals=(replace_facts(g, tripwires=(replace_facts(g.tripwires[0], by=date(2026, 9, 15)),)),),
+        text_hash="sh2",
+    )
+    monkeypatch.setattr(st, "load", lambda **kw: moved)
+    assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 1
+    assert created[0]["external"]["gid"] == "tripwire:consulting:1:2026-09-15"
+
+
+def test_tripwire_creation_failure_raises_for_redelivery(goals_db, tripwire_asana, monkeypatch):
+    monkeypatch.setattr(st, "load", lambda **kw: _fire_strat())
+
+    def boom(fields):
+        raise RuntimeError("asana down")
+
+    monkeypatch.setattr(asana, "create_task_from_fields", boom)
+    with pytest.raises(RuntimeError):
+        h.handle_day_changed(today=TODAY)
+
+
+def test_no_strategy_day_changed_is_unchanged(goals_db, monkeypatch):
+    monkeypatch.setattr(st, "load", lambda **kw: Strategy.EMPTY)
+    out = h.handle_day_changed(today=TODAY)
+    assert out["goals"] == 0 and out["tripwires_fired"] == 0 and goals_db.goal_states == {}
+    assert goals_db.snapshot == Strategy.EMPTY  # an emptied document clears the API's view too
+
+
+def test_tripwire_notes_escape_user_text(goals_db, tripwire_asana, monkeypatch):
+    created, _ = tripwire_asana
+    strat = _fire_strat()
+    g = strat.goals[0]
+    tw = replace_facts(g.tripwires[0], subject="signed & <b>clients", op=">=", value=0)
+    monkeypatch.setattr(
+        st,
+        "load",
+        lambda **kw: Strategy(goals=(replace_facts(g, tripwires=(tw,)),), text_hash="sh"),
+    )
+    assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 1
+    notes = created[0]["html_notes"]
+    assert "&gt;=" in notes and "&amp;" in notes and "&lt;b&gt;" in notes
+    assert "<b>clients" not in notes
+
+
+def test_next_step_is_the_top_path_task_serving_the_goal(goals_db, tripwire_asana, monkeypatch):
+    strat = Strategy(
+        goals=(
+            replace_facts(_fire_strat().goals[0], tripwires=()),
+            Goal(id="finances", kind="area"),
+            Goal(id="home", kind="area"),
+        ),
+        text_hash="sh",
+    )
+    monkeypatch.setattr(st, "load", lambda **kw: strat)
+
+    def add(gid, name, tags):
+        f = _facts(gid, name=name, tags=[{"gid": t, "name": t} for t in tags])
+        goals_db.facts[gid] = f
+
+    add("a", "[P0] support work", ["serves:consulting", "role:support"])
+    add("b", "[P2] path work", ["serves:consulting", "role:path"])
+    add("c", "[P1] other goal path", ["serves:finances", "role:path"])
+    h.handle_day_changed(today=TODAY)
+    steps = goals_db.next_steps[0][1]
+    assert steps == {"consulting": "b", "finances": "c", "home": None}  # areas get next steps too
+
+
+# ---- final fix wave: strategy-hash staleness (spec D4) -------------------------
+
+
+def _heal_setup(monkeypatch, stored_strategy_hash):
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    listing = [{"gid": "t", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0}]
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing
+    )
+    monkeypatch.setattr(repo, "list_facts_index", lambda c: {"t": (old, "h")})
+    stored = {"v": stored_strategy_hash}
+    monkeypatch.setattr(repo, "list_enrichment_hashes", lambda c: {"t": ("h", stored["v"])})
+    monkeypatch.setattr(repo, "list_enrichment", lambda c: {"t": ("h", FULL_RAW)})
+    monkeypatch.setattr(repo, "list_open_gids", lambda c: {"t"})
+    published = []
+    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: published.append(gid))
+    return stored, published
+
+
+def test_heal_republishes_when_strategy_hash_moved_then_settles(db, monkeypatch):
+    stored, published = _heal_setup(monkeypatch, "old")
+    assert h.heal("new") == 1 and published == ["t"]
+    stored["v"] = "new"  # re-enrichment stored the current hash
+    assert h.heal("new") == 0 and published == ["t"]
+
+
+def test_heal_null_stored_hash_with_no_strategy_republishes_nothing(db, monkeypatch):
+    _, published = _heal_setup(monkeypatch, "")
+    assert h.heal(Strategy.EMPTY.text_hash) == 0 and published == []
+
+
+def test_rescore_flags_enrichment_stale_on_strategy_hash_mismatch(db, monkeypatch):
+    db.facts["t"] = _facts("t")
+    db.enrichment["t"] = (db.facts["t"].content_hash, {})
+    db.strategy_hashes = {"t": "old"}
+    strat = Strategy(goals=(Goal(id="consulting", kind="outcome"),), text_hash="new")
+    scored = h.rescore(db, kind="event", trigger_gid=None, today=TODAY, strategy=strat)
+    assert scored.tasks[0].components.get("enrichment_stale") is True
+    db.strategy_hashes = {"t": "new"}
+    scored = h.rescore(db, kind="event", trigger_gid=None, today=TODAY, strategy=strat)
+    assert not scored.tasks[0].components.get("enrichment_stale")
+
+
+def test_necessity_judgments_counter_fires_per_outcome(db, tag_fake, strategy, monkeypatch):
+    seen = []
+    counter = type("C", (), {"add": lambda self, n, a=None: seen.append((n, a))})()
+    monkeypatch.setattr(h.otel, "necessity_judgments", counter)
+    _model_returning(monkeypatch, SERVES_HIGH)
+    h.handle_task_changed("t1", today=TODAY)
+    assert seen == [(1, {"confidence": "high", "outcome": "attached"})]
+
+
+def _judged(monkeypatch, db, payload):
+    seen = []
+    counter = type("C", (), {"add": lambda self, n, a=None: seen.append((n, a))})()
+    monkeypatch.setattr(h.otel, "necessity_judgments", counter)
+    _model_returning(monkeypatch, payload)
+    h.handle_task_changed("t1", today=TODAY)
+    return seen
+
+
+def test_necessity_judgments_counts_none_and_grooming(db, tag_fake, strategy, monkeypatch):
+    seen = _judged(monkeypatch, db, SERVES_HIGH | {"serves": [], "necessity_confidence": "medium"})
+    assert seen == [(1, {"confidence": "medium", "outcome": "none"})]
+
+
+def test_necessity_judgments_counts_grooming(db, tag_fake, strategy, monkeypatch):
+    seen = _judged(monkeypatch, db, SERVES_HIGH | {"serves": [], "necessity_confidence": "low"})
+    assert seen == [(1, {"confidence": "low", "outcome": "grooming"})]
 
 
 def test_stored_enrichment_without_waiting_confidence_reads_as_medium():

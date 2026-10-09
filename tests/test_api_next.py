@@ -190,6 +190,12 @@ def test_overrides_rejects_malformed_date_and_serialises_valid_ones(monkeypatch)
 
 
 def test_calibrate_aggregates_per_project(monkeypatch):
+    from repo import suppressions as repo_sup
+    from repo import tasks as repo_tasks
+
+    monkeypatch.setattr(repo, "necessity_rows", lambda c: [])
+    monkeypatch.setattr(repo_tasks, "necessity_rows", lambda c: [])
+    monkeypatch.setattr(repo_sup, "restore_rates", lambda c, settle: [])
     monkeypatch.setattr(
         repo,
         "calibration_rows",
@@ -251,6 +257,29 @@ def test_next_reselection_honours_must_do_and_starvation(monkeypatch):
     assert [t["task_gid"] for t in body["next"]] == ["must", "starved"]
     one = client.post("/next", headers=AUTH, json={"n": 1}).json()["next"]
     assert [t["task_gid"] for t in one] == ["must"]
+
+
+def test_calibrate_has_necessity_section(monkeypatch):
+    monkeypatch.setattr(repo, "calibration_rows", lambda c: [])
+    monkeypatch.setattr(repo, "necessity_rows", lambda c: [])
+    from repo import suppressions as repo_sup
+    from repo import tasks as repo_tasks
+
+    monkeypatch.setattr(repo_tasks, "necessity_rows", lambda c: [])
+    monkeypatch.setattr(repo_sup, "restore_rates", lambda c, settle: [])
+    body = client.get("/calibrate", headers=AUTH).json()
+    assert body["necessity"] == {
+        "by_confidence": {},
+        "by_source": {},
+        "by_strategy": {},
+        "grooming": {"attached": 0, "unresolved": 0},
+        "suppressions": {},
+        "gate2_vs_enrichment": {"judged": 0, "agreed": 0, "rate": None},
+    }
+
+
+def test_ranking_accepts_the_stop_doing_bucket():
+    assert client.get("/ranking?bucket=stop_doing", headers=AUTH).status_code == 200
 
 
 def test_empty_waiting_on_override_is_stored_not_cleared(monkeypatch):

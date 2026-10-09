@@ -11,12 +11,15 @@ import clients.pubsub as pubsub
 from clients.db import get_conn
 from models.prioritize import ScoredSet, ScoredTask
 from repo import prioritize as repo
+from repo import suppressions as repo_sup
+from repo import tasks as repo_tasks
 from services import prioritize as pz
 from services import prioritize_config
+from services import review as review_service
 
 router = APIRouter()
 
-BUCKETS = ("next", "nudge", "snoozed", "excluded")
+BUCKETS = ("next", "nudge", "snoozed", "excluded", "stop_doing")
 LISTS = ("overcommitted", "stale", "nudge")
 OVERRIDE_FIELDS = {
     "waiting_on",
@@ -259,8 +262,11 @@ def put_overrides(gid: str, body: OverridesRequest) -> dict:
 
 @router.get("/calibrate")
 def calibrate() -> dict:
+    cfg = prioritize_config.load()
     with get_conn() as conn:
         rows = repo.calibration_rows(conn)
+        nrows = repo.necessity_rows(conn) + repo_tasks.necessity_rows(conn)
+        rates = repo_sup.restore_rates(conn, cfg.suppression_settle_days)
     groups: dict[str, list[dict]] = {}
     for r in rows:
         groups.setdefault(r["project_name"] or "—", []).append(r)
@@ -291,4 +297,5 @@ def calibrate() -> dict:
     return {
         "projects": [{"project": name, **summarise(rs)} for name, rs in sorted(groups.items())],
         "overall": summarise(rows),
+        "necessity": review_service.necessity_calibration(nrows, rates),
     }

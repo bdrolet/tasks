@@ -1,16 +1,18 @@
 import logging
+from typing import Any
 
 import clients.asana as asana
 import clients.otel as otel
 import clients.pubsub as pubsub
 from clients.db import get_conn
-from models.events import Decision, EmailClassifiedEvent, Screening
+from models.events import CreatedTask, Decision, EmailClassifiedEvent, Screening
 from repo import suppressions as repo_suppressions
 from repo import tasks as repo_tasks
 from services import (
     deadline,
     email_summary,
     policy,
+    prioritize_config,
     relating,
     screening,
     sections,
@@ -20,6 +22,8 @@ from services import (
     task_index,
     triage,
 )
+from services import strategy as strategy_service
+from services.prioritize import ROLE_RANK
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,7 @@ def _suppress(
     related_task_gid: str | None,
     evidence: list,
     resolves: bool = False,
+    web_link: str | None = None,
 ) -> None:
     """Gate-2 outcome: no task. Optionally attach the email to a related task
     as a comment, then record. Every step is best-effort — the decision was
@@ -102,6 +107,7 @@ def _suppress(
                 source=source,
                 related_task_gid=related_task_gid,
                 evidence=evidence,
+                web_link=web_link or event.get("web_link"),
             )
     except Exception:
         logger.exception("suppressed_emails insert failed message_id=%s", event["message_id"])
@@ -123,6 +129,23 @@ def _suppress(
         event["message_id"],
         reason,
     )
+
+
+def necessity_outcome(decision: Decision, mode: str, has_strategy: bool) -> tuple[str, list[str]]:
+    """Spec D14's table. ("tag", names) creates with serves/role tags;
+    ("create", []) creates untagged and lets enrichment judge; ("suppress",
+    []) records a necessity suppression and creates nothing."""
+    if not has_strategy:
+        return "create", []
+    conf = decision.necessity_confidence
+    if decision.serves:
+        if conf in ("medium", "high"):
+            role = max((s["role"] for s in decision.serves), key=lambda r: ROLE_RANK[r])
+            return "tag", [f"serves:{s['goal']}" for s in decision.serves] + [f"role:{role}"]
+        return "create", []
+    if conf == "high" or (conf == "medium" and mode == "suppress"):
+        return "suppress", []
+    return "create", []
 
 
 def handle(event: EmailClassifiedEvent) -> None:
@@ -165,12 +188,67 @@ def handle(event: EmailClassifiedEvent) -> None:
         )
         return
 
+    # Strategy layer is best-effort: any failure behaves as "no strategy"
+    # (spec D13/D14 fail-open) — it must never crash the pipeline.
+    has_strategy = False
+    try:
+        strategy = strategy_service.load()
+        mode = prioritize_config.load().necessity_mode
+        has_strategy = bool(strategy.goals)
+        outcome, tag_names = necessity_outcome(decision, mode, has_strategy)
+    except Exception:
+        logger.exception(
+            "strategy layer failed — creating without it message_id=%s", event["message_id"]
+        )
+        outcome, tag_names = "create", []
+    if outcome == "suppress":
+        _suppress(
+            event,
+            reason=decision.necessity_reason or "serves no goal or area",
+            source="necessity",
+            related_task_gid=None,
+            evidence=[
+                {
+                    "kind": "strategy",
+                    "ref": "Strategy",
+                    "note": decision.necessity_reason,
+                    "necessity_confidence": decision.necessity_confidence,
+                }
+            ],
+        )
+        return
+    # Spec D10/D14: with a strategy loaded, every create records what gate 2
+    # judged, so calibration can compare it with enrichment's later draft.
+    draft: dict[str, Any] | None = None
+    if has_strategy:
+        if outcome == "tag":
+            draft = {
+                "serves": [s["goal"] for s in decision.serves],
+                "role": tag_names[-1].partition(":")[2],
+                "confidence": decision.necessity_confidence,
+            }
+        elif not decision.serves and decision.necessity_confidence == "medium":
+            draft = {"none": True, "confidence": "medium"}
+        else:
+            draft = {"grooming": True}
+    create_from_event(event, verdict, extra_tags=tag_names, serves_estimated=draft)
+
+
+def create_from_event(
+    event: EmailClassifiedEvent,
+    verdict: Screening,
+    *,
+    extra_tags: list[str] | None = None,
+    serves_estimated: dict | None = None,
+) -> CreatedTask | None:
+    """Everything after the gates: summary, deadline, tags, create, record,
+    section, index, publish. Also the restore path's entry point (D14)."""
     # Enrichment: generated summary first, invite seeds from inbox appended.
     summary = email_summary.generate(event)
     phrase = policy.no_action_phrase(summary.key_points)
     if phrase:
         _suppress(event, reason=phrase, source="phrase", related_task_gid=None, evidence=[])
-        return
+        return None
     key_points = summary.key_points + (event.get("seed_key_points") or [])
     relevant_links = summary.relevant_links + (event.get("seed_links") or [])
 
@@ -182,7 +260,10 @@ def handle(event: EmailClassifiedEvent) -> None:
             logger.exception("Deadline extraction failed for message_id=%s", event["message_id"])
 
     tag_gids = tags.resolve_gids(
-        shared_tags.for_event(event, verdict, addresses=shared_tags.addresses_from_env())
+        [
+            *shared_tags.for_event(event, verdict, addresses=shared_tags.addresses_from_env()),
+            *(extra_tags or []),
+        ]
     )
     html_notes = task_content.render_html_notes(
         task_content.for_email(event, key_points, relevant_links)
@@ -202,7 +283,7 @@ def handle(event: EmailClassifiedEvent) -> None:
         logger.info(
             "Task not created (unconfigured or duplicate) — message_id=%s", event["message_id"]
         )
-        return
+        return None
 
     otel.tasks_created.add(
         1,
@@ -221,6 +302,7 @@ def handle(event: EmailClassifiedEvent) -> None:
                 message_id=event["message_id"],
                 category=event["category"],
                 importance=verdict.priority,
+                serves_estimated=serves_estimated,
             )
     except Exception:
         # The Asana task already exists — a DB hiccup must not crash the event
@@ -244,3 +326,4 @@ def handle(event: EmailClassifiedEvent) -> None:
         section_gid,
         event["message_id"],
     )
+    return task
