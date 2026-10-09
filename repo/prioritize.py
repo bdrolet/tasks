@@ -11,7 +11,8 @@ from models.prioritize import Overrides, ScoredSet, Stats, TaskFacts
 _FACT_COLS = (
     "task_gid, project_gid, project_name, parent_gid, name, permalink_url, priority, due_on, "
     "due_at, start_on, started_at, story_points, points_estimated, completed, completed_at, "
-    "created_at, modified_at, tags, dependencies, dependents, num_open_subtasks, content_hash"
+    "created_at, modified_at, tags, dependencies, dependents, num_open_subtasks, content_hash, "
+    "serves_estimated"
 )
 
 
@@ -34,7 +35,7 @@ def upsert_facts(conn: Any, f: TaskFacts) -> None:
     conn.execute(
         f"""
         INSERT INTO task_facts ({_FACT_COLS}, fetched_at)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
         ON CONFLICT (task_gid) DO UPDATE SET
             project_gid = EXCLUDED.project_gid, project_name = EXCLUDED.project_name,
             parent_gid = EXCLUDED.parent_gid, name = EXCLUDED.name,
@@ -70,9 +71,11 @@ def upsert_facts(conn: Any, f: TaskFacts) -> None:
             json.dumps(list(f.dependents)),
             f.num_open_subtasks,
             f.content_hash,
+            json.dumps(f.serves_estimated) if f.serves_estimated is not None else None,
         ),
     )
     # points_estimated is deliberately NOT in the UPDATE SET: only claim_estimate writes it.
+    # serves_estimated likewise: only claim_serves writes it (spec D5).
 
 
 def _row_to_facts(r: dict) -> TaskFacts:
@@ -99,6 +102,7 @@ def _row_to_facts(r: dict) -> TaskFacts:
         dependents=tuple(_as_json(r["dependents"], [])),
         num_open_subtasks=int(r["num_open_subtasks"] or 0),
         content_hash=r["content_hash"],
+        serves_estimated=_as_json(r["serves_estimated"], None),
     )
 
 
@@ -141,16 +145,18 @@ def get_enrichment(conn: Any, gid: str) -> tuple[str, dict] | None:
     return (row["content_hash"], _as_json(row["raw"], {})) if row else None
 
 
-def upsert_enrichment(conn: Any, gid: str, content_hash: str, raw: dict, model: str) -> None:
+def upsert_enrichment(
+    conn: Any, gid: str, content_hash: str, raw: dict, model: str, strategy_hash: str = ""
+) -> None:
     conn.execute(
         """
-        INSERT INTO task_enrichment (task_gid, content_hash, raw, model, created_at)
-        VALUES (%s, %s, %s, %s, now())
+        INSERT INTO task_enrichment (task_gid, content_hash, raw, model, strategy_hash, created_at)
+        VALUES (%s, %s, %s, %s, %s, now())
         ON CONFLICT (task_gid) DO UPDATE SET
             content_hash = EXCLUDED.content_hash, raw = EXCLUDED.raw,
-            model = EXCLUDED.model, created_at = now()
+            model = EXCLUDED.model, strategy_hash = EXCLUDED.strategy_hash, created_at = now()
         """,
-        (gid, content_hash, json.dumps(raw), model),
+        (gid, content_hash, json.dumps(raw), model, strategy_hash),
     )
 
 
@@ -275,6 +281,36 @@ def set_story_points(conn: Any, gid: str, points: int) -> None:
         "UPDATE task_facts SET story_points = %s, fetched_at = now() WHERE task_gid = %s",
         (points, gid),
     )
+
+
+def claim_serves(conn: Any, gid: str, payload: dict) -> bool:
+    """Spec D5: the conditional claim whose rowcount decides who writes."""
+    cur = conn.execute(
+        "UPDATE task_facts SET serves_estimated = %s WHERE task_gid = %s AND serves_estimated IS NULL",
+        (json.dumps(payload), gid),
+    )
+    return cur.rowcount == 1
+
+
+def set_tags(conn: Any, gid: str, tags: list[str]) -> None:
+    """Record tags just written to Asana (same rationale as set_story_points)."""
+    conn.execute(
+        "UPDATE task_facts SET tags = %s, fetched_at = now() WHERE task_gid = %s",
+        (json.dumps(tags), gid),
+    )
+
+
+def necessity_rows(conn: Any) -> list[dict]:
+    return conn.execute(
+        """
+        SELECT f.task_gid, f.serves_estimated, f.tags, o.overrides, e.strategy_hash,
+               'enrichment' AS source
+        FROM task_facts f
+        LEFT JOIN task_overrides o USING (task_gid)
+        LEFT JOIN task_enrichment e USING (task_gid)
+        WHERE f.serves_estimated IS NOT NULL
+        """
+    ).fetchall()
 
 
 # ---- task_scores ---------------------------------------------------------

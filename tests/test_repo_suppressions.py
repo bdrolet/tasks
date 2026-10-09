@@ -48,3 +48,26 @@ def test_insert_writes_all_columns_and_is_idempotent():
     assert json.loads(params[8]) == [
         {"kind": "email", "ref": "m0", "note": "Thanks for your payment"}
     ]
+
+
+def test_insert_stores_web_link():
+    conn = FakeConn()
+    suppressions.insert(conn, message_id="m", category="c", importance="P2", subject="s", sender="x",
+                        reason="r", source="necessity", related_task_gid=None, evidence=[],
+                        web_link="https://x")
+    q, p = conn.executed[0]
+    assert "web_link" in q and p[-1] == "https://x"
+
+
+def test_insert_web_link_defaults_to_null():
+    conn = FakeConn()
+    suppressions.insert(conn, message_id="m", category="c", importance="P2", subject="s", sender="x",
+                        reason="r", source="agent", related_task_gid=None, evidence=[])
+    assert conn.executed[0][1][-1] is None
+
+
+def test_mark_restored_is_conditional():
+    conn = FakeConn()
+    assert suppressions.mark_restored(conn, "m", "t9") is True
+    q, p = conn.executed[0]
+    assert "restored_at IS NULL" in q and p == ("t9", "m")
