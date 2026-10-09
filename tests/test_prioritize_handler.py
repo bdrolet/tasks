@@ -108,9 +108,20 @@ def db(monkeypatch):
     monkeypatch.setattr(
         repo,
         "upsert_enrichment",
-        lambda c, gid, hsh, raw, model, strategy_hash="": c.enrichment.__setitem__(gid, (hsh, raw)),
+        lambda c, gid, hsh, raw, model, strategy_hash="": (
+            c.enrichment.__setitem__(gid, (hsh, raw)),
+            c.__dict__.setdefault("strategy_hashes", {}).__setitem__(gid, strategy_hash),
+        ),
     )
     monkeypatch.setattr(repo, "list_enrichment", lambda c: dict(c.enrichment))
+    monkeypatch.setattr(
+        repo,
+        "list_enrichment_hashes",
+        lambda c: {
+            g: (hsh, c.__dict__.get("strategy_hashes", {}).get(g) or "")
+            for g, (hsh, _) in c.enrichment.items()
+        },
+    )
     monkeypatch.setattr(repo, "list_overrides", lambda c: dict(c.overrides))
     monkeypatch.setattr(repo, "list_stats", lambda c: dict(c.stats))
 
@@ -408,7 +419,7 @@ def _facts(gid, **kw):
 
 def test_day_changed_first_run_has_nothing_to_defer(db, monkeypatch):
     monkeypatch.setattr(repo, "last_daily_run", lambda c: None)
-    monkeypatch.setattr(h, "heal", lambda: 0)
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
     out = h.handle_day_changed(today=TODAY)
@@ -434,7 +445,7 @@ def test_day_changed_bumps_unstarted_offers_and_marks_started(db, monkeypatch):
     monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: tops.append((rid, top)))
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
-    monkeypatch.setattr(h, "heal", lambda: 0)
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     out = h.handle_day_changed(today=TODAY)
     assert bumped == ["a"] and out == {"deferred": 1, "started": 2, "healed": 0, "goals": 0, "tripwires_fired": 0}
     assert [t["started"] for t in tops[0][1]] == [False, True, True]
@@ -473,14 +484,14 @@ def test_heal_republishes_newer_missing_and_stale_enrichment(db, monkeypatch):
     )
     monkeypatch.setattr(
         repo,
-        "list_enrichment",
+        "list_enrichment_hashes",
         lambda c: {
-            "fresh": ("h1", {}),
-            "newer": ("h2", {}),
-            "stale-enrich": ("OLD", {}),
-            "parent": ("h4", {}),
-            "child": ("h5", {}),
-            "vanished": ("h6", {}),
+            "fresh": ("h1", ""),
+            "newer": ("h2", ""),
+            "stale-enrich": ("OLD", ""),
+            "parent": ("h4", ""),
+            "child": ("h5", ""),
+            "vanished": ("h6", ""),
         },
     )
     monkeypatch.setattr(
@@ -584,7 +595,7 @@ def test_in_progress_task_started_before_the_offer_is_not_deferred(db, monkeypat
     monkeypatch.setattr(repo, "set_run_top", lambda c, rid, top: None)
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
-    monkeypatch.setattr(h, "heal", lambda: 0)
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     assert h.handle_day_changed(today=TODAY) == {"deferred": 0, "started": 1, "healed": 0, "goals": 0, "tripwires_fired": 0}
     assert bumped == []
 
@@ -735,7 +746,7 @@ def test_heal_republishes_a_modified_grandchild(db, monkeypatch):
     index = {g: (old, f"h-{g}") for g in ("top", "child", "grandchild")}
     monkeypatch.setattr(repo, "list_facts_index", lambda c: index)
     monkeypatch.setattr(
-        repo, "list_enrichment", lambda c: {g: (hsh, {}) for g, (_, hsh) in index.items()}
+        repo, "list_enrichment_hashes", lambda c: {g: (hsh, "") for g, (_, hsh) in index.items()}
     )
     monkeypatch.setattr(repo, "list_open_gids", lambda c: set(index))
     published = []
@@ -1034,7 +1045,7 @@ def goals_db(monkeypatch, db):
     monkeypatch.setattr(repo_goals, "set_next_steps", lambda c, day, steps: c.next_steps.append((day, steps)))
     monkeypatch.setattr(repo_goals, "save_snapshot", lambda c, strat: c.__dict__.__setitem__("snapshot", strat))
     monkeypatch.setattr(repo, "list_scores", lambda c: [])
-    monkeypatch.setattr(h, "heal", lambda: 0)
+    monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     monkeypatch.setattr(h, "settle_deferrals", lambda c, today: (0, 0))
     return db
 
@@ -1146,3 +1157,44 @@ def test_next_step_is_the_top_path_task_serving_the_goal(goals_db, tripwire_asan
     h.handle_day_changed(today=TODAY)
     steps = goals_db.next_steps[0][1]
     assert steps["consulting"] == "b" and steps["finances"] == "c"
+
+
+# ---- final fix wave: strategy-hash staleness (spec D4) -------------------------
+
+
+def _heal_setup(monkeypatch, stored_strategy_hash):
+    monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    listing = [{"gid": "t", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0}]
+    monkeypatch.setattr(asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing)
+    monkeypatch.setattr(repo, "list_facts_index", lambda c: {"t": (old, "h")})
+    stored = {"v": stored_strategy_hash}
+    monkeypatch.setattr(repo, "list_enrichment_hashes", lambda c: {"t": ("h", stored["v"])})
+    monkeypatch.setattr(repo, "list_open_gids", lambda c: {"t"})
+    published = []
+    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: published.append(gid))
+    return stored, published
+
+
+def test_heal_republishes_when_strategy_hash_moved_then_settles(db, monkeypatch):
+    stored, published = _heal_setup(monkeypatch, "old")
+    assert h.heal("new") == 1 and published == ["t"]
+    stored["v"] = "new"  # re-enrichment stored the current hash
+    assert h.heal("new") == 0 and published == ["t"]
+
+
+def test_heal_null_stored_hash_with_no_strategy_republishes_nothing(db, monkeypatch):
+    _, published = _heal_setup(monkeypatch, "")
+    assert h.heal(Strategy.EMPTY.text_hash) == 0 and published == []
+
+
+def test_rescore_flags_enrichment_stale_on_strategy_hash_mismatch(db, monkeypatch):
+    db.facts["t"] = _facts("t")
+    db.enrichment["t"] = (db.facts["t"].content_hash, {})
+    db.strategy_hashes = {"t": "old"}
+    strat = Strategy(goals=(Goal(id="consulting", kind="outcome"),), text_hash="new")
+    scored = h.rescore(db, kind="event", trigger_gid=None, today=TODAY, strategy=strat)
+    assert scored.tasks[0].components.get("enrichment_stale") is True
+    db.strategy_hashes = {"t": "new"}
+    scored = h.rescore(db, kind="event", trigger_gid=None, today=TODAY, strategy=strat)
+    assert not scored.tasks[0].components.get("enrichment_stale")

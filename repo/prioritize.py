@@ -165,6 +165,14 @@ def list_enrichment(conn: Any) -> dict[str, tuple[str, dict]]:
     return {r["task_gid"]: (r["content_hash"], _as_json(r["raw"], {})) for r in rows}
 
 
+def list_enrichment_hashes(conn: Any) -> dict[str, tuple[str, str]]:
+    """gid -> (content_hash, strategy_hash); a pre-migration NULL reads as ""."""
+    rows = conn.execute(
+        "SELECT task_gid, content_hash, strategy_hash FROM task_enrichment"
+    ).fetchall()
+    return {r["task_gid"]: (r["content_hash"], r["strategy_hash"] or "") for r in rows}
+
+
 # ---- task_overrides ------------------------------------------------------
 
 _COLUMN_OVERRIDES = ("pinned_rank", "snooze_until")

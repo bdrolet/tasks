@@ -407,9 +407,14 @@ def rescore(
         below_the_line=below,
     )
     current = {f.gid: f.content_hash for f in facts}
-    stored = {gid: hsh for gid, (hsh, _) in repo.list_enrichment(conn).items()}
+    stored = repo.list_enrichment_hashes(conn)
     for t in scored.tasks:
-        if stored.get(t.gid) != current.get(t.gid):
+        hashes = stored.get(t.gid)
+        if (
+            hashes is None
+            or hashes[0] != current.get(t.gid)
+            or hashes[1] != strategy.text_hash
+        ):
             t.components["enrichment_stale"] = True
     repo.replace_scores(conn, scored)
     top = [
@@ -585,14 +590,14 @@ def _open_descendants(task: dict, level: int) -> list[dict]:
     return found
 
 
-def heal() -> int:
+def heal(current_strategy_hash: str = "") -> int:
     """Spec D8 step 2: republish anything Asana knows that we do not, and
     anything we still hold open that Asana's open-task listing no longer
     mentions — a completion or deletion whose event was lost. Reads in its
     own short transaction, then lists and publishes outside any."""
     with get_conn() as conn:
         index = repo.list_facts_index(conn)
-        enrichment = repo.list_enrichment(conn)
+        enrichment = repo.list_enrichment_hashes(conn)
         open_gids = repo.list_open_gids(conn)
 
     def needs(gid: str, modified_at: str | None) -> bool:
@@ -603,7 +608,11 @@ def heal() -> int:
         if modified and modified > fetched_at:
             return True
         stored = enrichment.get(gid)
-        return stored is None or stored[0] != content_hash
+        return (
+            stored is None
+            or stored[0] != content_hash
+            or stored[1] != current_strategy_hash  # spec D4: a strategy edit re-judges
+        )
 
     republished = 0
     seen: set[str] = set()
@@ -687,7 +696,7 @@ def handle_day_changed(*, today: date | None = None) -> dict:
     strategy = strategy_service.load(stale_after_days=config.strategy_stale_after_days, today=today)
     with get_conn() as conn:
         deferred, started = settle_deferrals(conn, today)
-    healed = heal()
+    healed = heal(strategy.text_hash)
     with get_conn() as conn:
         previous = repo_goals.get_states(conn, today - timedelta(days=1))
         states = evaluate_goals(conn, strategy, today)
