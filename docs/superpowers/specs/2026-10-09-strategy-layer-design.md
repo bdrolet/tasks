@@ -265,10 +265,11 @@ number in this spec; the point is that the number exists before the trust
 does.
 
 **Weights.** `[weights]` gains `necessity`; the block still sums to 1.0. The
-initial values rebalance to `priority 0.20, urgency 0.25, impact 0.10,
-unblock 0.10, aging 0.05, category 0.10, necessity 0.20`. In `flag` mode
-the scorer renormalises the remaining weights so today's ranking is
-reproduced exactly.
+initial values are exactly today's six weights × 0.8 plus `necessity 0.20`:
+`priority 0.20, urgency 0.24, impact 0.12, unblock 0.08, aging 0.04,
+category 0.12, necessity 0.20`. In `flag` mode the scorer divides the six
+by `1 - necessity` and drops the term, which recovers today's weights to
+the digit, so today's ranking is reproduced exactly.
 
 **Goal horizon as soft due date.** For a task whose effective role is
 `path` or `derisk` on an outcome goal with a `horizon`, and which has no
@@ -639,12 +640,12 @@ CREATE TABLE IF NOT EXISTS goal_state (
 
 ```toml
 [weights]                     # sum to 1.0
-priority = 0.20
-urgency = 0.25
-impact = 0.10
-unblock = 0.10
-aging = 0.05
-category = 0.10
+priority = 0.20               # each of the six is today's value × 0.8 (flag mode divides back)
+urgency = 0.24
+impact = 0.12
+unblock = 0.08
+aging = 0.04
+category = 0.12
 necessity = 0.20
 
 [necessity]
