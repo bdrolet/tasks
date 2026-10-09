@@ -133,6 +133,25 @@ def necessity_calibration(rows: list[dict], restore_rates: list[dict]) -> dict:
         bump(by_source, r.get("source") or "enrichment", agreed)
         if r.get("strategy_hash"):
             bump(by_strategy, r["strategy_hash"], agreed)
+    gate2: dict[str, dict] = {}
+    enrich: dict[str, dict] = {}
+    for r in rows:
+        est = r.get("serves_estimated") or {}
+        if est.get("grooming"):
+            continue
+        origin = r.get("source") or "enrichment"
+        if origin == "gate2":
+            gate2[r["task_gid"]] = est
+        elif origin == "enrichment":
+            enrich[r["task_gid"]] = est
+    g2 = {"judged": 0, "agreed": 0}
+    for gid in gate2.keys() & enrich.keys():
+        a, b = gate2[gid], enrich[gid]
+        g2["judged"] += 1
+        same_serves = sorted(a.get("serves") or []) == sorted(b.get("serves") or [])
+        same_role = (a.get("none") and b.get("none")) or a.get("role") == b.get("role")
+        g2["agreed"] += int(bool(same_serves and same_role))
+    g2["rate"] = g2["agreed"] / g2["judged"] if g2["judged"] else None
     for bucket in (by_conf, by_source, by_strategy):
         for b in bucket.values():
             b["rate"] = b["agreed"] / b["judged"] if b["judged"] else None
@@ -141,4 +160,5 @@ def necessity_calibration(rows: list[dict], restore_rates: list[dict]) -> dict:
         decided = int(r["restored"]) + int(r["settled"])
         sup[r["band"]] = {"restored": int(r["restored"]), "settled": int(r["settled"]), "pending": int(r["pending"]),
                           "restore_rate": (int(r["restored"]) / decided) if decided else None}
-    return {"by_confidence": by_conf, "by_source": by_source, "by_strategy": by_strategy, "grooming": grooming, "suppressions": sup}
+    return {"by_confidence": by_conf, "by_source": by_source, "by_strategy": by_strategy, "grooming": grooming, "suppressions": sup,
+            "gate2_vs_enrichment": g2}

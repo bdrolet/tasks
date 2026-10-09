@@ -266,4 +266,4 @@ def test_calibrate_has_necessity_section(monkeypatch):
     monkeypatch.setattr(repo_tasks, "necessity_rows", lambda c: [])
     monkeypatch.setattr(repo_sup, "restore_rates", lambda c, settle: [])
     body = client.get("/calibrate", headers=AUTH).json()
-    assert body["necessity"] == {"by_confidence": {}, "by_source": {}, "by_strategy": {}, "grooming": {"attached": 0, "unresolved": 0}, "suppressions": {}}
+    assert body["necessity"] == {"by_confidence": {}, "by_source": {}, "by_strategy": {}, "grooming": {"attached": 0, "unresolved": 0}, "suppressions": {}, "gate2_vs_enrichment": {"judged": 0, "agreed": 0, "rate": None}}

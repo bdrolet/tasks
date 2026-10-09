@@ -778,3 +778,33 @@ def test_create_from_event_returns_task_with_extra_tags(monkeypatch):
     )
     assert task is not None and task.gid == "42"
     assert "serves:x" in seen["names"] and inserts[0]["serves_estimated"] == {"serves": ["x"]}
+
+
+def _draft_for(monkeypatch, decision, mode="flag", strategy_on=True):
+    _strategy_on(monkeypatch, on=strategy_on)
+    _mode(monkeypatch, mode)
+    _stub_triage(monkeypatch, decision)
+    _stub_enrichment(monkeypatch)
+    inserts = _stub_db(monkeypatch)
+    monkeypatch.setattr(tags, "resolve_gids", lambda names: [])
+    monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
+    _capture_create(monkeypatch)
+    task_create.handle(make_email_event())
+    return inserts[0]["serves_estimated"]
+
+
+def test_medium_confidence_none_records_a_none_draft(monkeypatch):
+    d = Decision(serves=[], necessity_confidence="medium")
+    assert _draft_for(monkeypatch, d) == {"none": True, "confidence": "medium"}
+
+
+def test_low_confidence_cases_record_a_grooming_draft(monkeypatch):
+    d = Decision(serves=[], necessity_confidence="low")
+    assert _draft_for(monkeypatch, d) == {"grooming": True}
+    low = Decision(**(HIGH | {"necessity_confidence": "low"}))
+    assert _draft_for(monkeypatch, low) == {"grooming": True}
+
+
+def test_no_strategy_records_no_draft(monkeypatch):
+    d = Decision(serves=[], necessity_confidence="low")
+    assert _draft_for(monkeypatch, d, strategy_on=False) is None

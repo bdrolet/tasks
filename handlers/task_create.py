@@ -189,10 +189,12 @@ def handle(event: EmailClassifiedEvent) -> None:
 
     # Strategy layer is best-effort: any failure behaves as "no strategy"
     # (spec D13/D14 fail-open) — it must never crash the pipeline.
+    has_strategy = False
     try:
         strategy = strategy_service.load()
         mode = prioritize_config.load().necessity_mode
-        outcome, tag_names = necessity_outcome(decision, mode, bool(strategy.goals))
+        has_strategy = bool(strategy.goals)
+        outcome, tag_names = necessity_outcome(decision, mode, has_strategy)
     except Exception:
         logger.exception(
             "strategy layer failed — creating without it message_id=%s", event["message_id"]
@@ -214,13 +216,20 @@ def handle(event: EmailClassifiedEvent) -> None:
             ],
         )
         return
+    # Spec D10/D14: with a strategy loaded, every create records what gate 2
+    # judged, so calibration can compare it with enrichment's later draft.
     draft = None
-    if outcome == "tag":
-        draft = {
-            "serves": [s["goal"] for s in decision.serves],
-            "role": tag_names[-1].partition(":")[2],
-            "confidence": decision.necessity_confidence,
-        }
+    if has_strategy:
+        if outcome == "tag":
+            draft = {
+                "serves": [s["goal"] for s in decision.serves],
+                "role": tag_names[-1].partition(":")[2],
+                "confidence": decision.necessity_confidence,
+            }
+        elif not decision.serves and decision.necessity_confidence == "medium":
+            draft = {"none": True, "confidence": "medium"}
+        else:
+            draft = {"grooming": True}
     create_from_event(event, verdict, extra_tags=tag_names, serves_estimated=draft)
 
 

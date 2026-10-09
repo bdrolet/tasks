@@ -96,3 +96,22 @@ def test_necessity_calibration_groups_by_band_and_source():
     assert c["by_source"]["gate2"] == {"judged": 1, "agreed": 1, "rate": 1.0}
     assert c["grooming"] == {"attached": 1, "unresolved": 1}
     assert c["suppressions"]["high"] == {"restored": 1, "settled": 3, "pending": 2, "restore_rate": 0.25}
+
+
+def test_gate2_vs_enrichment_agreement():
+    def row(gid, source, est):
+        return {"task_gid": gid, "serves_estimated": est, "tags": [], "overrides": None, "source": source}
+
+    path = {"serves": ["a", "b"], "role": "path", "confidence": "high"}
+    rows = [
+        row("agree", "gate2", path),
+        row("agree", "enrichment", path | {"serves": ["b", "a"]}),
+        row("differ", "gate2", path),
+        row("differ", "enrichment", {"serves": ["a"], "role": "path", "confidence": "high"}),
+        row("groom", "gate2", {"grooming": True}),
+        row("groom", "enrichment", path),
+        row("solo", "gate2", path),
+    ]
+    c = review.necessity_calibration(rows, [])
+    assert c["gate2_vs_enrichment"] == {"judged": 2, "agreed": 1, "rate": 0.5}
+    assert review.necessity_calibration([], [])["gate2_vs_enrichment"] == {"judged": 0, "agreed": 0, "rate": None}
