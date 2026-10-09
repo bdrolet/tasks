@@ -232,3 +232,64 @@ def test_block_resolves_both_refs(api):
     tn.main(["block", ref_a, ref_c])
     writes = [c for c in api if c[0] == "PATCH"]
     assert writes == [("PATCH", "/tasks/a", {"add_dependencies": ["c"]}, None)]
+
+
+def test_review_renders_goals_and_lists(monkeypatch, capsys):
+    payload = {
+        "reviewed_at": "2026-10-12",
+        "strategy_last_reviewed": "2026-10-01",
+        "findings": ["f1"],
+        "goals": [
+            {
+                "id": "consulting",
+                "kind": "outcome",
+                "next_step": {"gid": "1234567", "name": "[P1] Write offer", "permalink_url": "u"},
+                "stalled": False,
+                "leads": [
+                    {
+                        "tag": "conversation",
+                        "window": "week",
+                        "value": 1,
+                        "threshold": 3,
+                        "met": False,
+                    }
+                ],
+                "lag": None,
+                "tripwires": [],
+                "diagnosis": "insufficient data",
+            },
+            {
+                "id": "finances",
+                "kind": "area",
+                "below_the_line": True,
+                "muted_until": None,
+                "signals": [],
+                "next_step": None,
+                "stalled": True,
+            },
+        ],
+        "grooming": [],
+        "stop_doing": {"tasks": [], "suppressed_emails": []},
+    }
+    monkeypatch.setattr(tn, "_api", lambda method, path, body=None, params=None: payload)
+    assert tn.main(["review"]) == 0
+    out = capsys.readouterr().out
+    assert "consulting" in out and "Write offer" in out and "f1" in out
+    assert "below the line" in out.lower()
+
+
+def test_report_and_mute_post(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        tn,
+        "_api",
+        lambda method, path, body=None, params=None: (calls.append((method, path, body)), {})[1],
+    )
+    assert tn.main(["report", "consulting", "4200", "--period-start", "2026-10-01"]) == 0
+    assert tn.main(["mute", "finances", "2026-10-20"]) == 0
+    assert tn.main(["mute", "finances", "clear"]) == 0
+    assert calls == [
+        ("POST", "/goals/consulting/reports", {"value": 4200.0, "period_start": "2026-10-01"}),
+        ("POST", "/goals/finances/mute", {"until": "2026-10-20"}),
+        ("POST", "/goals/finances/mute", {"until": None}),
+    ]

@@ -160,6 +160,64 @@ def render_ranking(payload: dict, explain: bool = False) -> str:
     return "\n".join(out)
 
 
+def render_review(r: dict) -> str:
+    out = [
+        f"# strategy review {r['reviewed_at']} — last reviewed {r.get('strategy_last_reviewed') or '—'}"
+    ]
+    out += [f"! {f}" for f in r.get("findings") or []]
+    for g in r["goals"]:
+        head = f"## {g['id']} ({g['kind']})"
+        if g["kind"] == "outcome":
+            step = g["next_step"]
+            out.append(f"{head} — {g['diagnosis']}")
+            out.append(
+                "  next: "
+                + (
+                    f"{task_ref.ref(step['gid'])}\t{step['gid']}\t{step['name']}"
+                    if step
+                    else "STALLED"
+                )
+            )
+            for lead in g["leads"]:
+                out.append(
+                    f"  lead {lead['tag']}: {lead['value']}/{lead['threshold']:g} per {lead['window']} "
+                    f"{'ok' if lead['met'] else 'LOW'}"
+                )
+            lag = g["lag"]
+            out.append(
+                f"  lag: {lag['value']:g}/{lag['threshold']:g} {'ok' if lag['met'] else 'LOW'}"
+                if lag
+                else "  lag: unreported"
+            )
+            for t in g["tripwires"]:
+                state = "FIRED" if t["fired"] else ("watching" if t["evaluated"] else "pending")
+                out.append(f"  tripwire {t['text']}: {state}")
+        else:
+            out.append(
+                f"{head} — {'BELOW THE LINE' if g['below_the_line'] else 'ok'}"
+                + (f" (muted until {g['muted_until']})" if g.get("muted_until") else "")
+            )
+            for s in g.get("signals") or []:
+                tasks = ", ".join(t["gid"] for t in s.get("tasks") or [])
+                out.append(f"  {s['signal']}: {s['state']} ({s['consecutive_days']}d) {tasks}")
+    out.append("## grooming")
+    out += [
+        f"  {task_ref.ref(t['gid'])}\t{t['gid']}\t{t['name']}\t"
+        f"{', '.join(t['serves_suggested']) or '—'} ({t['confidence']})"
+        for t in r["grooming"]
+    ] or ["  —"]
+    out.append("## stop doing")
+    out += [
+        f"  {task_ref.ref(t['gid'])}\t{t['gid']}\t{t['name']}\t{t['reason']}"
+        for t in r["stop_doing"]["tasks"]
+    ] or ["  —"]
+    out += [
+        f"  email\t{e['message_id']}\t{e['subject']}\t{e['reason']}"
+        for e in r["stop_doing"]["suppressed_emails"]
+    ]
+    return "\n".join(out)
+
+
 def _all_tasks(explain: bool = False) -> list[dict]:
     """Every non-completed ranked task (completed rows would only add refs
     that can collide with the ones a listing shows)."""
@@ -237,6 +295,15 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("task")
         p.add_argument("blocker")
     sub.add_parser("calibrate")
+    sub.add_parser("review")
+    p = sub.add_parser("report")
+    p.add_argument("goal")
+    p.add_argument("value", type=float)
+    p.add_argument("--period-start")
+    p = sub.add_parser("mute")
+    p.add_argument("area")
+    p.add_argument("until")  # YYYY-MM-DD or "clear"
+    sub.add_parser("restore").add_argument("message_id")
     args = parser.parse_args(argv)
 
     if args.cmd is None:
@@ -260,6 +327,20 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"{p['project']}\t{p['completed']}\t{f(p['mean_cycle_days_per_point'])}\t{f(p['median_cycle_days_per_point'])}\t{f(p['mean_points_ratio'])}\t{json.dumps(p['deferred_histogram'])}"
             )
+        return 0
+    if args.cmd == "review":
+        print(render_review(_api("GET", "/review")))
+        return 0
+    if args.cmd == "report":
+        body = {"value": args.value, "period_start": args.period_start}
+        print(json.dumps(_api("POST", f"/goals/{args.goal}/reports", body)))
+        return 0
+    if args.cmd == "mute":
+        until = None if args.until == "clear" else args.until
+        print(json.dumps(_api("POST", f"/goals/{args.area}/mute", {"until": until})))
+        return 0
+    if args.cmd == "restore":
+        print(json.dumps(_api("POST", f"/suppressions/{args.message_id}/restore")))
         return 0
 
     gid = resolve_for_write(args.task, args)

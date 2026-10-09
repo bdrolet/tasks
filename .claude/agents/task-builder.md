@@ -102,6 +102,12 @@ Against the standard you read in step 1:
   comes back on a cadence after it is done ("every three months", "again a
   week after I finish"), add one — `repeat:3mo`, `repeat:1w`. Recurrence is
   completion-anchored: do not use it for a fixed calendar schedule.
+- **`role:` and `serves:` tags** — read the `## Strategy` section of the
+  standing context if it is present in your context (`task-ref` cannot fetch
+  it; ask the user when unsure). Every task you create carries exactly one
+  `role:` tag (`path`, `derisk` or `support`) and one `serves:<id>` tag per
+  goal or area it serves. If it serves nothing you can name, say so in the
+  task's Context and add no `serves:` tag.
 - **`project` / `section`** — always send an explicit `project`. Never rely on the
   API default: omitting `project` falls back to the email pipeline's project
   (Inbox), which is almost never where a manual task belongs.
