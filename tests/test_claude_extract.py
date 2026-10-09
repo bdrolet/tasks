@@ -54,10 +54,16 @@ def test_extract_structured_raises_on_non_end_turn(monkeypatch, stop):
 
 def test_extract_structured_accepts_system_blocks(monkeypatch):
     m = _install(monkeypatch, "end_turn")
-    blocks = [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": "b"}]
+    blocks = [
+        {"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "b"},
+    ]
     claude.extract_structured(
         model="claude-opus-5-5", system=blocks, user="u", schema={"type": "object"}, effort="medium"
     )
     assert m.kwargs["system"] == blocks
-    assert m.kwargs["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in m.kwargs["betas"]
+    assert (
+        m.kwargs["fallbacks"] == "default"
+        and "server-side-fallback-2026-07-01" in m.kwargs["betas"]
+    )
     assert m.kwargs["output_config"]["effort"] == "medium"

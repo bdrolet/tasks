@@ -52,17 +52,37 @@ def test_insert_writes_all_columns_and_is_idempotent():
 
 def test_insert_stores_web_link():
     conn = FakeConn()
-    suppressions.insert(conn, message_id="m", category="c", importance="P2", subject="s", sender="x",
-                        reason="r", source="necessity", related_task_gid=None, evidence=[],
-                        web_link="https://x")
+    suppressions.insert(
+        conn,
+        message_id="m",
+        category="c",
+        importance="P2",
+        subject="s",
+        sender="x",
+        reason="r",
+        source="necessity",
+        related_task_gid=None,
+        evidence=[],
+        web_link="https://x",
+    )
     q, p = conn.executed[0]
     assert "web_link" in q and p[-1] == "https://x"
 
 
 def test_insert_web_link_defaults_to_null():
     conn = FakeConn()
-    suppressions.insert(conn, message_id="m", category="c", importance="P2", subject="s", sender="x",
-                        reason="r", source="agent", related_task_gid=None, evidence=[])
+    suppressions.insert(
+        conn,
+        message_id="m",
+        category="c",
+        importance="P2",
+        subject="s",
+        sender="x",
+        reason="r",
+        source="agent",
+        related_task_gid=None,
+        evidence=[],
+    )
     assert conn.executed[0][1][-1] is None
 
 

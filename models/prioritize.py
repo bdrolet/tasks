@@ -37,7 +37,9 @@ class TaskFacts:
     dependents: tuple[str, ...]
     num_open_subtasks: int
     content_hash: str
-    serves_estimated: dict | None = None  # the serves draft, once; NULL = never judged for write-back
+    serves_estimated: dict | None = (
+        None  # the serves draft, once; NULL = never judged for write-back
+    )
 
 
 @dataclass(frozen=True)

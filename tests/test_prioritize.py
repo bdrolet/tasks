@@ -710,13 +710,28 @@ def cfg_with(**kw):
 
 def run_s(fs, enrichments=None, overrides=None, config=None, below=frozenset(), today=TODAY):
     return pz.score_set(
-        fs, enrichments or {}, overrides or {}, {}, config or CFG, today,
-        strategy=STRATEGY, below_the_line=below,
+        fs,
+        enrichments or {},
+        overrides or {},
+        {},
+        config or CFG,
+        today,
+        strategy=STRATEGY,
+        below_the_line=below,
     )
 
 
 def test_flag_mode_reproduces_pre_strategy_scores_exactly():
-    old = cfg_with(weights={"priority": 0.25, "urgency": 0.30, "impact": 0.15, "unblock": 0.10, "aging": 0.05, "category": 0.15})
+    old = cfg_with(
+        weights={
+            "priority": 0.25,
+            "urgency": 0.30,
+            "impact": 0.15,
+            "unblock": 0.10,
+            "aging": 0.05,
+            "category": 0.15,
+        }
+    )
     fs = [
         facts("a", due_on=TODAY + timedelta(days=5), points=1),
         facts("b", name="[P3] b", points=5),
@@ -726,14 +741,23 @@ def test_flag_mode_reproduces_pre_strategy_scores_exactly():
     ]
     ens = {"e": enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="high")}
     before = {t.gid: t.score for t in pz.score_set(fs, ens, {}, {}, old, TODAY).tasks}
-    after = {t.gid: t.score for t in run_s(fs, ens, config=cfg_with(necessity_mode="flag"), below=frozenset({"consulting"})).tasks}
+    after = {
+        t.gid: t.score
+        for t in run_s(
+            fs, ens, config=cfg_with(necessity_mode="flag"), below=frozenset({"consulting"})
+        ).tasks
+    }
     for gid in before:
         assert abs(before[gid] - after[gid]) < 1e-12, gid
 
 
 def test_goal_horizon_due_only_outside_flag_mode():
     f = facts("d", name="[P3] d", tags=("serves:consulting", "role:path"))
-    flag = run_s([f], config=cfg_with(necessity_mode="flag"), below=frozenset({"consulting"})).by_gid()["d"].components
+    flag = (
+        run_s([f], config=cfg_with(necessity_mode="flag"), below=frozenset({"consulting"}))
+        .by_gid()["d"]
+        .components
+    )
     assert flag["due_source"] == "horizon" and flag["below_the_line"] is False
     assert flag["goal_horizon"] == "2026-12-15"
     demote = run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["d"].components
@@ -770,14 +794,25 @@ def test_necessity_roles_and_weights():
 
 
 def test_model_serves_without_tags_uses_highest_role():
-    e = enr(serves=(Serve("finances", "support", "high"), Serve("consulting", "derisk", "medium")), necessity_confidence="high")
-    c = run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
+    e = enr(
+        serves=(Serve("finances", "support", "high"), Serve("consulting", "derisk", "medium")),
+        necessity_confidence="high",
+    )
+    c = (
+        run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="demote"))
+        .by_gid()["a"]
+        .components
+    )
     assert c["role"] == "derisk" and c["necessity_source"] == "model" and abs(c["N"] - 0.9) < 1e-12
 
 
 def test_low_confidence_model_serves_is_grooming_with_suggestion():
     e = enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="low")
-    c = run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
+    c = (
+        run_s([facts("a")], {"a": e}, config=cfg_with(necessity_mode="demote"))
+        .by_gid()["a"]
+        .components
+    )
     assert c["serves"] == [] and c["grooming"] is True
     assert c["N"] == CFG.necessity_unattached
     assert c["serves_suggested"] == ["consulting"]
@@ -811,18 +846,29 @@ def test_pin_overrides_stop_doing():
 
 
 def test_goal_horizon_becomes_soft_due_for_path_tasks_without_dates():
-    f = facts("a", name="[P3] a", tags=("serves:consulting", "role:path"))  # P3 horizon = 2026-12-29 local
+    f = facts(
+        "a", name="[P3] a", tags=("serves:consulting", "role:path")
+    )  # P3 horizon = 2026-12-29 local
     c = run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components
     assert c["effective_due"] == "2026-12-15" and c["due_source"] == "goal_horizon" and c["soft"]
 
 
 def test_goal_horizon_does_not_replace_a_nearer_priority_horizon_or_any_real_date():
     f = facts("a", name="[P0] a", tags=("serves:consulting", "role:path"))  # P0 horizon = +3d
-    assert run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components["due_source"] == "horizon"
+    assert (
+        run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["a"].components["due_source"]
+        == "horizon"
+    )
     f = facts("b", due_on=TODAY + timedelta(days=100), tags=("serves:consulting", "role:path"))
-    assert run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["b"].components["due_source"] == "hard"
+    assert (
+        run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["b"].components["due_source"]
+        == "hard"
+    )
     f = facts("c", tags=("serves:consulting", "role:support"))
-    assert run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["c"].components["due_source"] == "horizon"
+    assert (
+        run_s([f], config=cfg_with(necessity_mode="demote")).by_gid()["c"].components["due_source"]
+        == "horizon"
+    )
 
 
 def test_below_the_line_boosts_path_and_derisk_only_in_demote():
@@ -838,6 +884,8 @@ def test_below_the_line_boosts_path_and_derisk_only_in_demote():
 
 def test_no_strategy_means_everything_unattached_and_equal():
     e = enr(serves=(Serve("consulting", "path", "high"),), necessity_confidence="high")
-    s = pz.score_set([facts("a"), facts("b")], {"a": e}, {}, {}, cfg_with(necessity_mode="demote"), TODAY)
+    s = pz.score_set(
+        [facts("a"), facts("b")], {"a": e}, {}, {}, cfg_with(necessity_mode="demote"), TODAY
+    )
     c = s.by_gid()
     assert c["a"].components["N"] == c["b"].components["N"] == CFG.necessity_unattached

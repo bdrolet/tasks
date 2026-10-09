@@ -107,8 +107,13 @@ def test_handle_enriches_creates_places_and_stores(monkeypatch):
     assert created["due_date"] == "2026-07-31"  # P1 → deadline extraction ran
     assert moves == [("42", "sec-review")]
     assert inserts == [
-        {"task_gid": "42", "message_id": "msg-123", "category": "review",
-         "importance": "P1", "serves_estimated": None}
+        {
+            "task_gid": "42",
+            "message_id": "msg-123",
+            "category": "review",
+            "importance": "P1",
+            "serves_estimated": None,
+        }
     ]
 
 
@@ -654,27 +659,58 @@ def _strategy_on(monkeypatch, on=True):
     monkeypatch.setattr(
         st_service,
         "load",
-        lambda **kw: Strategy(goals=(Goal(id="consulting", kind="outcome"),)) if on else Strategy.EMPTY,
+        lambda **kw: (
+            Strategy(goals=(Goal(id="consulting", kind="outcome"),)) if on else Strategy.EMPTY
+        ),
     )
 
 
 def test_necessity_outcome_table():
     d = lambda **kw: Decision(**kw)  # noqa: E731
     tc = task_create
-    assert tc.necessity_outcome(d(**HIGH), "flag", True) == ("tag", ["serves:consulting", "role:path"])
+    assert tc.necessity_outcome(d(**HIGH), "flag", True) == (
+        "tag",
+        ["serves:consulting", "role:path"],
+    )
     assert tc.necessity_outcome(d(**(HIGH | {"necessity_confidence": "medium"})), "flag", True) == (
         "tag",
         ["serves:consulting", "role:path"],
     )
-    assert tc.necessity_outcome(d(**(HIGH | {"necessity_confidence": "low"})), "flag", True) == ("create", [])
-    assert tc.necessity_outcome(d(**(HIGH | {"necessity_confidence": "low"})), "suppress", True) == ("create", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="high"), "flag", True) == ("suppress", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="high"), "suppress", True) == ("suppress", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="medium"), "flag", True) == ("create", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="medium"), "suppress", True) == ("suppress", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="low"), "flag", True) == ("create", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="low"), "suppress", True) == ("create", [])
-    assert tc.necessity_outcome(d(serves=[], necessity_confidence="high"), "suppress", False) == ("create", [])
+    assert tc.necessity_outcome(d(**(HIGH | {"necessity_confidence": "low"})), "flag", True) == (
+        "create",
+        [],
+    )
+    assert tc.necessity_outcome(
+        d(**(HIGH | {"necessity_confidence": "low"})), "suppress", True
+    ) == ("create", [])
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="high"), "flag", True) == (
+        "suppress",
+        [],
+    )
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="high"), "suppress", True) == (
+        "suppress",
+        [],
+    )
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="medium"), "flag", True) == (
+        "create",
+        [],
+    )
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="medium"), "suppress", True) == (
+        "suppress",
+        [],
+    )
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="low"), "flag", True) == (
+        "create",
+        [],
+    )
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="low"), "suppress", True) == (
+        "create",
+        [],
+    )
+    assert tc.necessity_outcome(d(serves=[], necessity_confidence="high"), "suppress", False) == (
+        "create",
+        [],
+    )
     assert tc.necessity_outcome(d(**HIGH), "flag", False) == ("create", [])
 
 
@@ -683,7 +719,9 @@ def test_necessity_outcome_picks_strongest_role():
         {"goal": "a", "role": "support", "confidence": "high"},
         {"goal": "b", "role": "path", "confidence": "high"},
     ]
-    out = task_create.necessity_outcome(Decision(serves=serves, necessity_confidence="high"), "flag", True)
+    out = task_create.necessity_outcome(
+        Decision(serves=serves, necessity_confidence="high"), "flag", True
+    )
     assert out == ("tag", ["serves:a", "serves:b", "role:path"])
 
 
@@ -692,20 +730,28 @@ def test_confident_serves_tags_at_creation_and_records_the_draft(monkeypatch):
     _mode(monkeypatch, "flag")
     _stub_triage(monkeypatch, Decision(**HIGH))
     seen = {}
-    monkeypatch.setattr(tags, "resolve_gids", lambda names: (seen.setdefault("names", names), ["g1"])[1])
+    monkeypatch.setattr(
+        tags, "resolve_gids", lambda names: (seen.setdefault("names", names), ["g1"])[1]
+    )
     _stub_enrichment(monkeypatch)
     inserts = _stub_db(monkeypatch)
     _capture_create(monkeypatch)
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
     task_create.handle(make_email_event())
     assert "serves:consulting" in seen["names"] and "role:path" in seen["names"]
-    assert inserts[0]["serves_estimated"] == {"serves": ["consulting"], "role": "path", "confidence": "high"}
+    assert inserts[0]["serves_estimated"] == {
+        "serves": ["consulting"],
+        "role": "path",
+        "confidence": "high",
+    }
 
 
 def test_high_confidence_none_never_becomes_a_task_in_flag_mode(monkeypatch):
     _strategy_on(monkeypatch)
     _mode(monkeypatch, "flag")
-    _stub_triage(monkeypatch, Decision(serves=[], necessity_confidence="high", necessity_reason="newsletter"))
+    _stub_triage(
+        monkeypatch, Decision(serves=[], necessity_confidence="high", necessity_reason="newsletter")
+    )
     monkeypatch.setattr(task_create, "get_conn", lambda: FakeConn())
     rows = _stub_suppressions(monkeypatch)
     created = _capture_create(monkeypatch)
@@ -741,7 +787,9 @@ def test_no_strategy_ignores_the_judgment_entirely(monkeypatch):
     _stub_enrichment(monkeypatch)
     inserts = _stub_db(monkeypatch)
     seen = {}
-    monkeypatch.setattr(tags, "resolve_gids", lambda names: (seen.setdefault("names", names), [])[1])
+    monkeypatch.setattr(
+        tags, "resolve_gids", lambda names: (seen.setdefault("names", names), [])[1]
+    )
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
     created = _capture_create(monkeypatch)
     task_create.handle(make_email_event())
@@ -768,13 +816,18 @@ def test_create_from_event_returns_task_with_extra_tags(monkeypatch):
     _stub_enrichment(monkeypatch)
     inserts = _stub_db(monkeypatch)
     seen = {}
-    monkeypatch.setattr(tags, "resolve_gids", lambda names: (seen.setdefault("names", names), [])[1])
+    monkeypatch.setattr(
+        tags, "resolve_gids", lambda names: (seen.setdefault("names", names), [])[1]
+    )
     monkeypatch.setattr(asana, "add_task_to_section", lambda t, s: None)
     _capture_create(monkeypatch)
     from models.events import Screening
 
     task = task_create.create_from_event(
-        make_email_event(), Screening(priority="P1"), extra_tags=["serves:x"], serves_estimated={"serves": ["x"]}
+        make_email_event(),
+        Screening(priority="P1"),
+        extra_tags=["serves:x"],
+        serves_estimated={"serves": ["x"]},
     )
     assert task is not None and task.gid == "42"
     assert "serves:x" in seen["names"] and inserts[0]["serves_estimated"] == {"serves": ["x"]}

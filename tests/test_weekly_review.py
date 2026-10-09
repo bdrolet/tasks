@@ -22,14 +22,29 @@ class Conn:
 def wired(monkeypatch):
     monkeypatch.setattr(wr, "get_conn", lambda: Conn())
     monkeypatch.setattr(wr, "today_local", lambda: date(2026, 10, 12))
-    monkeypatch.setattr(repo_goals, "load_snapshot", lambda c: Strategy(goals=(Goal(id="consulting", kind="outcome"),), text_hash="h"))
+    monkeypatch.setattr(
+        repo_goals,
+        "load_snapshot",
+        lambda c: Strategy(goals=(Goal(id="consulting", kind="outcome"),), text_hash="h"),
+    )
     monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {})
     monkeypatch.setattr(repo, "list_scores", lambda c: [])
     monkeypatch.setattr(repo_sup, "list_necessity", lambda c, limit=100: [])
     calls = {"created": [], "stories": [], "existing": None}
     monkeypatch.setattr(asana, "find_task_by_external", lambda ext: calls["existing"])
-    monkeypatch.setattr(asana, "create_task_from_fields", lambda f: (calls["created"].append(f), type("T", (), {"gid": "rv1", "permalink_url": "u"})())[1])
-    monkeypatch.setattr(asana, "create_story", lambda gid, text=None, html_text=None: calls["stories"].append((gid, text)))
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda f: (
+            calls["created"].append(f),
+            type("T", (), {"gid": "rv1", "permalink_url": "u"})(),
+        )[1],
+    )
+    monkeypatch.setattr(
+        asana,
+        "create_story",
+        lambda gid, text=None, html_text=None: calls["stories"].append((gid, text)),
+    )
     monkeypatch.setattr(asana, "add_task_to_section", lambda gid, sec: None)
     monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "proj")
     monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec")

@@ -8,12 +8,12 @@ import clients.asana as asana
 import clients.pubsub as ps
 from handlers import prioritize as h
 from models.prioritize import TaskFacts
+from models.strategy import Goal, GoalState, Measure, Strategy, Tripwire
+from repo import goals as repo_goals
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
 from services import managed_projects
-from models.strategy import Goal, GoalState, Measure, Strategy, Tripwire
-from repo import goals as repo_goals
 from services import strategy as st
 from services import tags as tags_service
 
@@ -202,7 +202,9 @@ def model(monkeypatch):
         calls.append(kw)
         return json.dumps(GOOD)
 
-    monkeypatch.setattr(en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ())))
+    monkeypatch.setattr(
+        en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ()))
+    )
     return calls
 
 
@@ -447,7 +449,13 @@ def test_day_changed_bumps_unstarted_offers_and_marks_started(db, monkeypatch):
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
     monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     out = h.handle_day_changed(today=TODAY)
-    assert bumped == ["a"] and out == {"deferred": 1, "started": 2, "healed": 0, "goals": 0, "tripwires_fired": 0}
+    assert bumped == ["a"] and out == {
+        "deferred": 1,
+        "started": 2,
+        "healed": 0,
+        "goals": 0,
+        "tripwires_fired": 0,
+    }
     assert [t["started"] for t in tops[0][1]] == [False, True, True]
 
 
@@ -596,7 +604,13 @@ def test_in_progress_task_started_before_the_offer_is_not_deferred(db, monkeypat
     bumped = []
     monkeypatch.setattr(repo, "bump_deferred", lambda c, gids, today: bumped.extend(gids))
     monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
-    assert h.handle_day_changed(today=TODAY) == {"deferred": 0, "started": 1, "healed": 0, "goals": 0, "tripwires_fired": 0}
+    assert h.handle_day_changed(today=TODAY) == {
+        "deferred": 0,
+        "started": 1,
+        "healed": 0,
+        "goals": 0,
+        "tripwires_fired": 0,
+    }
     assert bumped == []
 
 
@@ -875,10 +889,13 @@ def test_todays_daily_run_does_not_reset_the_boost_for_later_rescores(db, monkey
 
 # ---- strategy layer: serves write-back ---------------------------------------
 
-STRAT = Strategy(goals=(Goal(id="consulting", kind="outcome"), Goal(id="finances", kind="area")), text_hash="sh")
+STRAT = Strategy(
+    goals=(Goal(id="consulting", kind="outcome"), Goal(id="finances", kind="area")), text_hash="sh"
+)
 SERVES_HIGH = GOOD | {
     "serves": [{"goal": "consulting", "role": "path", "confidence": "high"}],
-    "necessity_confidence": "high", "necessity_reason": "next step",
+    "necessity_confidence": "high",
+    "necessity_reason": "next step",
 }
 
 
@@ -894,9 +911,21 @@ def strategy(monkeypatch):
 def tag_fake(monkeypatch, asana_fake):
     asana_fake["tags"] = []
     monkeypatch.setattr(tags_service, "resolve_gids", lambda names: [f"g-{n}" for n in names])
-    monkeypatch.setattr(asana, "add_tag", lambda gid, tag_gid: asana_fake["tags"].append((gid, tag_gid)))
-    monkeypatch.setattr(repo, "claim_serves", lambda c, gid, payload: c.__dict__.setdefault("serves_claims", {}).setdefault(gid, payload) is payload)
-    monkeypatch.setattr(repo, "set_tags", lambda c, gid, tags: c.__dict__.setdefault("tags_set", []).append((gid, tags)))
+    monkeypatch.setattr(
+        asana, "add_tag", lambda gid, tag_gid: asana_fake["tags"].append((gid, tag_gid))
+    )
+    monkeypatch.setattr(
+        repo,
+        "claim_serves",
+        lambda c, gid, payload: (
+            c.__dict__.setdefault("serves_claims", {}).setdefault(gid, payload) is payload
+        ),
+    )
+    monkeypatch.setattr(
+        repo,
+        "set_tags",
+        lambda c, gid, tags: c.__dict__.setdefault("tags_set", []).append((gid, tags)),
+    )
     return asana_fake
 
 
@@ -907,16 +936,25 @@ def _model_returning(monkeypatch, payload):
         calls.append(kw)
         return json.dumps(payload)
 
-    monkeypatch.setattr(en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ())))
+    monkeypatch.setattr(
+        en, "extract", lambda **kw: en.parse(fake(**kw), known_goals=kw.get("known_goals", ()))
+    )
     return calls
 
 
 def test_enrichment_receives_strategy_text_and_hash_in_facts(db, tag_fake, strategy, monkeypatch):
     calls = _model_returning(monkeypatch, SERVES_HIGH)
     h.handle_task_changed("t1", today=TODAY)
-    assert calls[0]["strategy_text"].startswith("### consulting") and calls[0]["known_goals"] == ("consulting", "finances")
-    assert db.facts["t1"].content_hash == en.content_hash(TASK["name"], TASK["notes"], [
-        {"text": "sent it", "created_by": "Ben", "created_at": "2026-09-19T00:00:00Z"}], strategy_hash="sh")
+    assert calls[0]["strategy_text"].startswith("### consulting") and calls[0]["known_goals"] == (
+        "consulting",
+        "finances",
+    )
+    assert db.facts["t1"].content_hash == en.content_hash(
+        TASK["name"],
+        TASK["notes"],
+        [{"text": "sent it", "created_by": "Ben", "created_at": "2026-09-19T00:00:00Z"}],
+        strategy_hash="sh",
+    )
 
 
 def test_confident_serves_is_written_back_once(db, tag_fake, strategy, monkeypatch):
@@ -928,7 +966,11 @@ def test_confident_serves_is_written_back_once(db, tag_fake, strategy, monkeypat
         "Attached to consulting as path \u2014 adjust the tags if wrong."
     ]
     assert db.tags_set == [("t1", ["cheryl", "serves:consulting", "role:path"])]
-    assert db.serves_claims["t1"] == {"serves": ["consulting"], "role": "path", "confidence": "high"}
+    assert db.serves_claims["t1"] == {
+        "serves": ["consulting"],
+        "role": "path",
+        "confidence": "high",
+    }
 
 
 def test_low_confidence_claims_grooming_and_writes_nothing(db, tag_fake, strategy, monkeypatch):
@@ -997,8 +1039,11 @@ def test_existing_serves_estimated_blocks_the_claim(db, tag_fake, strategy, monk
 )
 def test_highest_role_wins_across_serves(db, tag_fake, monkeypatch, serves, role):
     three = Strategy(
-        goals=(Goal(id="consulting", kind="outcome"), Goal(id="finances", kind="area"),
-               Goal(id="x", kind="outcome")),
+        goals=(
+            Goal(id="consulting", kind="outcome"),
+            Goal(id="finances", kind="area"),
+            Goal(id="x", kind="outcome"),
+        ),
         text_hash="sh",
     )
     monkeypatch.setattr(st, "load", lambda **kw: three)
@@ -1029,21 +1074,41 @@ def test_empty_serves_with_low_confidence_claims_grooming(db, tag_fake, strategy
 
 
 def _fire_strat():
-    return Strategy(goals=(Goal(id="consulting", kind="outcome", horizon=date(2027, 3, 31),
-                                leads=(Measure("conversation", ">=", 3, "week"),),
-                                tripwires=(Tripwire(1, "signed-client", "=", 0, date(2026, 9, 1), "Revisit niche"),)),),
-                    text_hash="sh")
+    return Strategy(
+        goals=(
+            Goal(
+                id="consulting",
+                kind="outcome",
+                horizon=date(2027, 3, 31),
+                leads=(Measure("conversation", ">=", 3, "week"),),
+                tripwires=(
+                    Tripwire(1, "signed-client", "=", 0, date(2026, 9, 1), "Revisit niche"),
+                ),
+            ),
+        ),
+        text_hash="sh",
+    )
 
 
 @pytest.fixture
 def goals_db(monkeypatch, db):
     db.goal_states, db.reports, db.mutes, db.next_steps = {}, {}, {}, []
-    monkeypatch.setattr(repo_goals, "upsert_state", lambda c, s: c.goal_states.__setitem__((s.goal_id, s.day), s))
-    monkeypatch.setattr(repo_goals, "get_states", lambda c, day: {k[0]: v for k, v in c.goal_states.items() if k[1] == day})
+    monkeypatch.setattr(
+        repo_goals, "upsert_state", lambda c, s: c.goal_states.__setitem__((s.goal_id, s.day), s)
+    )
+    monkeypatch.setattr(
+        repo_goals,
+        "get_states",
+        lambda c, day: {k[0]: v for k, v in c.goal_states.items() if k[1] == day},
+    )
     monkeypatch.setattr(repo_goals, "all_latest_reports", lambda c, limit=3: dict(c.reports))
     monkeypatch.setattr(repo_goals, "get_mutes", lambda c: dict(c.mutes))
-    monkeypatch.setattr(repo_goals, "set_next_steps", lambda c, day, steps: c.next_steps.append((day, steps)))
-    monkeypatch.setattr(repo_goals, "save_snapshot", lambda c, strat: c.__dict__.__setitem__("snapshot", strat))
+    monkeypatch.setattr(
+        repo_goals, "set_next_steps", lambda c, day, steps: c.next_steps.append((day, steps))
+    )
+    monkeypatch.setattr(
+        repo_goals, "save_snapshot", lambda c, strat: c.__dict__.__setitem__("snapshot", strat)
+    )
     monkeypatch.setattr(repo, "list_scores", lambda c: [])
     monkeypatch.setattr(h, "heal", lambda *a, **k: 0)
     monkeypatch.setattr(h, "settle_deferrals", lambda c, today: (0, 0))
@@ -1057,13 +1122,28 @@ def tripwire_asana(monkeypatch):
 
     created, existing = Created(), {}
     effects = {"section": [], "publish": [], "metric": []}
-    monkeypatch.setattr(h.otel, "tripwire_fired", type("C", (), {"add": lambda self, n, a=None: effects["metric"].append((n, a))})())
+    monkeypatch.setattr(
+        h.otel,
+        "tripwire_fired",
+        type("C", (), {"add": lambda self, n, a=None: effects["metric"].append((n, a))})(),
+    )
     monkeypatch.setattr(asana, "find_task_by_external", lambda ext: existing.get(ext))
-    monkeypatch.setattr(asana, "create_task_from_fields", lambda fields: (created.append(fields), type("T", (), {"gid": f"new{len(created)}", "permalink_url": "u"})())[1])
-    monkeypatch.setattr(asana, "add_task_to_section", lambda gid, sec: effects["section"].append((gid, sec)))
+    monkeypatch.setattr(
+        asana,
+        "create_task_from_fields",
+        lambda fields: (
+            created.append(fields),
+            type("T", (), {"gid": f"new{len(created)}", "permalink_url": "u"})(),
+        )[1],
+    )
+    monkeypatch.setattr(
+        asana, "add_task_to_section", lambda gid, sec: effects["section"].append((gid, sec))
+    )
     monkeypatch.setattr(asana, "ASANA_PROJECT_ID", "proj")
     monkeypatch.setattr(h.tags_service, "resolve_gids", lambda names: [f"g-{n}" for n in names])
-    monkeypatch.setattr(ps, "publish_task_changed", lambda gid, source: effects["publish"].append((gid, source)))
+    monkeypatch.setattr(
+        ps, "publish_task_changed", lambda gid, source: effects["publish"].append((gid, source))
+    )
     monkeypatch.setenv("ASANA_SECTION_REVIEW_GID", "sec-review")
     created.effects = effects
     return created, existing
@@ -1089,8 +1169,13 @@ def test_tripwire_already_fired_yesterday_is_not_recreated(goals_db, tripwire_as
     created, _ = tripwire_asana
     monkeypatch.setattr(st, "load", lambda **kw: _fire_strat())
     yesterday = TODAY - timedelta(days=1)
-    goals_db.goal_states[("consulting", yesterday)] = GoalState("consulting", "outcome", yesterday, "sh",
-        {"tripwires": [{"ordinal": 1, "by": "2026-09-01", "fired": True}]})
+    goals_db.goal_states[("consulting", yesterday)] = GoalState(
+        "consulting",
+        "outcome",
+        yesterday,
+        "sh",
+        {"tripwires": [{"ordinal": 1, "by": "2026-09-01", "fired": True}]},
+    )
     assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 0 and created == []
 
 
@@ -1106,7 +1191,10 @@ def test_edited_by_date_is_a_new_tripwire(goals_db, tripwire_asana, monkeypatch)
     existing["tripwire:consulting:1:2026-09-01"] = "old"
     strat = _fire_strat()
     g = strat.goals[0]
-    moved = Strategy(goals=(replace_facts(g, tripwires=(replace_facts(g.tripwires[0], by=date(2026, 9, 15)),)),), text_hash="sh2")
+    moved = Strategy(
+        goals=(replace_facts(g, tripwires=(replace_facts(g.tripwires[0], by=date(2026, 9, 15)),)),),
+        text_hash="sh2",
+    )
     monkeypatch.setattr(st, "load", lambda **kw: moved)
     assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 1
     assert created[0]["external"]["gid"] == "tripwire:consulting:1:2026-09-15"
@@ -1135,7 +1223,11 @@ def test_tripwire_notes_escape_user_text(goals_db, tripwire_asana, monkeypatch):
     strat = _fire_strat()
     g = strat.goals[0]
     tw = replace_facts(g.tripwires[0], subject="signed & <b>clients", op=">=", value=0)
-    monkeypatch.setattr(st, "load", lambda **kw: Strategy(goals=(replace_facts(g, tripwires=(tw,)),), text_hash="sh"))
+    monkeypatch.setattr(
+        st,
+        "load",
+        lambda **kw: Strategy(goals=(replace_facts(g, tripwires=(tw,)),), text_hash="sh"),
+    )
     assert h.handle_day_changed(today=TODAY)["tripwires_fired"] == 1
     notes = created[0]["html_notes"]
     assert "&gt;=" in notes and "&amp;" in notes and "&lt;b&gt;" in notes
@@ -1143,8 +1235,14 @@ def test_tripwire_notes_escape_user_text(goals_db, tripwire_asana, monkeypatch):
 
 
 def test_next_step_is_the_top_path_task_serving_the_goal(goals_db, tripwire_asana, monkeypatch):
-    strat = Strategy(goals=(replace_facts(_fire_strat().goals[0], tripwires=()),
-                            Goal(id="finances", kind="area"), Goal(id="home", kind="area")), text_hash="sh")
+    strat = Strategy(
+        goals=(
+            replace_facts(_fire_strat().goals[0], tripwires=()),
+            Goal(id="finances", kind="area"),
+            Goal(id="home", kind="area"),
+        ),
+        text_hash="sh",
+    )
     monkeypatch.setattr(st, "load", lambda **kw: strat)
 
     def add(gid, name, tags):
@@ -1166,7 +1264,9 @@ def _heal_setup(monkeypatch, stored_strategy_hash):
     monkeypatch.setenv(managed_projects.ENV_VAR, json.dumps({"p1": {"done": None}}))
     old = datetime(2026, 9, 10, tzinfo=timezone.utc)
     listing = [{"gid": "t", "modified_at": "2026-09-01T00:00:00.000Z", "num_subtasks": 0}]
-    monkeypatch.setattr(asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing)
+    monkeypatch.setattr(
+        asana, "list_project_tasks", lambda gid, only_open=False, opt_fields=None: listing
+    )
     monkeypatch.setattr(repo, "list_facts_index", lambda c: {"t": (old, "h")})
     stored = {"v": stored_strategy_hash}
     monkeypatch.setattr(repo, "list_enrichment_hashes", lambda c: {"t": ("h", stored["v"])})

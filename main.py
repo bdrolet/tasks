@@ -51,8 +51,8 @@ from handlers import (
     due_digest,
     label_applied,
     task_create,
-    weekly_review,
     webhook_sync,
+    weekly_review,
 )
 from handlers import prioritize as prioritize_handler
 from services import escalation

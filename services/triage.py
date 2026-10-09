@@ -341,7 +341,6 @@ def system_blocks(strategy_text: str) -> list[dict]:
     return blocks
 
 
-
 def build_user_message(
     event: EmailClassifiedEvent,
     *,

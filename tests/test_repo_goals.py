@@ -27,13 +27,23 @@ def test_insert_report_returns_id():
 
 def test_snapshot_round_trip():
     conn = FakeConn()
-    strat = Strategy(goals=(Goal(id="consulting", kind="outcome", weight=1.0, horizon=date(2027, 3, 31)),),
-                     last_reviewed=date(2026, 10, 1), findings=("x",), text_hash="h")
+    strat = Strategy(
+        goals=(Goal(id="consulting", kind="outcome", weight=1.0, horizon=date(2027, 3, 31)),),
+        last_reviewed=date(2026, 10, 1),
+        findings=("x",),
+        text_hash="h",
+    )
     repo.save_snapshot(conn, strat)
     q, p = conn.executed[0]
-    assert "INSERT INTO strategy_snapshot" in q and p[0] == "h" and '"horizon": "2027-03-31"' in p[3]
-    row = {"text_hash": "h", "last_reviewed": date(2026, 10, 1), "findings": ["x"],
-           "goals": [{"id": "consulting", "kind": "outcome", "weight": 1.0, "horizon": "2027-03-31"}]}
+    assert (
+        "INSERT INTO strategy_snapshot" in q and p[0] == "h" and '"horizon": "2027-03-31"' in p[3]
+    )
+    row = {
+        "text_hash": "h",
+        "last_reviewed": date(2026, 10, 1),
+        "findings": ["x"],
+        "goals": [{"id": "consulting", "kind": "outcome", "weight": 1.0, "horizon": "2027-03-31"}],
+    }
     loaded = repo.load_snapshot(FakeConn(row=row))
     assert loaded.get("consulting").horizon == date(2027, 3, 31) and loaded.findings == ("x",)
     assert repo.load_snapshot(FakeConn(row=None)) == Strategy.EMPTY

@@ -66,8 +66,12 @@ def post_report(goal_id: str, body: ReportRequest) -> dict:
         raise HTTPException(status_code=400, detail="only an outcome goal has a lag measure")
     with get_conn() as conn:
         rid = repo_goals.insert_report(conn, goal_id, float(body.value), body.period_start)
-    return {"id": rid, "goal_id": goal_id, "value": float(body.value),
-            "period_start": body.period_start.isoformat() if body.period_start else None}
+    return {
+        "id": rid,
+        "goal_id": goal_id,
+        "value": float(body.value),
+        "period_start": body.period_start.isoformat() if body.period_start else None,
+    }
 
 
 @router.post("/goals/{goal_id}/mute")
@@ -90,8 +94,12 @@ def restore(message_id: str, response: Response) -> dict:
         raise HTTPException(status_code=404, detail="no necessity suppression for that message")
     if row.get("restored_at"):
         response.status_code = 200
-        return {"task_gid": row["restored_task_gid"], "permalink_url": None, "message_id": message_id,
-                "already_restored": True}
+        return {
+            "task_gid": row["restored_task_gid"],
+            "permalink_url": None,
+            "message_id": message_id,
+            "already_restored": True,
+        }
     existing = asana.find_task_by_external(message_id)
     if existing:
         gid, url = existing, None
@@ -102,7 +110,7 @@ def restore(message_id: str, response: Response) -> dict:
             "html_notes": (
                 f"<body>Restored from a necessity suppression. From {html.escape(row.get('sender') or '?')}.\n"
                 f"Suppressed because: {html.escape(row.get('reason') or '—')}\n"
-                f"<a href=\"{html.escape(row.get('web_link') or '', quote=True)}\">Open the email</a></body>"
+                f'<a href="{html.escape(row.get("web_link") or "", quote=True)}">Open the email</a></body>'
             ),
             "projects": [asana.ASANA_PROJECT_ID],
             "external": {"gid": message_id, "data": "inbox"},

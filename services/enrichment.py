@@ -120,9 +120,9 @@ def is_service_comment(text: str | None) -> bool:
     enrichment (D5, D6)."""
     if text is None:
         return False
-    return (text.startswith(ESTIMATE_COMMENT_PREFIX) and text.endswith(ESTIMATE_COMMENT_SUFFIX)) or (
-        text.startswith(ATTACH_COMMENT_PREFIX) and text.endswith(ATTACH_COMMENT_SUFFIX)
-    )
+    return (
+        text.startswith(ESTIMATE_COMMENT_PREFIX) and text.endswith(ESTIMATE_COMMENT_SUFFIX)
+    ) or (text.startswith(ATTACH_COMMENT_PREFIX) and text.endswith(ATTACH_COMMENT_SUFFIX))
 
 
 is_estimate_comment = is_service_comment

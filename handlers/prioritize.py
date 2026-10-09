@@ -22,9 +22,8 @@ from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
 from services import goal_state as gs
-from services import managed_projects, prioritize_config
+from services import managed_projects, prioritize_config, sections
 from services import prioritize as pz
-from services import sections
 from services import strategy as strategy_service
 from services import tags as tags_service
 from services.due_digest import today_local
@@ -170,7 +169,9 @@ def facts_from(
         dependencies=tuple(d["gid"] for d in task.get("dependencies") or [] if d.get("gid")),
         dependents=tuple(d["gid"] for d in task.get("dependents") or [] if d.get("gid")),
         num_open_subtasks=0,  # filled by gather()
-        content_hash=en.content_hash(name, task.get("notes") or "", comments, strategy_hash=strategy_hash),
+        content_hash=en.content_hash(
+            name, task.get("notes") or "", comments, strategy_hash=strategy_hash
+        ),
     )
     return facts, comments
 
@@ -267,7 +268,12 @@ def enrich_one(
         otel.errors.add(1, {"handler": "prioritize.enrich"})
         return None, "failed"
     repo.upsert_enrichment(
-        conn, facts.gid, facts.content_hash, _raw(enrichment), en.MODEL, strategy_hash=strategy.text_hash
+        conn,
+        facts.gid,
+        facts.content_hash,
+        _raw(enrichment),
+        en.MODEL,
+        strategy_hash=strategy.text_hash,
     )
     return enrichment, "ok"
 
@@ -415,11 +421,7 @@ def rescore(
     stored = repo.list_enrichment_hashes(conn)
     for t in scored.tasks:
         hashes = stored.get(t.gid)
-        if (
-            hashes is None
-            or hashes[0] != current.get(t.gid)
-            or hashes[1] != strategy.text_hash
-        ):
+        if hashes is None or hashes[0] != current.get(t.gid) or hashes[1] != strategy.text_hash:
             t.components["enrichment_stale"] = True
     repo.replace_scores(conn, scored)
     top = [
@@ -468,10 +470,7 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
     # An excluded project (D15) is gathered and stored but never ranked, so
     # the model call and the points write-back would be spend for nothing. A
     # task moved out of it enriches on that move's own event.
-    excluded = (
-        gathered is not None
-        and gathered[0][0].project_name in config.excluded_projects
-    )
+    excluded = gathered is not None and gathered[0][0].project_name in config.excluded_projects
     if gathered is not None and gathered[0][0].project_gid not in managed_projects.gids():
         with get_conn() as conn:
             repo.delete_task(conn, gid)
@@ -525,7 +524,9 @@ def handle_task_changed(gid: str, *, today: date | None = None) -> None:
                     to_write.append((facts.gid, points))
                     result = "claimed"
                 serves_payload = (
-                    claim_serves_write_back(conn, merged, enrichment, strategy) if enrichment else None
+                    claim_serves_write_back(conn, merged, enrichment, strategy)
+                    if enrichment
+                    else None
                 )
                 if serves_payload is not None:
                     to_tag.append((facts.gid, serves_payload))
@@ -640,26 +641,40 @@ def heal(current_strategy_hash: str = "") -> int:
 def evaluate_goals(conn, strategy: Strategy, today: date) -> list[GoalState]:
     """Spec D7: views from facts plus yesterday's score rows (bucket, serves,
     role); previous day's states for the debounce; writes today's rows."""
-    repo_goals.save_snapshot(conn, strategy)  # the API and webhook CF read goals from here, never the secret
+    repo_goals.save_snapshot(
+        conn, strategy
+    )  # the API and webhook CF read goals from here, never the secret
     if not strategy.goals:
         return []
-    scores = {r["task_gid"]: {"bucket": r["bucket"], "components": r["components"]} for r in repo.list_scores(conn)}
+    scores = {
+        r["task_gid"]: {"bucket": r["bucket"], "components": r["components"]}
+        for r in repo.list_scores(conn)
+    }
     views = gs.views_from(repo.list_facts(conn), scores)
     config = prioritize_config.load()
     states = gs.evaluate(
-        strategy, views, repo_goals.all_latest_reports(conn), repo_goals.get_mutes(conn),
-        repo_goals.get_states(conn, today - timedelta(days=1)), today, config,
+        strategy,
+        views,
+        repo_goals.all_latest_reports(conn),
+        repo_goals.get_mutes(conn),
+        repo_goals.get_states(conn, today - timedelta(days=1)),
+        today,
+        config,
     )
     for s in states:
         repo_goals.upsert_state(conn, s)
         if s.kind == "area":
-            otel.area_below_the_line.set(1 if s.state.get("below_the_line") else 0, {"area": s.goal_id})
+            otel.area_below_the_line.set(
+                1 if s.state.get("below_the_line") else 0, {"area": s.goal_id}
+            )
     otel.strategy_goals_loaded.set(len(strategy.outcome_goals()), {"kind": "outcome"})
     otel.strategy_goals_loaded.set(len(strategy.areas()), {"kind": "area"})
     return states
 
 
-def fire_tripwires(strategy: Strategy, states: list[GoalState], previous: dict[str, GoalState]) -> list[str]:
+def fire_tripwires(
+    strategy: Strategy, states: list[GoalState], previous: dict[str, GoalState]
+) -> list[str]:
     """Spec D8: a tripwire newly fired today becomes one task, guarded by an
     external id that includes the `by` date. Asana failure raises (D7)."""
     fired: list[str] = []
@@ -667,7 +682,13 @@ def fire_tripwires(strategy: Strategy, states: list[GoalState], previous: dict[s
         goal = strategy.get(s.goal_id)
         if goal is None or goal.kind != "outcome":
             continue
-        prev = {(t["ordinal"], t["by"]): t for t in (previous.get(s.goal_id).state.get("tripwires") if previous.get(s.goal_id) else []) or []}
+        prev = {
+            (t["ordinal"], t["by"]): t
+            for t in (
+                previous.get(s.goal_id).state.get("tripwires") if previous.get(s.goal_id) else []
+            )
+            or []
+        }
         for t in s.state.get("tripwires") or []:
             if not t["fired"] or prev.get((t["ordinal"], t["by"]), {}).get("fired"):
                 continue
@@ -711,9 +732,30 @@ def handle_day_changed(*, today: date | None = None) -> dict:
         if states:
             steps = {}
             for g in strategy.goals:
-                step = next((t for t in scored.next() if t.components.get("role") == "path" and g.id in (t.components.get("serves") or [])), None)
+                step = next(
+                    (
+                        t
+                        for t in scored.next()
+                        if t.components.get("role") == "path"
+                        and g.id in (t.components.get("serves") or [])
+                    ),
+                    None,
+                )
                 steps[g.id] = step.gid if step else None
             repo_goals.set_next_steps(conn, today, steps)
-    logger.info("day_changed %s: %d deferred, %d started, %d republished, %d goals, %d tripwires",
-                today, deferred, started, healed, len(states), len(fired))
-    return {"deferred": deferred, "started": started, "healed": healed, "goals": len(states), "tripwires_fired": len(fired)}
+    logger.info(
+        "day_changed %s: %d deferred, %d started, %d republished, %d goals, %d tripwires",
+        today,
+        deferred,
+        started,
+        healed,
+        len(states),
+        len(fired),
+    )
+    return {
+        "deferred": deferred,
+        "started": started,
+        "healed": healed,
+        "goals": len(states),
+        "tripwires_fired": len(fired),
+    }

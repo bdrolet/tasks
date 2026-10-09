@@ -99,8 +99,14 @@ def test_email_context_by_gids_empty_input_skips_query():
 
 def test_insert_stores_serves_estimated_draft():
     conn = FakeConn()
-    repo_tasks.insert(conn, task_gid="42", message_id="m1", category="review", importance="P1",
-                      serves_estimated={"role": "path"})
+    repo_tasks.insert(
+        conn,
+        task_gid="42",
+        message_id="m1",
+        category="review",
+        importance="P1",
+        serves_estimated={"role": "path"},
+    )
     q, p = conn.executed[0]
     assert "serves_estimated" in q and p[-1] == '{"role": "path"}'
 

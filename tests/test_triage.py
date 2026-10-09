@@ -2,7 +2,9 @@ import json
 
 import clients.claude as claude
 from models.events import Decision
+from models.strategy import Goal, Strategy
 from services import standing_context, triage
+from services import strategy as st_service
 from tests.test_events import make_email_event
 
 
@@ -283,9 +285,6 @@ def test_decide_forwards_the_screening_verdict(monkeypatch):
     assert "Screened: task / P0 — signed form requested" in captured["user"]
 
 
-from services import strategy as st_service
-from models.strategy import Goal, Strategy
-
 STRAT = Strategy(goals=(Goal(id="consulting", kind="outcome"),), text_hash="h")
 
 
@@ -296,8 +295,13 @@ def _strategy(monkeypatch, loaded=STRAT, text="### consulting\n- kind: outcome\n
 
 def _ok_serves(**kw):
     base = json.loads(_ok(actionable=True))
-    base.update({"serves": [{"goal": "consulting", "role": "path", "confidence": "high"}],
-                 "necessity_confidence": "high", "necessity_reason": "next step"})
+    base.update(
+        {
+            "serves": [{"goal": "consulting", "role": "path", "confidence": "high"}],
+            "necessity_confidence": "high",
+            "necessity_reason": "next step",
+        }
+    )
     base.update(kw)
     return json.dumps(base)
 
@@ -311,17 +315,28 @@ def test_strategy_is_a_second_cached_system_block(monkeypatch):
     triage.decide(make_email_event(), today="2026-10-09")
     system = captured["system"]
     assert isinstance(system, list) and system[0]["text"] == triage.SYSTEM_PROMPT
-    assert system[1]["text"].startswith("## Strategy") and system[1]["cache_control"] == {"type": "ephemeral"}
+    assert system[1]["text"].startswith("## Strategy") and system[1]["cache_control"] == {
+        "type": "ephemeral"
+    }
 
 
 def test_serves_is_parsed_and_unknown_goals_dropped(monkeypatch):
     _roles(monkeypatch, "")
     _strategy(monkeypatch)
-    _agent(monkeypatch, _ok_serves(serves=[{"goal": "consulting", "role": "path", "confidence": "high"},
-                                           {"goal": "ghost", "role": "support", "confidence": "low"}]))
+    _agent(
+        monkeypatch,
+        _ok_serves(
+            serves=[
+                {"goal": "consulting", "role": "path", "confidence": "high"},
+                {"goal": "ghost", "role": "support", "confidence": "low"},
+            ]
+        ),
+    )
     _gid_verifies(monkeypatch, True)
     d = triage.decide(make_email_event(), today="2026-10-09")
-    assert d.actionable and d.serves == [{"goal": "consulting", "role": "path", "confidence": "high"}]
+    assert d.actionable and d.serves == [
+        {"goal": "consulting", "role": "path", "confidence": "high"}
+    ]
     assert d.necessity_confidence == "high" and d.necessity_reason == "next step"
 
 
@@ -336,7 +351,9 @@ def test_no_strategy_means_one_system_block_and_defaults(monkeypatch):
 
 
 def test_schema_requires_the_three_fields():
-    assert {"serves", "necessity_confidence", "necessity_reason"} <= set(triage.OUTPUT_SCHEMA["required"])
+    assert {"serves", "necessity_confidence", "necessity_reason"} <= set(
+        triage.OUTPUT_SCHEMA["required"]
+    )
 
 
 def _ok_with(**kw):
@@ -368,11 +385,16 @@ def test_invalid_role_and_confidence_dropped_valid_sibling_kept(monkeypatch):
     _roles(monkeypatch, "")
     _strategy(monkeypatch)
     good = {"goal": "consulting", "role": "support", "confidence": "medium"}
-    _agent(monkeypatch, _ok_serves(serves=[
-        {"goal": "consulting", "role": "owner", "confidence": "high"},
-        {"goal": "consulting", "role": "path", "confidence": "certain"},
-        good,
-    ]))
+    _agent(
+        monkeypatch,
+        _ok_serves(
+            serves=[
+                {"goal": "consulting", "role": "owner", "confidence": "high"},
+                {"goal": "consulting", "role": "path", "confidence": "certain"},
+                good,
+            ]
+        ),
+    )
     d = triage.decide(make_email_event(), today="2026-10-09")
     assert d.serves == [good]
 

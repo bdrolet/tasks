@@ -194,7 +194,8 @@ def setup_telemetry(service_name: str) -> None:
         "asana.strategy.goals_loaded", description="Goals in the loaded strategy, by kind"
     )
     area_below_the_line = meter.create_gauge(
-        "asana.strategy.area_below_the_line", description="1 when an area is below the line, by area"
+        "asana.strategy.area_below_the_line",
+        description="1 when an area is below the line, by area",
     )
 
     # --- Logs ---

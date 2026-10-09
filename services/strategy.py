@@ -13,7 +13,6 @@ from datetime import date
 from models.strategy import (
     KINDS,
     OPS,
-    PERIODS,
     Goal,
     Measure,
     Signal,
@@ -68,12 +67,19 @@ def _parse_signal(text: str) -> Signal | None:
             tag=m.group(1),
         )
     if m := _UNDATED_RE.match(t):
-        return Signal(kind="undated", cls="evidence", text=t, tag=m.group(1), after=_date(m.group(2)))
+        return Signal(
+            kind="undated", cls="evidence", text=t, tag=m.group(1), after=_date(m.group(2))
+        )
     if m := _STALE_RE.match(t):
         return Signal(kind="stale", cls="absence", text=t, days=int(m.group(1)))
     if m := _LEAD_SIG_RE.match(t):
         return Signal(
-            kind="lead", cls="absence", text=t, tag=m.group(1), value=float(m.group(2)), period=m.group(3)
+            kind="lead",
+            cls="absence",
+            text=t,
+            tag=m.group(1),
+            value=float(m.group(2)),
+            period=m.group(3),
         )
     return None
 
@@ -130,7 +136,9 @@ def _parse_block(goal_id: str, body: str, findings: list[str]) -> Goal | None:
                 m = _LAG_RE.match(value)
                 if not m:
                     raise ValueError(value)
-                fields["lag"] = Measure(m.group(1).strip(), m.group(2), float(m.group(3)), m.group(4))
+                fields["lag"] = Measure(
+                    m.group(1).strip(), m.group(2), float(m.group(3)), m.group(4)
+                )
             elif key == "lead":
                 m = _LEAD_RE.match(value)
                 if not m:
@@ -157,10 +165,14 @@ def _parse_block(goal_id: str, body: str, findings: list[str]) -> Goal | None:
                     try:
                         sig = _parse_signal(part)
                     except ValueError:
-                        findings.append(f"{goal_id}: below-the-line signal {part.strip()!r} has an invalid date")
+                        findings.append(
+                            f"{goal_id}: below-the-line signal {part.strip()!r} has an invalid date"
+                        )
                         continue
                     if sig is None:
-                        findings.append(f"{goal_id}: below-the-line signal {part.strip()!r} not understood")
+                        findings.append(
+                            f"{goal_id}: below-the-line signal {part.strip()!r} not understood"
+                        )
                     else:
                         signals.append(sig)
             elif key == "review":

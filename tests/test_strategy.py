@@ -43,7 +43,13 @@ def test_parse_outcome_goal_header_and_prose():
         ("proposal", ">=", 2.0, "month"),
     ]
     t1, t2 = g.tripwires
-    assert (t1.ordinal, t1.subject, t1.op, t1.value, t1.by) == (1, "signed-client", "=", 0.0, date(2026, 12, 31))
+    assert (t1.ordinal, t1.subject, t1.op, t1.value, t1.by) == (
+        1,
+        "signed-client",
+        "=",
+        0.0,
+        date(2026, 12, 31),
+    )
     assert t1.action == "Revisit consulting niche and offer"
     assert t2.subject == "lag" and t2.action == "Revisit pricing"
     assert "**Diagnosis.** Nobody knows I exist." in g.prose
@@ -113,11 +119,15 @@ def test_unknown_signal_is_ignored_with_a_finding():
 
 
 def test_invalid_date_drops_only_that_signal():
-    doc = "### home\n- kind: area\n- below-the-line: undated:tax after 2026-02-30; stale > 14 days\n"
+    doc = (
+        "### home\n- kind: area\n- below-the-line: undated:tax after 2026-02-30; stale > 14 days\n"
+    )
     s = st.parse(doc, today=TODAY)
     assert [x.kind for x in s.get("home").signals] == ["stale"]
-    assert any("home: below-the-line signal 'undated:tax after 2026-02-30' has an invalid date" in f
-               for f in s.findings)
+    assert any(
+        "home: below-the-line signal 'undated:tax after 2026-02-30' has an invalid date" in f
+        for f in s.findings
+    )
 
 
 def test_text_hash_is_stable_and_changes_with_text():

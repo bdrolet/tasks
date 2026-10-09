@@ -10,8 +10,8 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from models.prioritize import Enrichment, Overrides, ScoredSet, ScoredTask, Stats, TaskFacts
-from services.due_digest import LOCAL_TZ
 from models.strategy import Strategy
+from services.due_digest import LOCAL_TZ
 from services.prioritize_config import Config
 
 _PRIORITY_RE = re.compile(r"^\[P([0-3])\]")
@@ -149,7 +149,9 @@ def necessity(eff: Effective, strategy: Strategy, config: Config) -> tuple[float
     """(N, grooming). Unattached when nothing known is served; grooming when
     the judgment is uncertain or a tag names an unknown goal."""
     if not strategy.goals or not eff.serves:
-        uncertain = eff.necessity_source in ("model", "default") and eff.necessity_confidence == "low"
+        uncertain = (
+            eff.necessity_source in ("model", "default") and eff.necessity_confidence == "low"
+        )
         groomed = uncertain or (eff.necessity_source == "tag")  # a tag with no known goal
         return config.necessity_unattached, groomed
     role_factor = config.necessity_role[eff.role or "support"]
@@ -203,7 +205,9 @@ def _effective_due(
     if eff.due_date_inferred and eff.due_date_inferred_confidence in ("medium", "high"):
         return eff.due_date_inferred, "inferred", None
     horizon = config.horizon_days.get(facts.priority or config.default_priority)
-    prio_due = _local_date(facts.created_at) + timedelta(days=horizon) if horizon is not None else None
+    prio_due = (
+        _local_date(facts.created_at) + timedelta(days=horizon) if horizon is not None else None
+    )
     goal_due = _goal_due(eff, strategy)
     # Flag mode reproduces the pre-strategy ranking exactly (spec D6), so the
     # goal horizon only becomes a due date outside it.
@@ -431,9 +435,7 @@ def score_set(
                     and eff.role in ("path", "derisk")
                     and any(s in below_the_line for s in eff.serves)
                 ),
-                "goal_horizon": (
-                    gd.isoformat() if (gd := _goal_due(eff, strategy)) else None
-                ),
+                "goal_horizon": (gd.isoformat() if (gd := _goal_due(eff, strategy)) else None),
             },
             project_name=f.project_name,
             points=eff.points,
@@ -612,6 +614,7 @@ def side_lists(scored: ScoredSet) -> dict[str, list[ScoredTask]]:
         "stop_doing": [
             t
             for t in scored.tasks
-            if t.bucket == "stop_doing" or (t.bucket in ("next", "nudge") and t.components.get("confident_none"))
+            if t.bucket == "stop_doing"
+            or (t.bucket in ("next", "nudge") and t.components.get("confident_none"))
         ],
     }

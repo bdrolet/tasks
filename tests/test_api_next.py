@@ -261,12 +261,20 @@ def test_next_reselection_honours_must_do_and_starvation(monkeypatch):
 def test_calibrate_has_necessity_section(monkeypatch):
     monkeypatch.setattr(repo, "calibration_rows", lambda c: [])
     monkeypatch.setattr(repo, "necessity_rows", lambda c: [])
-    from repo import tasks as repo_tasks
     from repo import suppressions as repo_sup
+    from repo import tasks as repo_tasks
+
     monkeypatch.setattr(repo_tasks, "necessity_rows", lambda c: [])
     monkeypatch.setattr(repo_sup, "restore_rates", lambda c, settle: [])
     body = client.get("/calibrate", headers=AUTH).json()
-    assert body["necessity"] == {"by_confidence": {}, "by_source": {}, "by_strategy": {}, "grooming": {"attached": 0, "unresolved": 0}, "suppressions": {}, "gate2_vs_enrichment": {"judged": 0, "agreed": 0, "rate": None}}
+    assert body["necessity"] == {
+        "by_confidence": {},
+        "by_source": {},
+        "by_strategy": {},
+        "grooming": {"attached": 0, "unresolved": 0},
+        "suppressions": {},
+        "gate2_vs_enrichment": {"judged": 0, "agreed": 0, "rate": None},
+    }
 
 
 def test_ranking_accepts_the_stop_doing_bucket():
