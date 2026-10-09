@@ -8,20 +8,22 @@ Design: docs/superpowers/specs/2026-09-23-next-prioritizer-design.md"""
 
 import logging
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import clients.asana as asana
 import clients.otel as otel
 import clients.pubsub as pubsub
 from clients.db import get_conn
 from models.prioritize import Enrichment, ScoredSet, Serve, TaskFacts
-from models.strategy import Strategy
+from models.strategy import GoalState, Strategy
 from repo import goals as repo_goals
 from repo import prioritize as repo
 from services import custom_fields as cf
 from services import enrichment as en
+from services import goal_state as gs
 from services import managed_projects, prioritize_config
 from services import prioritize as pz
+from services import sections
 from services import strategy as strategy_service
 from services import tags as tags_service
 from services.due_digest import today_local
@@ -33,6 +35,7 @@ TOP_N_LOGGED = 10
 # many parents; gather and heal descend at most this many levels below a task.
 # The scorer's ancestor inheritance (D16) walks the same bound.
 MAX_SUBTASK_DEPTH = pz.MAX_SUBTASK_DEPTH
+TRIPWIRE_EXTERNAL = "tripwire:{goal}:{ordinal}:{by}"
 
 
 def handle(message: dict) -> None:
@@ -619,14 +622,82 @@ def heal() -> int:
     return republished
 
 
+def evaluate_goals(conn, strategy: Strategy, today: date) -> list[GoalState]:
+    """Spec D7: views from facts plus yesterday's score rows (bucket, serves,
+    role); previous day's states for the debounce; writes today's rows."""
+    repo_goals.save_snapshot(conn, strategy)  # the API and webhook CF read goals from here, never the secret
+    if not strategy.goals:
+        return []
+    scores = {r["task_gid"]: {"bucket": r["bucket"], "components": r["components"]} for r in repo.list_scores(conn)}
+    views = gs.views_from(repo.list_facts(conn), scores)
+    config = prioritize_config.load()
+    states = gs.evaluate(
+        strategy, views, repo_goals.all_latest_reports(conn), repo_goals.get_mutes(conn),
+        repo_goals.get_states(conn, today - timedelta(days=1)), today, config,
+    )
+    for s in states:
+        repo_goals.upsert_state(conn, s)
+        if s.kind == "area":
+            otel.area_below_the_line.set(1 if s.state.get("below_the_line") else 0, {"area": s.goal_id})
+    otel.strategy_goals_loaded.set(len(strategy.outcome_goals()), {"kind": "outcome"})
+    otel.strategy_goals_loaded.set(len(strategy.areas()), {"kind": "area"})
+    return states
+
+
+def fire_tripwires(strategy: Strategy, states: list[GoalState], previous: dict[str, GoalState]) -> list[str]:
+    """Spec D8: a tripwire newly fired today becomes one task, guarded by an
+    external id that includes the `by` date. Asana failure raises (D7)."""
+    fired: list[str] = []
+    for s in states:
+        goal = strategy.get(s.goal_id)
+        if goal is None or goal.kind != "outcome":
+            continue
+        prev = {(t["ordinal"], t["by"]): t for t in (previous.get(s.goal_id).state.get("tripwires") if previous.get(s.goal_id) else []) or []}
+        for t in s.state.get("tripwires") or []:
+            if not t["fired"] or prev.get((t["ordinal"], t["by"]), {}).get("fired"):
+                continue
+            external = TRIPWIRE_EXTERNAL.format(goal=goal.id, ordinal=t["ordinal"], by=t["by"])
+            if asana.find_task_by_external(external):
+                continue
+            fields = {
+                "name": f"[P1] {t['action']}",
+                "html_notes": (
+                    f"<body>Tripwire fired for <b>{goal.id}</b>: {t['text']} (measured {t['value']}).\n"
+                    f"Review: task-next review</body>"
+                ),
+                "projects": [asana.ASANA_PROJECT_ID],
+                "external": {"gid": external, "data": "tasks"},
+                "tags": tags_service.resolve_gids([f"serves:{goal.id}", "role:derisk", "tripwire"]),
+            }
+            created = asana.create_task_from_fields(fields)
+            section = sections.for_category("review")
+            if section:
+                asana.add_task_to_section(created.gid, section)
+            pubsub.publish_task_changed(created.gid, "pipeline")
+            otel.tripwire_fired.add(1, {"goal": goal.id})
+            fired.append(external)
+    return fired
+
+
 def handle_day_changed(*, today: date | None = None) -> dict:
     today = today or today_local()
+    config = prioritize_config.load()
+    strategy = strategy_service.load(stale_after_days=config.strategy_stale_after_days, today=today)
     with get_conn() as conn:
         deferred, started = settle_deferrals(conn, today)
     healed = heal()
     with get_conn() as conn:
-        rescore(conn, kind="daily", trigger_gid=None, today=today)
-    logger.info(
-        "day_changed %s: %d deferred, %d started, %d republished", today, deferred, started, healed
-    )
-    return {"deferred": deferred, "started": started, "healed": healed}
+        previous = repo_goals.get_states(conn, today - timedelta(days=1))
+        states = evaluate_goals(conn, strategy, today)
+    fired = fire_tripwires(strategy, states, previous)
+    with get_conn() as conn:
+        scored = rescore(conn, kind="daily", trigger_gid=None, today=today, strategy=strategy)
+        if states:
+            steps = {}
+            for g in strategy.outcome_goals():
+                step = next((t for t in scored.next() if t.components.get("role") == "path" and g.id in (t.components.get("serves") or [])), None)
+                steps[g.id] = step.gid if step else None
+            repo_goals.set_next_steps(conn, today, steps)
+    logger.info("day_changed %s: %d deferred, %d started, %d republished, %d goals, %d tripwires",
+                today, deferred, started, healed, len(states), len(fired))
+    return {"deferred": deferred, "started": started, "healed": healed, "goals": len(states), "tripwires_fired": len(fired)}

@@ -48,6 +48,10 @@ prioritize_events: metrics.Counter = metrics.NoOpMeter("noop").create_counter("n
 prioritize_enrich: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
 prioritize_rescore_duration: metrics.Histogram = metrics.NoOpMeter("noop").create_histogram("noop")
 prioritize_candidates: metrics._Gauge = metrics.NoOpMeter("noop").create_gauge("noop")
+tripwire_fired: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+necessity_judgments: metrics.Counter = metrics.NoOpMeter("noop").create_counter("noop")
+strategy_goals_loaded: metrics._Gauge = metrics.NoOpMeter("noop").create_gauge("noop")
+area_below_the_line: metrics._Gauge = metrics.NoOpMeter("noop").create_gauge("noop")
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -64,6 +68,7 @@ def setup_telemetry(service_name: str) -> None:
     global webhook_auth_failures
     global webhooks_registered, webhooks_deleted, webhooks_active
     global prioritize_events, prioritize_enrich, prioritize_rescore_duration, prioritize_candidates
+    global tripwire_fired, necessity_judgments, strategy_goals_loaded, area_below_the_line
 
     endpoint = os.environ.get("GRAFANA_OTLP_ENDPOINT")
     if not endpoint:
@@ -177,6 +182,19 @@ def setup_telemetry(service_name: str) -> None:
     )
     prioritize_candidates = meter.create_gauge(
         "asana.prioritize.candidates", description="Scored tasks by bucket after the last rescore"
+    )
+    tripwire_fired = meter.create_counter(
+        "asana.strategy.tripwire_fired", description="Tripwire tasks created, by goal"
+    )
+    necessity_judgments = meter.create_counter(
+        "asana.strategy.necessity_judgments",
+        description="by confidence and outcome (attached|grooming|none)",
+    )
+    strategy_goals_loaded = meter.create_gauge(
+        "asana.strategy.goals_loaded", description="Goals in the loaded strategy, by kind"
+    )
+    area_below_the_line = meter.create_gauge(
+        "asana.strategy.area_below_the_line", description="1 when an area is below the line, by area"
     )
 
     # --- Logs ---
