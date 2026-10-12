@@ -194,12 +194,14 @@ def test_points_precedence_and_low_confidence_multiplier():
 
 
 def test_diversity_penalty_mixes_projects():
+    # Dates sit outside the must-do window so the greedy fill, not must-do
+    # placement, decides the day.
     heavy = [
-        facts(f"c{i}", project="Consulting", points=1, due_on=TODAY + timedelta(days=3))
+        facts(f"c{i}", project="Consulting", points=1, due_on=TODAY + timedelta(days=10))
         for i in range(8)
     ]
     other = [
-        facts(f"f{i}", project="Family", points=1, due_on=TODAY + timedelta(days=4))
+        facts(f"f{i}", project="Family", points=1, due_on=TODAY + timedelta(days=11))
         for i in range(2)
     ]
     scored = run(heavy + other)
@@ -464,14 +466,61 @@ def test_hard_due_today_is_selected_first_beyond_n_and_consumes_capacity():
     assert by["m"].rank == 1
 
 
-def test_every_hard_must_do_is_placed_even_past_n_and_capacity():
+def test_must_dos_bypass_n_but_stop_at_capacity_on_time_before_late():
     musts = [
         facts(f"m{i}", name="[P3] x", points=3, due_on=TODAY + timedelta(days=d))
         for i, d in enumerate((-2, 0, 1))
     ]
     other = facts("o", name="[P0] y", points=1, due_on=TODAY + timedelta(days=10))
     picked = pz.select(run([*musts, other]).next(), CFG, n=1)
-    assert {t.gid for t in picked} == {"m0", "m1", "m2"}
+    # m1 (due today) and m2 (due tomorrow) can still finish on time; m0 is
+    # late. 3 + 3 points reaches the 5-point day, so m0 and o are left out.
+    assert [t.gid for t in picked] == ["m1", "m2"]
+
+
+def test_a_costlier_deadline_displaces_a_cheaper_one_it_cannot_share_the_week_with():
+    small = facts("s", name="[P3] blog draft", points=4, due_on=TODAY)
+    big = facts("b", name="[P1] file the return", points=8, due_on=TODAY + timedelta(days=1))
+    scored = run([small, big], {"s": enr(impact="low"), "b": enr(impact="high")})
+    by = scored.by_gid()
+    assert by["s"].components["cost_of_delay"] < by["b"].components["cost_of_delay"]
+    assert (by["s"].score or 0) > (by["b"].score or 0)  # per point the draft wins
+    # Both are due this week but only 1.6 days of work fit by tomorrow: the
+    # draft is dropped from the on-time tier, not the return.
+    assert [t.gid for t in pz._order_musts([by["s"], by["b"]], CFG)] == ["b", "s"]
+    assert [t.gid for t in pz.select(scored.next(), CFG)] == ["b"]
+
+
+def test_late_must_dos_follow_on_time_ones_and_order_by_cost_of_delay_not_score():
+    errand = facts("e", name="[P2] errand", points=1, due_on=TODAY - timedelta(days=10))
+    heavy = facts("h", name="[P1] heavy", points=5, due_on=TODAY - timedelta(days=1))
+    soon = facts("n", name="[P3] soon", points=1, due_on=TODAY + timedelta(days=1))
+    scored = run([errand, heavy, soon], {"h": enr(impact="high")})
+    by = scored.by_gid()
+    assert all(pz._is_must(by[g], CFG) for g in ("e", "h", "n"))
+    assert (by["e"].score or 0) > (by["h"].score or 0)
+    assert by["h"].components["cost_of_delay"] > by["e"].components["cost_of_delay"]
+    assert [t.gid for t in pz._order_musts([by["e"], by["h"], by["n"]], CFG)] == ["n", "h", "e"]
+    assert [t.gid for t in pz.select(scored.next(), CFG)] == ["n", "h"]
+
+
+def test_equal_cost_of_delay_drops_the_newer_deadline_from_the_on_time_tier():
+    a = facts("a", name="[P2] a", points=5, due_on=TODAY)
+    b = facts("b", name="[P2] b", points=5, due_on=TODAY)
+    by = run([a, b]).by_gid()
+    for t in (by["a"], by["b"]):
+        t.components["cost_of_delay"] = 0.5
+    assert [t.gid for t in pz._order_musts([by["a"], by["b"]], CFG)] == ["a", "b"]
+
+
+def test_order_musts_falls_back_to_score_and_points_for_old_stored_rows():
+    a = facts("a", name="[P2] a", points=1, due_on=TODAY)
+    b = facts("b", name="[P1] b", points=1, due_on=TODAY - timedelta(days=1))
+    by = run([a, b]).by_gid()
+    for t in (by["a"], by["b"]):
+        del t.components["cost_of_delay"]
+        del t.components["effort_days"]
+    assert [t.gid for t in pz._order_musts([by["a"], by["b"]], CFG)] == ["a", "b"]
 
 
 def test_must_do_ignores_soft_dates_inside_the_window():

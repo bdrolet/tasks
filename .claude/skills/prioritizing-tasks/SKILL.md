@@ -49,7 +49,12 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
   `stale`, `nudge`. Logs a `manual` run; never bumps deferral counters.
   - Must-dos first: a hard `due_on` whose effective slack (days until due
     minus the work it needs minus hard work queued ahead) is ≤ 5 leads the
-    list whatever its score, beyond `n` and capacity, and consumes capacity.
+    list whatever its score, beyond `n` but only while the 5-point day has
+    room. Within must-dos: the ones that can still finish by their due day,
+    earliest deadline first (a costlier deadline displaces a cheaper one
+    that cannot share the week with it), then the already-late ones by cost
+    of delay. A must-do that does not fit is not selected; it shows in the
+    ranking and, with negative slack, in `overcommitted`.
   - Inbox is excluded: its tasks bucket `excluded:project`, never selected;
     a pin does not override that.
   - Starvation boost: a project not in a recent daily pick gets up to +50%

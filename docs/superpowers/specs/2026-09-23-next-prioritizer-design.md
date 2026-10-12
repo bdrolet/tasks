@@ -293,6 +293,10 @@ included) are **must-dos**: placed first, beyond `n` and capacity, exempt
 from the energy and diversity adjustments, but consuming capacity and
 counting as their project's pick.
 
+*Amended 2026-10-12 by `2026-10-12-must-do-ordering-design.md`: must-dos are
+ordered on-time tier (earliest deadline, weighted by cost of delay) then late
+tier (cost of delay), and stop at capacity.*
+
 ### D15 — Excluded projects
 
 Inbox is where email-born tasks land for triage; it is not work to be
@@ -622,6 +626,9 @@ both stored in `components`. It feeds selection only.
    `days_until_due ≤ hard_due_window_days` (1), by score. Placed first,
    whatever `n`, capacity, energy or diversity; they consume capacity and
    count as a pick of their project for the diversity haircut.
+   *(Amended 2026-10-12: ordered by `_order_musts` — on-time tier then late
+   tier — and taken only while the day has capacity; see
+   `2026-10-12-must-do-ordering-design.md`.)*
 2. **Fill:** greedy over the remaining unpinned candidates by
    `score × (1 + starvation_boost) × energy_factor` (`energy_penalty` 0.7
    for a mismatch under `--energy`); after each pick (must-dos included),

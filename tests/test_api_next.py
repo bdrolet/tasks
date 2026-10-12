@@ -259,6 +259,35 @@ def test_next_reselection_honours_must_do_and_starvation(monkeypatch):
     assert [t["task_gid"] for t in one] == ["must"]
 
 
+def test_next_reselection_takes_on_time_must_dos_then_late_within_capacity(monkeypatch):
+    rows = [
+        _with(row("hi", 1, rank=3, score=3.0), due_source="horizon", starvation_boost=0.0),
+        _with(
+            row("late", 2, rank=1, score=4.5, points=1),
+            due_source="hard",
+            days_until_due=-3,
+            effective_slack=-3.2,
+            effort_days=0.2,
+            cost_of_delay=0.9,
+            starvation_boost=0.0,
+        ),
+        _with(
+            row("ontime", 3, rank=2, score=0.75, project="Family", points=4),
+            due_source="hard",
+            days_until_due=2,
+            effective_slack=1.0,
+            effort_days=0.8,
+            cost_of_delay=0.6,
+            starvation_boost=0.0,
+        ),
+    ]
+    monkeypatch.setattr(repo, "list_scores", lambda c: [dict(r) for r in rows])
+    body = client.post("/next", headers=AUTH, json={"n": 3}).json()
+    # the deadline that can still be made leads, the late one follows by cost
+    # of delay despite its higher score, and 4 + 1 points closes the day
+    assert [t["task_gid"] for t in body["next"]] == ["ontime", "late"]
+
+
 def test_calibrate_has_necessity_section(monkeypatch):
     monkeypatch.setattr(repo, "calibration_rows", lambda c: [])
     monkeypatch.setattr(repo, "necessity_rows", lambda c: [])

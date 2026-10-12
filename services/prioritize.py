@@ -595,16 +595,17 @@ def select(
     afterwards and count toward neither n nor capacity (P5).
 
     Must-dos are hard-dated tasks whose effective_slack is within
-    hard_due_slack_days (overdue included), by score: placed whatever n,
-    capacity, energy or diversity
-    say, but they consume capacity and count as a pick of their project.
-    The fill ranks by score * (1 + starvation_boost) * energy factor, with
-    the same-project diversity haircut after every pick, and stops at n
-    total picks or a full day. Reads only ScoredTask fields and components,
-    so api/routers/next.py re-selects stored rows identically."""
+    hard_due_slack_days (overdue included), in _order_musts order: the
+    ones that can still finish by their due day, then the late ones by
+    cost of delay. They are placed whatever n, energy or diversity say, but
+    only while the day has capacity, and they count as a pick of their
+    project. The fill ranks by score * (1 + starvation_boost) * energy
+    factor, with the same-project diversity haircut after every pick, and
+    stops at n total picks or a full day. Reads only ScoredTask fields and
+    components, so api/routers/next.py re-selects stored rows identically."""
     n = n or config.default_n
     pool = {t.gid: t for t in candidates if t.pinned_rank is None and t.score is not None}
-    must = sorted((t for t in pool.values() if _is_must(t, config)), key=lambda t: -(t.score or 0))
+    must = _order_musts([t for t in pool.values() if _is_must(t, config)], config)
     adjusted = {
         gid: (t.score or 0)
         * (1.0 + float(t.components.get("starvation_boost") or 0.0))
@@ -624,10 +625,54 @@ def select(
                 adjusted[g] *= config.diversity_penalty
 
     for t in must:
+        if used >= config.points_per_day:
+            break
         take(t)
     while pool and len(picked) < n and used < config.points_per_day:
         take(pool[max(pool, key=lambda g: adjusted[g])])
     return _place_pins(picked, _sorted_pins(candidates))
+
+
+def _order_musts(musts: list[ScoredTask], config: Config) -> list[ScoredTask]:
+    """On-time tier, then late tier.
+
+    The on-time tier is built earliest-deadline-first (ties by cost of
+    delay) with a running cursor of effort: a task is on time when it would
+    finish by the end of its due day. When a task would be late, the lowest
+    cost-of-delay task among the set plus the newcomer is dropped until the
+    newcomer fits or is itself the one dropped — so a statutory deadline
+    displaces a blog draft rather than the other way round. Dropping an
+    earlier task never makes a later one late. Overdue tasks can never be on
+    time. The late tier is everything else by cost of delay: once the cliff
+    has passed, only how much being later hurts distinguishes them."""
+
+    def cod(t: ScoredTask) -> float:
+        v = t.components.get("cost_of_delay")
+        return float(v if v is not None else (t.score or 0.0))
+
+    def effort(t: ScoredTask) -> float:
+        v = t.components.get("effort_days")
+        return float(v if v is not None else t.points / config.points_per_day)
+
+    def due(t: ScoredTask) -> float:
+        return float(t.components.get("days_until_due") or 0)
+
+    on_time: list[ScoredTask] = []
+    late: list[ScoredTask] = []
+    for t in sorted(musts, key=lambda t: (due(t), -cod(t))):
+        if due(t) < 0:
+            late.append(t)
+            continue
+        trial = [*on_time, t]
+        while sum(effort(x) for x in trial) > due(t) + 1:
+            weakest = min(reversed(trial), key=cod)  # equal cost: drop the newcomer
+            trial.remove(weakest)
+            late.append(weakest)
+            if weakest is t:
+                break
+        on_time = trial
+    late.sort(key=lambda t: -cod(t))
+    return on_time + late
 
 
 def _is_must(t: ScoredTask, config: Config) -> bool:
