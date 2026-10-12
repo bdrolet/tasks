@@ -230,6 +230,16 @@ def render_review(r: dict) -> str:
         f"{', '.join(t['serves_suggested']) or '—'} ({t['confidence']})"
         for t in r["grooming"]
     ] or ["  —"]
+    out.append("## stale dates")
+    out += [
+        f"  {task_ref.ref(t['gid'])}\t{t['gid']}\t{t['name']}\tdue {t['due']} ({t['days_overdue']}d ago)"
+        + (
+            "\tinherited by " + ", ".join(s["name"] for s in t["inherited_by"])
+            if t.get("inherited_by")
+            else ""
+        )
+        for t in r.get("stale_dates") or []
+    ] or ["  —"]
     out.append("## stop doing")
     out += [
         f"  {task_ref.ref(t['gid'])}\t{t['gid']}\t{t['name']}\t{t['reason']}"

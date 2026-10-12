@@ -37,7 +37,7 @@ BASE=https://tasks-api.drolet.cloud
   inferred / horizon — only hard dates can be overcommitted), slack,
   points and where they came from, impact, aging, any pin, and the model's reason.
 - "how good are the estimates" → `GET /calibrate`.
-- "weekly review / how are my goals / what's below the line / what's stalled" → `GET /review` (or `task-next review`). Report per goal: next step (or STALLED), leads vs threshold, lag, tripwires fired, diagnosis; per area: below the line and which tasks made it so; then grooming and stop-doing. A grooming task needs a `serves:` tag or removal — hand both to `editing-tasks`.
+- "weekly review / how are my goals / what's below the line / what's stalled" → `GET /review` (or `task-next review`). Report per goal: next step (or STALLED), leads vs threshold, lag, tripwires fired, diagnosis; per area: below the line and which tasks made it so; then grooming, stale dates and stop-doing. A grooming task needs a `serves:` tag or removal; a stale-date task needs its date cleared (on the owner named in the row, which may be a parent) or completing — hand all of these to `editing-tasks`, and never put a cleared date back.
 
 How the selection is built, so you can explain it:
 
