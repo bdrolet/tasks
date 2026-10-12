@@ -6,6 +6,12 @@ from typing import Any
 
 from models.strategy import GoalState, Strategy
 
+# A hard date this many days or more past due, on a task that is not a
+# repeat: cadence, is a date that stopped meaning anything — a meeting that
+# happened, a plan that slipped. Each one stays a late must-do and pushes
+# the feasibility cursor out, so the review lists them to clear or complete.
+STALE_DATE_DAYS = 3
+
 
 def _ref(row: dict | None) -> dict | None:
     if row is None:
@@ -78,6 +84,7 @@ def build(
         for r in active
         if r["components"].get("confident_none")
     ]
+    stale_dates = _stale_dates(scores, by_gid)
     return {
         "reviewed_at": today.isoformat(),
         "strategy_last_reviewed": strategy.last_reviewed.isoformat()
@@ -86,6 +93,7 @@ def build(
         "findings": list(strategy.findings),
         "goals": goals,
         "grooming": grooming,
+        "stale_dates": stale_dates,
         "stop_doing": {
             "tasks": stop,
             "suppressed_emails": [
@@ -104,6 +112,35 @@ def build(
             ],
         },
     }
+
+
+def _stale_dates(scores: list[dict], by_gid: dict[str, dict]) -> list[dict]:
+    """Open tasks whose hard date is STALE_DATE_DAYS or more past, grouped
+    under the task that owns the date: a subtask inheriting its parent's
+    date is listed under the parent, since the parent is what to clear."""
+    owners: dict[str, dict] = {}
+    for r in scores:
+        c = r.get("components") or {}
+        days = c.get("days_until_due")
+        if (
+            r.get("bucket", "").startswith("excluded:")
+            or c.get("due_source") != "hard"
+            or days is None
+            or days > -STALE_DATE_DAYS
+            or any(str(t).startswith("repeat:") for t in r.get("tags") or [])
+        ):
+            continue
+        owner_gid = c.get("due_from") or r["task_gid"]
+        entry = owners.get(owner_gid)
+        if entry is None:
+            owner = by_gid.get(owner_gid)
+            entry = owners[owner_gid] = (
+                _ref(owner) or {"gid": owner_gid, "name": owner_gid, "permalink_url": None}
+            ) | {"due": c.get("effective_due"), "days_overdue": -int(days), "inherited_by": []}
+        entry["days_overdue"] = max(entry["days_overdue"], -int(days))
+        if owner_gid != r["task_gid"]:
+            entry["inherited_by"].append(_ref(r))
+    return sorted(owners.values(), key=lambda e: (-e["days_overdue"], e["name"]))
 
 
 def _link(ref: dict | None) -> str:
@@ -156,6 +193,17 @@ def render(review: dict) -> str:
     out += [
         f"- {_link(t)} — suggested {', '.join(t.get('serves_suggested') or []) or 'nothing'} ({t.get('confidence')}): {t.get('reason')}"
         for t in review.get("grooming", [])
+    ] or ["- nothing"]
+    out += ["", "## Stale dates"]
+    out += [
+        f"- {_link(t)} — due {t.get('due')}, {t.get('days_overdue')}d ago"
+        + (
+            " (inherited by " + ", ".join(_link(s) for s in t["inherited_by"]) + ")"
+            if t.get("inherited_by")
+            else ""
+        )
+        + " — clear the date or complete it"
+        for t in review.get("stale_dates", [])
     ] or ["- nothing"]
     out += ["", "## Stop doing"]
     stop = review.get("stop_doing", {})
