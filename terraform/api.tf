@@ -163,7 +163,8 @@ resource "google_cloud_run_v2_service" "api" {
 }
 
 # Callers of tasks-api. Cloud Run IAM is the only authentication: there is no
-# app-level token. Only the laptop and the deploy smoke test call it.
+# app-level token. Only the laptop, the deploy smoke test, and the people
+# functions call it.
 resource "google_cloud_run_v2_service_iam_member" "api_invoker_users" {
   for_each = toset(var.api_invoker_users)
   project  = var.project_id
@@ -171,6 +172,15 @@ resource "google_cloud_run_v2_service_iam_member" "api_invoker_users" {
   name     = google_cloud_run_v2_service.api.name
   role     = "roles/run.invoker"
   member   = "user:${each.value}"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "api_invoker_service_accounts" {
+  for_each = toset(var.api_invoker_service_accounts)
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.api.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${each.value}"
 }
 
 # deploy-api.yml's smoke test calls the deployed service as the deployer SA.
