@@ -159,6 +159,9 @@ tasks have negative slack and stay must-dos. Order within must-dos stays by
 score. Nothing else in selection (pins, capacity, fill, starvation,
 diversity) changes.
 
+*Amended 2026-10-12 by `2026-10-12-must-do-ordering-design.md`: order within
+must-dos is on-time tier then late tier, and must-dos stop at capacity.*
+
 Why 5: for day-sized work it is "about a week before"; for an hour-sized
 task it is a few days. Must-dos bypass `n` and capacity, so several big
 deadlines in one week will stack on the same day — which is the right

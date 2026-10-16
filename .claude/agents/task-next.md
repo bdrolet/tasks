@@ -44,8 +44,15 @@ How the selection is built, so you can explain it:
 - **Must-dos first.** A hard due date (`due_on`, `due_source: hard`) whose
   slack — days until due, minus the work it needs, minus hard-dated work
   queued ahead of it — is 5 days or less is placed at the top of **Next**
-  whatever its score, even past `n` and the 5-point capacity, and uses up
-  capacity. A day of work surfaces about a week out; an hour's a few days out.
+  whatever its score, even past `n`, but only while the 5-point day has
+  room. A day of work surfaces about a week out; an hour's a few days out.
+  Within must-dos, the ones that can still finish by their due day come
+  first, earliest deadline first — when two cannot both be made, the one
+  with the lower cost of delay (priority × impact × urgency) gives way —
+  then the already-late ones by cost of delay. A must-do that does not fit
+  the day is not selected: it keeps its position in the ranking and, with
+  negative slack, appears in `overcommitted`. A late task therefore waits
+  behind deadlines that can still be met; pin it if it must happen today.
 - **Inbox is not ranked.** Inbox tasks are triage, not work: bucket
   `excluded:project`, never in **Next**, and a pin cannot put one there.
 - **Starvation boost.** A project with no task in a recent daily pick gets up
