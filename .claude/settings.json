@@ -1,5 +1,31 @@
 {
   "permissions": {
     "allow": ["Bash(gcloud:*)", "Bash(terraform:*)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr merge:*)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"tasks workflow: run the verifying-pr-locally skill (static CI + local runtime E2E against real Asana) BEFORE merging, if you have not already.\"}}'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr merge:*)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"tasks workflow: the merge auto-deploys on main. Monitor Deploy Functions + Deploy API + CI to green: gh run list --branch main\"}}'"
+          }
+        ]
+      }
+    ]
   }
 }
