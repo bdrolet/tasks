@@ -122,3 +122,12 @@ variable "api_invoker_users" {
   type        = list(string)
   default     = ["ben@drolet.cloud"]
 }
+
+variable "api_invoker_service_accounts" {
+  description = "Service accounts granted roles/run.invoker on tasks-api: people-process-cf and people-sync-cf post one completed task per referral outreach stage event (people repo, referral outreach spec §8)"
+  type        = list(string)
+  default = [
+    "people-process-cf@bens-project-462804.iam.gserviceaccount.com",
+    "people-sync-cf@bens-project-462804.iam.gserviceaccount.com",
+  ]
+}
