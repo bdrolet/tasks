@@ -431,6 +431,7 @@ value against `serves_estimated`, so no new audit table is needed.
     "next_step": {...} | null
   }],
   "grooming": [{gid, name, serves_suggested, confidence, reason}],
+  "stale_dates": [{gid, name, permalink_url, due, days_overdue, inherited_by: [{gid, name, permalink_url}]}],
   "stop_doing": {
     "tasks": [{gid, name, reason}],
     "suppressed_emails": [{message_id, subject, sender, web_link, reason, created_at}]
@@ -442,6 +443,11 @@ value against `serves_estimated`, so no new audit table is needed.
 met for two consecutive lag periods → "lead strong, lag flat" (the theory is
 wrong — change strategy); leads not met → "lead weak" (execution, not
 strategy); fewer than two lag reports → "insufficient data".
+
+`stale_dates` (added 2026-10-12, `2026-10-12-must-do-ordering-design.md` D4)
+lists open, non-`repeat:` tasks whose hard date is 3 or more days past,
+grouped under the task that owns the date (a subtask inheriting its
+parent's date is listed under the parent, which is what to clear).
 
 A Cloud Scheduler job `tasks-weekly-review` (`0 7 * * 1` America/New_York)
 posts `POST <webhook-url>/review` (escalate bearer), which renders the

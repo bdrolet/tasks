@@ -59,10 +59,11 @@ def run() -> dict:
     gid = _standing_task()
     asana.create_story(gid, text=review.render(body))
     logger.info(
-        "weekly review posted on %s (%d goals, %d grooming, %d stop-doing)",
+        "weekly review posted on %s (%d goals, %d grooming, %d stale dates, %d stop-doing)",
         gid,
         len(body["goals"]),
         len(body["grooming"]),
+        len(body["stale_dates"]),
         len(body["stop_doing"]["tasks"]),
     )
     return {"outcome": "posted", "task_gid": gid}

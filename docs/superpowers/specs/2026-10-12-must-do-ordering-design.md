@@ -65,6 +65,21 @@ pick, but they still inflate `effective_slack` in the feasibility pass and the
 `overcommitted` list. Clearing them is a review with the user; the system never
 restores a date the user cleared.
 
+### D4 — The weekly review lists stale dates
+
+Nothing surfaced dead dates: the review's grooming section is about
+`serves:` tags, "Groom the outreach pipeline" is about outreach, and the
+Inbox sweep is the Inbox project. So `GET /review` and the Monday comment
+gain a `stale_dates` section: open tasks (any non-excluded bucket) with
+`due_source = hard` and `days_until_due ≤ −3` that carry no `repeat:` tag
+(a cadence date that slipped is work to do, not a date to clear), grouped
+under the task that owns the date — a subtask inheriting its parent's
+`due_on` is listed under the parent, since the parent is what to clear —
+ordered by days overdue. Each row says "clear the date or complete it";
+the system never does either on its own, and never restores a cleared
+date. `repo.list_scores` now carries `task_facts.tags` so the review can
+see the `repeat:` tag.
+
 ## Measured outcome (2026-10-12 ranking, before any date cleanup)
 
 | Rule | Day's pick |

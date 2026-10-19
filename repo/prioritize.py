@@ -389,7 +389,7 @@ def list_scores(conn: Any) -> list[dict]:
         SELECT s.task_gid, s.scored_at, s.today, s.bucket, s.score, s.position, s.rank,
                s.components, s.overcommitted, s.stale, s.stale_reason,
                f.name, f.project_name, f.permalink_url, f.due_on, f.story_points, f.started_at,
-               o.pinned_rank, o.snooze_until, o.overrides
+               f.tags, o.pinned_rank, o.snooze_until, o.overrides
         FROM task_scores s
         JOIN task_facts f USING (task_gid)
         LEFT JOIN task_overrides o USING (task_gid)
@@ -401,6 +401,7 @@ def list_scores(conn: Any) -> list[dict]:
         d = dict(r)
         d["components"] = _as_json(d["components"], {})
         d["overrides"] = _as_json(d.get("overrides"), {})
+        d["tags"] = _as_json(d.get("tags"), [])
         d["due_on"] = _as_date(d["due_on"])
         d["snooze_until"] = _as_date(d.get("snooze_until"))
         d["started_at"] = _as_date(d.get("started_at"))

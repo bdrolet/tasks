@@ -130,6 +130,68 @@ def test_build_shapes_goals_grooming_and_stop_doing():
     assert [g["gid"] for g in r["grooming"]] == ["t3"]
     assert [g["gid"] for g in r["stop_doing"]["tasks"]] == ["t4", "t5"]
     assert r["stop_doing"]["suppressed_emails"][0]["subject"] == "Newsletter"
+    assert r["stale_dates"] == []
+
+
+def _dated(gid, name, days, **kw):
+    tags = kw.pop("tags", [])
+    components = {
+        "due_source": "hard",
+        "days_until_due": days,
+        "effective_due": (TODAY.fromordinal(TODAY.toordinal() + days)).isoformat(),
+    } | kw
+    row = score(gid, name, **components)
+    row["tags"] = tags
+    return row
+
+
+def test_stale_dates_lists_hard_dates_past_the_grace_grouped_under_the_owner():
+    scores = [
+        _dated("old", "[P2] Scan the title", -53),
+        _dated("edge", "[P2] Three days", -3),
+        _dated("fresh", "[P2] Two days", -2),
+        _dated("future", "[P1] Return", 3),
+        _dated("cadence", "[P1] Groom the pipeline", -7, tags=["repeat:1w", "consulting"]),
+        _dated("soft", "[P2] Inferred", -10, due_source="inferred"),
+        _dated("gone", "[P2] Completed", -10, bucket="excluded:completed"),
+        _dated("parked", "[P2] Snoozed", -10, bucket="snoozed"),
+        score("parent", "[P0] Fix the plan", bucket="excluded:has_subtasks"),
+        _dated("kid1", "Ask about supports", -11, due_from="parent"),
+        _dated("kid2", "Collect records", -11, due_from="parent"),
+        _dated("orphan", "Inherits from unscored", -4, due_from="missing"),
+    ]
+    r = review.build(STRAT, {}, scores, [], TODAY)
+    stale = {e["gid"]: e for e in r["stale_dates"]}
+    assert [e["gid"] for e in r["stale_dates"]] == [
+        "old",
+        "parent",
+        "parked",
+        "missing",
+        "edge",
+    ]
+    assert stale["old"] == {
+        "gid": "old",
+        "name": "[P2] Scan the title",
+        "permalink_url": "u/old",
+        "due": "2026-08-17",
+        "days_overdue": 53,
+        "inherited_by": [],
+    }
+    assert stale["parent"]["name"] == "[P0] Fix the plan" and stale["parent"]["days_overdue"] == 11
+    assert [k["gid"] for k in stale["parent"]["inherited_by"]] == ["kid1", "kid2"]
+    assert stale["missing"]["name"] == "missing" and stale["missing"]["permalink_url"] is None
+    assert [k["gid"] for k in stale["missing"]["inherited_by"]] == ["orphan"]
+    md = review.render(r)
+    assert "## Stale dates" in md
+    assert (
+        "- [[P2] Scan the title](u/old) — due 2026-08-17, 53d ago — clear the date or complete it"
+        in md
+    )
+    assert (
+        "- [[P0] Fix the plan](u/parent) — due 2026-09-28, 11d ago (inherited by [Ask about supports](u/kid1), [Collect records](u/kid2)) — clear the date or complete it"
+        in md
+    )
+    assert "Groom the pipeline" not in md and "Two days" not in md
 
 
 def test_render_is_markdown_with_links():
@@ -218,6 +280,7 @@ def test_render_is_markdown_with_links():
     assert "- [[P3] Fluff](u/t4) —" in md
     assert "- email [Linked](https://o/m1) from a@x — r1" in md
     assert "- email Unlinked from b@x — r2" in md
+    assert "## Stale dates\n- nothing" in md
     assert "None" not in md
 
 

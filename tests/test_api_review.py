@@ -49,6 +49,7 @@ def test_get_review_shape():
     body = r.json()
     assert {g["id"] for g in body["goals"]} == {"consulting", "finances"}
     assert body["grooming"] == [] and body["stop_doing"] == {"tasks": [], "suppressed_emails": []}
+    assert body["stale_dates"] == []
 
 
 def test_post_report_validates_goal_and_writes(monkeypatch):

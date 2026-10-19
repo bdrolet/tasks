@@ -173,7 +173,8 @@ with `external.gid = tripwire:{goal}:{n}:{by}`) and below-the-line signals
 signals only report), and saves a `strategy_snapshot` so tasks-api and the
 webhook CF never mount the secret. `GET /review` and the Monday
 `tasks-weekly-review` scheduler (comment on the `review:weekly` task) are
-the read side; `GET /calibrate` reports necessity agreement, which is what
+the read side, including `stale_dates` (hard dates 3+ days past on
+non-`repeat:` tasks, grouped under the date's owner); `GET /calibrate` reports necessity agreement, which is what
 justifies moving `mode`. Design:
 `docs/superpowers/specs/2026-10-09-strategy-layer-design.md`.
 

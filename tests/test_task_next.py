@@ -269,6 +269,18 @@ def test_review_renders_goals_and_lists(monkeypatch, capsys):
             },
         ],
         "grooming": [],
+        "stale_dates": [
+            {
+                "gid": "1218799497108742",
+                "name": "[P0] Fix the plan",
+                "permalink_url": None,
+                "due": "2026-10-01",
+                "days_overdue": 11,
+                "inherited_by": [
+                    {"gid": "1219331085068249", "name": "Ask about supports", "permalink_url": "u"}
+                ],
+            }
+        ],
         "stop_doing": {"tasks": [], "suppressed_emails": []},
     }
     monkeypatch.setattr(tn, "_api", lambda method, path, body=None, params=None: payload)
@@ -276,6 +288,14 @@ def test_review_renders_goals_and_lists(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "consulting" in out and "Write offer" in out and "f1" in out
     assert "below the line" in out.lower()
+    assert "## stale dates" in out
+    assert (
+        "1218799497108742\t[P0] Fix the plan\tdue 2026-10-01 (11d ago)\tinherited by Ask about supports"
+        in out
+    )
+    del payload["stale_dates"]  # an older API still renders
+    assert tn.main(["review"]) == 0
+    assert "## stale dates\n  —" in capsys.readouterr().out
 
 
 def test_report_and_mute_post(monkeypatch):
