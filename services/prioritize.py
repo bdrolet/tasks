@@ -352,6 +352,15 @@ def _bucket(
     return _Bucketed(bucket, None, inherited, waiting_on, waiting_source)
 
 
+def _sigmoid(x: float) -> float:
+    """Numerically safe logistic function: ``math.exp`` overflows past ~709,
+    which a due date two years out reaches, so saturate instead of raising."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)
+    return e / (1.0 + e)
+
+
 def score_set(
     facts: list[TaskFacts],
     enrichments: dict[str, Enrichment],
@@ -541,7 +550,7 @@ def score_set(
             # effective_slack is the EDF result for hard dates in the pass and
             # raw slack for everything else.
             eslack = c["effective_slack"]
-            u = 1.0 / (1.0 + math.exp(config.urgency_k * (eslack - config.urgency_s0)))
+            u = _sigmoid(-config.urgency_k * (eslack - config.urgency_s0))
             if source in caps:
                 u = min(u, caps[source])
         a = min(1.0, c["days_stale"] / config.stale_days)

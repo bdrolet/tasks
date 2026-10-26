@@ -85,6 +85,15 @@ def test_negative_slack_saturates_urgency_and_flags_overcommitted():
     assert s["b"].components["U"] > 0.99
 
 
+def test_far_future_due_date_does_not_overflow_urgency():
+    # exp(k * (slack - s0)) overflows a float once slack passes ~712 days;
+    # a due date two years out must score as "not urgent", not crash.
+    a = facts("a", due_on=TODAY + timedelta(days=900), points=1)
+    s = run([a]).by_gid()["a"]
+    assert s.components["effective_slack"] > 800
+    assert 0.0 <= s.components["U"] < 1e-6
+
+
 def test_soft_deadline_caps_urgency():
     a = facts(
         "a", due_on=None, points=1, created_at=TS - timedelta(days=60)
