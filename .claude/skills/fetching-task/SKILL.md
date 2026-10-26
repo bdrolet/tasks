@@ -48,6 +48,10 @@ sub-subtasks are not listed), and for email-derived tasks
 
 ## Subtask refs
 
+For showing subtasks, use `task-tree` (see Presenting) — it fetches every
+level and assigns refs itself. The pipe below is for when you need just the
+first level's refs as TSV, e.g. to resolve one before a write.
+
 When `subtasks` is non-empty, give each one a ref the same way a listing does
 — pipe the fetch response straight through `task-ref`, which reads the
 `subtasks` array when there's no `results` array:
@@ -65,8 +69,10 @@ does in a [[searching-tasks]] listing. Close the checklist with the same
 ## Presenting
 
 - Show `notes` (plain text) rather than `html_notes`.
-- If `subtasks` is non-empty, list them as a checklist, ref first, marking
-  completed ones; fetch one by its `task_gid` for full detail. If `parent` is
+- If `subtasks` is non-empty, show them as a tree with `task-tree <task_gid>`
+  (every level, refs on each row, done `[x]`, past-due flagged), returned
+  verbatim in a fenced code block — the same rendering the `task-lister` agent
+  uses. Fetch one by its `task_gid` for full detail. If `parent` is
   set, say the task is a subtask of it.
 - Email-derived tasks: `notes` contains the email summary + action links; the
   `message_id` works with the fetching-inbox-email skill for the full email.

@@ -104,6 +104,28 @@ rows; the script rehashes the loser, so a bumped task can show a different ref i
 listing its twin isn't part of. Refs are for talking about the list. Every write path
 still takes the GID — never pass a ref to an API call.
 
+## 3a. Subtasks: draw the tree
+
+When the request is about a task's **subtasks** — "what's under X", "show the
+subtasks of X", "print the tree for X", "everything I have for the party" — the
+answer is the tree, not a search listing. Find the parent's GID (a search, or
+the dispatch already names it), then:
+
+```bash
+task-tree <parent_gid>
+```
+
+It walks every level, sorts siblings by due date (undated last), marks done
+`[x]`, flags open past-due rows `← overdue`, and closes with the `refs:` map
+(refs assigned across the whole tree). Return its output **verbatim inside a
+fenced code block** — the box-drawing only lines up in monospace — then the
+one-line count and the refs map below it. Do not redraw, re-sort, or re-pad it,
+and do not convert it to the three-line format. If the request names several
+parents, run it once per parent.
+
+`command not found` means `scripts/link-skills.sh` hasn't been re-run since
+`task-tree` was added — say so rather than hand-drawing the tree.
+
 ## 4. Report honestly
 
 - **Zero hits** — say so and state the exact filters you used. Do not silently loosen the
@@ -125,7 +147,10 @@ tasks, and you never state a due date, project, or title the response didn't con
 
 Your final message is the list. No preamble.
 
-Group by date bucket when the request is date-shaped (**Overdue** / **Due today** /
+A subtask request is the tree from step 3a — skip the rest of this section except the
+count line and the refs map.
+
+Otherwise, group by date bucket when the request is date-shaped (**Overdue** / **Due today** /
 **Due later** / **No due date**); otherwise a flat list, in the order the API returned —
 for semantic searches that order is relevance, so keep it.
 
