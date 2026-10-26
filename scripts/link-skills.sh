@@ -63,6 +63,16 @@ if [[ -e "$BIN_DEST/task-next" && ! -L "$BIN_DEST/task-next" ]]; then
 fi
 ln -sfn "$REPO_ROOT/scripts/task_next.py" "$BIN_DEST/task-next"
 echo "linked $BIN_DEST/task-next -> $(readlink "$BIN_DEST/task-next")"
+
+# task_tree.py onto PATH as `task-tree` — a task and its subtasks as a
+# tree. Imports task_ref from its own directory, so it has to be symlinked
+# (not copied) to keep that sibling resolvable.
+if [[ -e "$BIN_DEST/task-tree" && ! -L "$BIN_DEST/task-tree" ]]; then
+  echo "error: $BIN_DEST/task-tree exists and is not a symlink — remove the old copy first" >&2
+  exit 1
+fi
+ln -sfn "$REPO_ROOT/scripts/task_tree.py" "$BIN_DEST/task-tree"
+echo "linked $BIN_DEST/task-tree -> $(readlink "$BIN_DEST/task-tree")"
 case ":$PATH:" in
   *":$BIN_DEST:"*) ;;
   *) echo "warning: $BIN_DEST is not on PATH — task listings will fail to find task-ref" >&2 ;;

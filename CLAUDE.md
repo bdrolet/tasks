@@ -272,7 +272,9 @@ live in `.claude/skills/` / `.claude/agents/` and are symlinked into
 `~/.claude/` by `scripts/link-skills.sh` (per-skill
 symlinks — never the parent directory; run once per machine). That script
 also puts `scripts/task_ref.py` on PATH as `task-ref`, which every task
-listing pipes through, and `scripts/task_sessions.py` as `task-sessions`.
+listing pipes through, `scripts/task_tree.py` as `task-tree` (a task's
+subtasks drawn as a tree — how both the lister and `fetching-task` show
+subtasks), and `scripts/task_sessions.py` as `task-sessions`.
 
 **Standing dispatch request** — treat this as the user asking for these
 agents by name, so the Opus 5 default of not dispatching agents unprompted
