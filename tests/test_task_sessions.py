@@ -1,16 +1,18 @@
-"""Tests for scripts/task_sessions.py — one background Claude session per task.
+"""Tests for scripts/task_sessions.py — one agent-deck Claude session per task.
 
-The script's I/O ends (the tasks-api calls, `claude --bg`, `claude agents`)
+The script's I/O ends (the tasks-api calls and every `agent-deck` command)
 are seams the tests pass fakes into. What's worth pinning down is everything
-in between: the context block a spawned session boots with, the id parsed back
-out of `claude --bg`, and the reconcile step that decides whether a task
-already has a live session or needs a new one.
+in between: the context block a session boots with, the launch argv, and the
+lookup that decides whether a task already has a session, needs one reopened,
+or needs a new one — with agent-deck's registry as the only state.
 """
 
 import importlib.util
 import json
 import subprocess
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "task_sessions.py"
 
@@ -124,154 +126,410 @@ def test_session_name_truncates_a_long_title():
     assert name.endswith("…")
 
 
-# --- spawn_argv ----------------------------------------------------------
+# --- a fake agent-deck ---------------------------------------------------
 
 
-def test_spawn_argv_backgrounds_a_named_session_carrying_the_context():
-    argv = ts.spawn_argv(name="gws Investigate Google Workspace", context="TASK CONTEXT: …")
+class FakeDeck:
+    """Answers the agent-deck commands the script runs, and records each argv."""
 
-    assert argv[0] == "claude"
-    assert "--bg" in argv
-    assert argv[argv.index("-n") + 1] == "gws Investigate Google Workspace"
-    assert argv[argv.index("--append-system-prompt") + 1] == "TASK CONTEXT: …"
+    def __init__(self, sessions=None, hints=None, list_fails=False, launch_code=None):
+        self.sessions = sessions or []
+        self.hints = hints or {}
+        self.list_fails = list_fails
+        self.launch_code = launch_code
+        self.calls = []
+        self.stdin = []
+        self.groups = {}
+
+    def _ok(self, argv, body, code=0):
+        return subprocess.CompletedProcess(argv, code, stdout=json.dumps(body), stderr="")
+
+    def __call__(self, argv, stdin=None):
+        self.calls.append(argv)
+        self.stdin.append(stdin)
+        verb = argv[1:3]
+        if argv[1] == "list":
+            if self.list_fails:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="tmux down")
+            return self._ok(argv, self.sessions)
+        if argv[1] == "launch":
+            if self.launch_code:
+                return self._ok(
+                    argv, {"success": False, "code": self.launch_code, "error": "nope"}, 1
+                )
+            title = argv[argv.index("-t") + 1]
+            return self._ok(
+                argv,
+                {
+                    "success": True,
+                    "id": "abcdef12-1",
+                    "status": "starting",
+                    "group": "tasks",
+                    "title": title,
+                },
+            )
+        if verb == ["session", "annotate"]:
+            return self._ok(argv, {"success": True, "hints": self.hints.get(argv[3], {})})
+        if verb == ["group", "show"]:
+            if argv[3] in self.groups:
+                return self._ok(argv, {"success": True, "max_concurrent": self.groups[argv[3]]})
+            return self._ok(argv, {"success": False, "code": "NOT_FOUND"}, 2)
+        return self._ok(argv, {"success": True})
+
+    def verbs(self):
+        return [" ".join(a[1:3]) for a in self.calls]
 
 
-def test_spawn_argv_never_supplies_a_session_id():
-    argv = ts.spawn_argv(name="gws x", context="ctx")
-
-    # `claude --bg --session-id <uuid>` warns "--bg manages the session id;
-    # ignoring --session-id" and assigns its own. Passing one would make the
-    # script confidently record an id that does not exist.
-    assert "--session-id" not in argv
-
-
-def test_spawn_argv_passes_no_prompt_so_the_session_idles():
-    argv = ts.spawn_argv(name="gws x", context="ctx")
-
-    # A trailing bare argument would be a prompt, and the session would start
-    # a turn — and spend tokens — before anyone attached to it.
-    assert argv[-1] == "ctx"
+GID = TASK["task_gid"]
+CONDUCTOR = {
+    "id": "14ba1caf-1",
+    "title": "conductor-tasks",
+    "group": "conductor",
+    "status": "waiting",
+}
+REF = ts.ref_for(GID)
 
 
-# --- parse_session_id ----------------------------------------------------
-
-
-def test_parse_session_id_reads_the_id_claude_bg_prints():
-    output = (
-        "backgrounded · ed1b7ea6 · gws Investigate Google Workspace\n"
-        "  claude agents             list sessions\n"
-        "  claude attach ed1b7ea6    open in this terminal\n"
+def _main(deck, argv, monkeypatch, tmp_path, env=None, task=TASK):
+    monkeypatch.setattr(ts, "CONTEXT_DIR", tmp_path / "ctx")
+    return ts.main(
+        argv,
+        runner=deck,
+        fetch=lambda gid: dict(task, task_gid=gid),
+        search=lambda **_: [],
+        env=env or {},
     )
 
-    assert ts.parse_session_id(output) == "ed1b7ea6"
+
+def _launch(deck):
+    return next(a for a in deck.calls if a[1] == "launch")
 
 
-def test_parse_session_id_handles_the_idle_suffix_bg_adds():
-    output = "backgrounded · 9cf12fa1 · probe (idle — send a prompt to start)\n"
-
-    assert ts.parse_session_id(output) == "9cf12fa1"
+# --- launch --------------------------------------------------------------
 
 
-def test_parse_session_id_returns_none_when_the_spawn_said_something_else():
-    assert ts.parse_session_id("error: could not start session\n") is None
+def test_launch_defaults_to_the_tasks_conductor_and_group(monkeypatch, tmp_path):
+    deck = FakeDeck([CONDUCTOR])
+
+    assert _main(deck, [GID, "--spawn"], monkeypatch, tmp_path) == 0
+
+    argv = _launch(deck)
+    assert argv[argv.index("--parent") + 1] == "conductor-tasks"
+    assert argv[argv.index("-g") + 1] == "tasks"
+    assert "--no-identity" in argv
+    assert f"asana_gid={GID}" in argv
+    assert argv[argv.index("-t") + 1].startswith(f"{REF} ")
 
 
-# --- spawn ---------------------------------------------------------------
+def test_launch_sends_the_start_prompt_by_default(monkeypatch, tmp_path):
+    deck = FakeDeck()
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    argv = _launch(deck)
+    assert argv[argv.index("--message-file") + 1] == "-"
+    assert "--no-assert-done" in argv
+    assert ts.START_PROMPT in deck.stdin
 
 
-def test_spawn_reports_the_id_claude_chose():
-    def runner(argv):
-        return subprocess.CompletedProcess(argv, 0, stdout="backgrounded · 07bb8d09 · gws x\n")
+def test_idle_launches_with_no_message(monkeypatch, tmp_path):
+    deck = FakeDeck()
 
-    assert ts.spawn("gws x", "ctx", runner=runner) == "07bb8d09"
+    _main(deck, [GID, "--spawn", "--idle"], monkeypatch, tmp_path)
 
-
-def test_spawn_returns_none_when_claude_exits_nonzero():
-    def runner(argv):
-        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
-
-    assert ts.spawn("gws x", "ctx", runner=runner) is None
+    assert "--message-file" not in _launch(deck)
+    assert not any(deck.stdin)
 
 
-# --- reconcile -----------------------------------------------------------
+def test_idle_and_prompt_conflict(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        _main(FakeDeck(), [GID, "--idle", "--prompt", "x"], monkeypatch, tmp_path)
 
 
-def test_reconcile_keeps_gids_whose_session_is_still_listed():
-    state = {"1218118170820306": "ed1b7ea6"}
+def test_a_reopened_session_is_not_prompted(monkeypatch, tmp_path):
+    deck = FakeDeck([_session("stopped")], {"11223344-9": {"asana_gid": GID}})
 
-    assert ts.reconcile(state, {"ed1b7ea6", "3070acad"}) == state
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
 
-
-def test_reconcile_forgets_a_gid_whose_session_is_gone():
-    state = {"1218118170820306": "ed1b7ea6", "1217000000000001": "deadbeef"}
-
-    assert ts.reconcile(state, {"ed1b7ea6"}) == {"1218118170820306": "ed1b7ea6"}
+    assert not any(deck.stdin)
 
 
-# --- plan ----------------------------------------------------------------
+def test_launch_passes_the_context_as_a_file(monkeypatch, tmp_path):
+    deck = FakeDeck()
+
+    _main(deck, [GID, "--spawn", "--idle"], monkeypatch, tmp_path)
+
+    argv = _launch(deck)
+    assert "--extra-arg=--append-system-prompt-file" in argv
+    path = tmp_path / "ctx" / f"{GID}.md"
+    assert f"--extra-arg={path}" in argv
+    assert (path.stat().st_mode & 0o777) == 0o600
+    text = path.read_text()
+    assert "## agent-deck" in text
+    assert "AGENTDECK_DONE" not in text  # no parent, no sentinel rule
 
 
-def test_plan_spawns_a_task_with_no_live_session():
-    rows = ts.plan([TASK], state={})
+def test_a_prompt_goes_on_stdin_without_the_done_instruction(monkeypatch, tmp_path):
+    deck = FakeDeck()
 
-    assert [(r.gid, r.action, r.session_id) for r in rows] == [("1218118170820306", "spawn", None)]
+    _main(deck, [GID, "--spawn", "--prompt", "prep this"], monkeypatch, tmp_path)
 
-
-def test_plan_skips_a_task_that_already_has_a_live_session():
-    rows = ts.plan([TASK], state={"1218118170820306": "ed1b7ea6"})
-
-    assert [(r.action, r.session_id) for r in rows] == [("already open", "ed1b7ea6")]
-
-
-def test_plan_gives_every_row_a_ref_unique_within_the_run():
-    other = dict(TASK, task_gid="1217000000000015", name="Something else")
-
-    rows = ts.plan([TASK, other], state={})
-
-    assert len({r.ref for r in rows}) == 2
+    argv = _launch(deck)
+    assert argv[argv.index("--message-file") + 1] == "-"
+    assert "--no-assert-done" in argv
+    assert "prep this" in deck.stdin
 
 
-# --- live_session_ids ----------------------------------------------------
+def test_dry_run_launches_nothing(monkeypatch, tmp_path):
+    deck = FakeDeck()
+
+    _main(deck, [GID], monkeypatch, tmp_path)
+
+    assert "launch" not in [a[1] for a in deck.calls]
+    assert "group create" not in deck.verbs()
 
 
-def test_live_session_ids_reads_the_agents_listing():
-    listing = json.dumps(
-        [
-            {"id": "ed1b7ea6", "kind": "background", "name": "gws x"},
-            {"sessionId": "2f12a14e-30d4-478f-a0ed-8c38be4fe60d", "kind": "interactive"},
-        ]
+def test_spawn_creates_a_missing_group_uncapped(monkeypatch, tmp_path):
+    deck = FakeDeck()
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    create = next(a for a in deck.calls if a[1:3] == ["group", "create"])
+    assert create[3] == "tasks"
+    # create ignores --max-concurrent 0, so the cap is lifted with an update.
+    update = next(a for a in deck.calls if a[1:3] == ["group", "update"])
+    assert update[3] == "tasks"
+    assert update[update.index("--max-concurrent") + 1] == "0"
+
+
+def test_an_existing_groups_cap_is_left_alone(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck()
+    deck.groups["tasks"] = 1
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "group update" not in deck.verbs()
+    assert "max_concurrent=1" in capsys.readouterr().err
+
+
+# --- group and parent configuration --------------------------------------
+
+
+def test_group_flag_beats_env_beats_default(monkeypatch, tmp_path):
+    deck = FakeDeck()
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path, env={"TASK_SESSIONS_GROUP": "work"})
+    assert _launch(deck)[_launch(deck).index("-g") + 1] == "work"
+
+    deck = FakeDeck()
+    _main(
+        deck,
+        [GID, "--spawn", "--group", "asana"],
+        monkeypatch,
+        tmp_path,
+        env={"TASK_SESSIONS_GROUP": "work"},
+    )
+    assert _launch(deck)[_launch(deck).index("-g") + 1] == "asana"
+
+
+def test_parent_self_uses_the_calling_session(monkeypatch, tmp_path):
+    deck = FakeDeck([{"id": "781a5faa-1", "title": "me", "group": "my-sessions"}])
+
+    _main(
+        deck,
+        [GID, "--spawn", "--parent", "self"],
+        monkeypatch,
+        tmp_path,
+        env={"AGENTDECK_INSTANCE_ID": "781a5faa-1"},
     )
 
-    def runner(argv):
-        return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr="")
-
-    assert ts.live_session_ids(runner=runner) == {"ed1b7ea6", "2f12a14e"}
-
-
-def test_live_session_ids_is_empty_when_the_agents_call_fails():
-    def boom(argv):
-        raise OSError("claude not found")
-
-    assert ts.live_session_ids(runner=boom) == set()
+    argv = _launch(deck)
+    assert argv[argv.index("--parent") + 1] == "781a5faa-1"
+    assert "--no-parent" not in argv
+    assert "AGENTDECK_DONE" in (tmp_path / "ctx" / f"{GID}.md").read_text()
 
 
-# --- state file ----------------------------------------------------------
+def test_parent_self_outside_agent_deck_is_an_error(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        _main(FakeDeck(), [GID, "--parent", "self"], monkeypatch, tmp_path)
 
 
-def test_state_round_trips_through_the_file(tmp_path):
-    path = tmp_path / "task-sessions.json"
+def test_inherit_group_drops_the_group_flag(monkeypatch, tmp_path):
+    deck = FakeDeck([{"id": "c0ffee00-1", "title": "conductor", "group": "conductor"}])
 
-    ts.save_state(path, {"1218118170820306": "ed1b7ea6"})
+    _main(deck, [GID, "--spawn", "--parent", "conductor", "--inherit-group"], monkeypatch, tmp_path)
 
-    assert ts.load_state(path) == {"1218118170820306": "ed1b7ea6"}
-
-
-def test_load_state_is_empty_when_the_file_does_not_exist(tmp_path):
-    assert ts.load_state(tmp_path / "nope.json") == {}
+    argv = _launch(deck)
+    assert "-g" not in argv
+    assert "--inherit-group" in argv
 
 
-def test_load_state_is_empty_when_the_file_is_corrupt(tmp_path):
-    path = tmp_path / "task-sessions.json"
-    path.write_text("{not json")
+def test_inherit_group_without_a_parent_is_an_error(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        _main(FakeDeck(), [GID, "--inherit-group"], monkeypatch, tmp_path)
 
-    assert ts.load_state(path) == {}
+
+# --- lookup and the state machine ----------------------------------------
+
+
+def _session(status, sid="11223344-9", title=None, group="tasks", **extra):
+    return {"id": sid, "title": title or f"{REF} x", "group": group, "status": status, **extra}
+
+
+def test_a_live_session_is_left_alone(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck([_session("waiting")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "launch" not in [a[1] for a in deck.calls]
+    assert "already open 11223344 (waiting)" in capsys.readouterr().out
+
+
+def test_a_stopped_session_is_reopened_not_duplicated(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck([_session("stopped")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "session start" in deck.verbs()
+    assert "launch" not in [a[1] for a in deck.calls]
+    assert "reopened 11223344" in capsys.readouterr().out
+
+
+def test_a_session_found_in_another_group_still_counts(monkeypatch, tmp_path):
+    deck = FakeDeck([_session("idle", group="my-sessions")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "launch" not in [a[1] for a in deck.calls]
+
+
+def test_a_hand_made_session_with_the_ref_is_adopted(monkeypatch, tmp_path):
+    deck = FakeDeck([_session("idle", group="my-sessions")], {})
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    annotate = [a for a in deck.calls if a[1:3] == ["session", "annotate"] and "--set-hint" in a]
+    assert annotate and annotate[0][-1] == f"asana_gid={GID}"
+    assert "launch" not in [a[1] for a in deck.calls]
+
+
+def test_two_sessions_for_one_task_is_refused(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck(
+        [_session("idle"), _session("idle", sid="55667788-9")],
+        {"11223344-9": {"asana_gid": GID}, "55667788-9": {"asana_gid": GID}},
+    )
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "duplicate 11223344,55667788" in capsys.readouterr().out
+    assert "launch" not in [a[1] for a in deck.calls]
+
+
+def test_an_unreadable_registry_launches_nothing(monkeypatch, tmp_path):
+    deck = FakeDeck(list_fails=True)
+
+    assert _main(deck, [GID, "--spawn"], monkeypatch, tmp_path) == 2
+    assert "launch" not in [a[1] for a in deck.calls]
+
+
+def test_already_exists_from_agent_deck_is_not_a_failure(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck(launch_code="ALREADY_EXISTS")
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "already open" in capsys.readouterr().out
+
+
+def test_repeated_gids_launch_once(monkeypatch, tmp_path):
+    deck = FakeDeck()
+
+    _main(deck, [GID, GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert [a[1] for a in deck.calls].count("launch") == 1
+
+
+def test_explicit_gids_are_not_capped_by_limit(monkeypatch, tmp_path):
+    deck = FakeDeck()
+    gids = [f"12170000000000{i:02d}" for i in range(3)]
+
+    _main(deck, gids + ["--spawn", "--limit", "1"], monkeypatch, tmp_path)
+
+    assert [a[1] for a in deck.calls].count("launch") == 3
+
+
+def test_refresh_sends_context_to_an_idle_session(monkeypatch, tmp_path):
+    deck = FakeDeck([_session("idle")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, [GID, "--spawn", "--refresh"], monkeypatch, tmp_path)
+
+    send = next(a for a in deck.calls if a[1:3] == ["session", "send"])
+    assert send[-1] == "11223344-9"
+    assert any(s and "Updated task context" in s for s in deck.stdin)
+
+
+def test_refresh_never_interrupts_a_running_session(monkeypatch, tmp_path):
+    deck = FakeDeck([_session("running")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, [GID, "--spawn", "--refresh"], monkeypatch, tmp_path)
+
+    assert "session send" not in deck.verbs()
+
+
+def test_prune_archives_a_completed_tasks_session(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck([_session("idle")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
+
+    assert "session archive" in deck.verbs()
+    assert "pruned 11223344" in capsys.readouterr().out
+
+
+def test_prune_keeps_a_running_session(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck([_session("running")], {"11223344-9": {"asana_gid": GID}})
+
+    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
+
+    assert "session archive" not in deck.verbs()
+    assert "kept (busy)" in capsys.readouterr().out
+
+
+def test_json_rows_carry_what_the_agent_reports(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck()
+
+    _main(deck, [GID, "--spawn", "--json"], monkeypatch, tmp_path)
+
+    (row,) = json.loads(capsys.readouterr().out)
+    assert row["permalink"] == TASK["permalink_url"]
+    assert row["project"] == "Ben's Board" and row["section"] == "Inbox"
+    assert row["attach"] == "agent-deck session attach abcdef12"
+
+
+def test_a_missing_default_conductor_launches_unparented(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck()
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "--no-parent" in _launch(deck)
+    assert "conductor-tasks not found" in capsys.readouterr().err
+    assert "AGENTDECK_DONE" not in (tmp_path / "ctx" / f"{GID}.md").read_text()
+
+
+def test_a_missing_explicit_parent_is_an_error(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        _main(FakeDeck(), [GID, "--spawn", "--parent", "nobody"], monkeypatch, tmp_path)
+
+
+def test_parent_none_opts_out_of_the_conductor(monkeypatch, tmp_path):
+    deck = FakeDeck([CONDUCTOR])
+
+    _main(deck, [GID, "--spawn", "--parent", "none"], monkeypatch, tmp_path)
+
+    assert "--no-parent" in _launch(deck)
+
+
+def test_a_conductor_parented_session_gets_the_sentinel_rule(monkeypatch, tmp_path):
+    deck = FakeDeck([CONDUCTOR])
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "AGENTDECK_DONE" in (tmp_path / "ctx" / f"{GID}.md").read_text()
+    assert "--no-assert-done" not in _launch(deck)

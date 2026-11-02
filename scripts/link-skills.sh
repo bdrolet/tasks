@@ -44,7 +44,7 @@ fi
 ln -sfn "$REPO_ROOT/scripts/task_ref.py" "$BIN_DEST/task-ref"
 echo "linked $BIN_DEST/task-ref -> $(readlink "$BIN_DEST/task-ref")"
 
-# task_sessions.py onto PATH as `task-sessions` — one background Claude
+# task_sessions.py onto PATH as `task-sessions` — one agent-deck Claude
 # session per task. Imports task_ref from its own directory, so it has to be
 # symlinked (not copied) to keep that sibling resolvable.
 if [[ -e "$BIN_DEST/task-sessions" && ! -L "$BIN_DEST/task-sessions" ]]; then
@@ -53,6 +53,7 @@ if [[ -e "$BIN_DEST/task-sessions" && ! -L "$BIN_DEST/task-sessions" ]]; then
 fi
 ln -sfn "$REPO_ROOT/scripts/task_sessions.py" "$BIN_DEST/task-sessions"
 echo "linked $BIN_DEST/task-sessions -> $(readlink "$BIN_DEST/task-sessions")"
+command -v agent-deck >/dev/null || echo "warning: agent-deck is not on PATH — task-sessions needs it" >&2
 
 # task_next.py onto PATH as `task-next` — the prioritizer CLI. Imports
 # task_ref from its own directory, so it has to be symlinked (not copied)
