@@ -10,6 +10,7 @@ The agent-deck behaviour itself is tested in ~/src/scripts/deck-sessions/tests.
 import importlib.util
 import json
 import subprocess
+import sys
 import urllib.error
 from pathlib import Path
 
@@ -21,6 +22,7 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "task_sessions.py"
 def _load():
     spec = importlib.util.spec_from_file_location("task_sessions", SCRIPT)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses resolve postponed annotations through it
     spec.loader.exec_module(module)
     return module
 
@@ -593,3 +595,11 @@ def test_prune_with_nothing_done_archives_nothing(monkeypatch, tmp_path):
     _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path)
 
     assert [c[0][0] for c in deck.calls] == ["sessions"]
+
+
+def test_a_short_answer_from_deck_sessions_exits_2(monkeypatch, tmp_path, capsys):
+    def short(argv, stdin=None):
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    assert _main(short, [GID, "--spawn"], monkeypatch, tmp_path) == 2
+    assert "wrong number of results" in capsys.readouterr().err

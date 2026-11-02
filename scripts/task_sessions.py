@@ -32,9 +32,12 @@ Group: --group, else $TASK_SESSIONS_GROUP, else `tasks`.
 Parent: --parent none|self|<session>, else $TASK_SESSIONS_PARENT, else
 `conductor-tasks` (the tasks conductor) — or none when that session doesn't exist.
 
-Stdlib only — this runs from PATH under whatever `python3` is first, not
-under the repo's venv.
+Stdlib only, Python >= 3.9: this runs from PATH under whatever `python3` is
+first, not under the repo's venv. On a conductor's PATH that is macOS's
+/usr/bin/python3 (3.9).
 """
+
+from __future__ import annotations
 
 import argparse
 import functools
@@ -467,7 +470,10 @@ def main(
             print(f"registry unavailable: {e} — nothing launched", file=sys.stderr)
             return 2
         results = [json.loads(line) for line in out.splitlines() if line.strip()]
-        for row, result in zip(pending, results, strict=True):
+        if len(results) != len(pending):
+            print("deck-sessions returned the wrong number of results", file=sys.stderr)
+            return 2
+        for row, result in zip(pending, results):
             detail = result.get("detail") or ""
             if result.get("outcome") == "failed" and detail.startswith("parent "):
                 raise SystemExit(f"task-sessions: {detail}")
