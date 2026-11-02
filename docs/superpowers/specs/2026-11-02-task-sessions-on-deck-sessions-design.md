@@ -1,7 +1,7 @@
 # task-sessions on deck-sessions
 
 **Date:** 2026-11-02
-**Status:** implemented
+**Status:** implemented (PR #57)
 **Umbrella spec:** `~/src/scripts/docs/superpowers/specs/2026-11-02-deck-sessions-design.md`
 — read it first. It defines `deck-sessions`, its JSON contract, the verified
 agent-deck behaviour, and the rollout order (this is step 2; `deck-sessions`
@@ -100,6 +100,14 @@ The agent-deck behaviour tests move to `~/src/scripts/deck-sessions/tests/`
   `deck-sessions` is not on PATH.
 - `.claude/agents/task-launcher.md`: no change expected (same CLI and output).
 - Update the predecessor spec's status line to point here.
+
+### D5. Sublists
+
+Sessions the conductor moved into `tasks/waiting-on-others`,
+`tasks/waiting-on-ben` or `tasks/done` must still be found and pruned. Keep
+the `in_tree` tests passing through `deck-sessions` (umbrella fact 15). Done:
+`~/src/scripts/deck-sessions/tests` covers lookup and `sessions --group` for
+sublists; `--prune` here passes `--group <group>` to it.
 
 ## Acceptance
 
