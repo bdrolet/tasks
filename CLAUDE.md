@@ -329,6 +329,9 @@ auto-parents under the caller. The launch passes
 the context file carries its own short agent-deck section instead.
 `--refresh` sends fresh context as a message (a resumed conversation never
 re-reads its system prompt); `--prune` archives sessions whose task is completed.
+Sublists of the group (`tasks/waiting-on-others`, `tasks/waiting-on-ben`,
+`tasks/done`) count as the group: the conductor files sessions there by what
+they wait on, and lookup and `--prune` still find them (`in_tree`).
 
 **Task refs** — listings label each row with a three-character base36 ref
 hashed from the GID (`scripts/task_ref.py`), stable across listings with

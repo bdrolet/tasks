@@ -406,6 +406,17 @@ class Row:
         return session_name(self.ref, self.task["name"])
 
 
+def in_tree(session_group: str | None, group: str | None) -> bool:
+    """True when a session sits in the group or one of its sublists (`tasks/waiting-on-others`).
+
+    The tasks conductor files sessions into sublists by what they are waiting on;
+    they are still task sessions.
+    """
+    if not group or not session_group:
+        return False
+    return session_group == group or session_group.startswith(f"{group}/")
+
+
 def find_sessions(rows: list[Row], deck_rows: list[dict], group: str | None, runner=_run) -> None:
     """Attach each row's existing sessions: the hint is identity, the title prefix finds hand-made ones."""
     by_gid = {row.gid: row for row in rows}
@@ -413,7 +424,7 @@ def find_sessions(rows: list[Row], deck_rows: list[dict], group: str | None, run
     for session in deck_rows:
         title = session.get("title") or ""
         prefix_row = next((r for p, r in prefixes.items() if title.startswith(p)), None)
-        in_group = group is not None and session.get("group") == group
+        in_group = in_tree(session.get("group"), group)
         if not in_group and prefix_row is None:
             continue
         gid = hints(session["id"], runner).get(GID_HINT)
@@ -531,7 +542,7 @@ def prune(deck_rows: list[dict], group: str, spawn: bool, runner=_run, fetch=fet
     """Stop and archive sessions in the group whose task is completed or gone."""
     lines = []
     for session in deck_rows:
-        if session.get("group") != group or session.get("archived"):
+        if not in_tree(session.get("group"), group) or session.get("archived"):
             continue
         gid = hints(session["id"], runner).get(GID_HINT)
         if not gid:
