@@ -1,7 +1,7 @@
 # Task sessions on agent-deck
 
 **Date:** 2026-11-02
-**Status:** implemented on branch `agent-deck-task-sessions`; assumptions verified live against agent-deck v1.16.36 (see "Experiments")
+**Status:** implemented on branch `agent-deck-task-sessions`; assumptions verified live against agent-deck v1.16.36 (see "Experiments") The agent-deck half has since moved to `deck-sessions`; see `2026-11-02-task-sessions-on-deck-sessions-design.md`.
 
 ## Problem
 

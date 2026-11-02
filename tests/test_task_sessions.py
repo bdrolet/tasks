@@ -1,15 +1,16 @@
 """Tests for scripts/task_sessions.py — one agent-deck Claude session per task.
 
-The script's I/O ends (the tasks-api calls and every `agent-deck` command)
-are seams the tests pass fakes into. What's worth pinning down is everything
-in between: the context block a session boots with, the launch argv, and the
-lookup that decides whether a task already has a session, needs one reopened,
-or needs a new one — with agent-deck's registry as the only state.
+The script's I/O ends (the tasks-api calls and every `deck-sessions` call)
+are seams the tests pass fakes into. What's pinned down here is the task
+half: the context block, the title, the spec each task becomes, and how
+deck-sessions' results map back to the rows task-sessions has always printed.
+The agent-deck behaviour itself is tested in ~/src/scripts/deck-sessions/tests.
 """
 
 import importlib.util
 import json
 import subprocess
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -126,440 +127,469 @@ def test_session_name_truncates_a_long_title():
     assert name.endswith("…")
 
 
-# --- a fake agent-deck ---------------------------------------------------
+# --- a fake deck-sessions ------------------------------------------------
 
 
-class FakeDeck:
-    """Answers the agent-deck commands the script runs, and records each argv."""
+class FakeDeckSessions:
+    """Records each deck-sessions call (argv + stdin) and answers with canned results.
 
-    def __init__(self, sessions=None, hints=None, list_fails=False, launch_code=None):
-        self.sessions = sessions or []
-        self.hints = hints or {}
-        self.list_fails = list_fails
-        self.launch_code = launch_code
+    `results` maps a GID to the result `ensure` returns for it; any GID not
+    listed comes back `launched` (or `would launch` without --apply).
+    """
+
+    def __init__(self, results=None, sessions=None, exit_code=0, stderr=""):
+        self.results = results or {}
+        self.listed = sessions or []
+        self.exit_code = exit_code
+        self.stderr = stderr
         self.calls = []
-        self.stdin = []
-        self.groups = {}
 
-    def _ok(self, argv, body, code=0):
-        return subprocess.CompletedProcess(argv, code, stdout=json.dumps(body), stderr="")
+    def specs(self):
+        argv, stdin = next(c for c in self.calls if c[0][0] == "ensure")
+        return [json.loads(line) for line in stdin.splitlines()]
 
     def __call__(self, argv, stdin=None):
-        self.calls.append(argv)
-        self.stdin.append(stdin)
-        verb = argv[1:3]
-        if argv[1] == "list":
-            if self.list_fails:
-                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="tmux down")
-            return self._ok(argv, self.sessions)
-        if argv[1] == "launch":
-            if self.launch_code:
-                return self._ok(
-                    argv, {"success": False, "code": self.launch_code, "error": "nope"}, 1
+        self.calls.append((argv, stdin))
+        if self.exit_code:
+            return subprocess.CompletedProcess(argv, self.exit_code, "", self.stderr)
+        if argv[0] == "ensure":
+            apply = "--apply" in argv
+            out = []
+            for line in stdin.splitlines():
+                key = json.loads(line)["key"]
+                default = (
+                    {
+                        "outcome": "launched",
+                        "deck_id": "abcdef12-1",
+                        "status": "starting",
+                        "group": "tasks",
+                    }
+                    if apply
+                    else {"outcome": "would launch"}
                 )
-            title = argv[argv.index("-t") + 1]
-            return self._ok(
-                argv,
-                {
-                    "success": True,
-                    "id": "abcdef12-1",
-                    "status": "starting",
-                    "group": "tasks",
-                    "title": title,
-                },
-            )
-        if verb == ["session", "annotate"]:
-            return self._ok(argv, {"success": True, "hints": self.hints.get(argv[3], {})})
-        if verb == ["group", "show"]:
-            if argv[3] in self.groups:
-                return self._ok(argv, {"success": True, "max_concurrent": self.groups[argv[3]]})
-            return self._ok(argv, {"success": False, "code": "NOT_FOUND"}, 2)
-        return self._ok(argv, {"success": True})
-
-    def verbs(self):
-        return [" ".join(a[1:3]) for a in self.calls]
+                out.append(
+                    json.dumps(
+                        {
+                            "key": key,
+                            "detail": None,
+                            "deck_id": None,
+                            "status": None,
+                            "group": None,
+                            "adopted": False,
+                        }
+                        | self.results.get(key, default)
+                    )
+                )
+            return subprocess.CompletedProcess(argv, 0, "\n".join(out) + "\n", self.stderr)
+        if argv[0] == "sessions":
+            return subprocess.CompletedProcess(argv, 0, json.dumps(self.listed), "")
+        if argv[0] == "archive":
+            apply = "--apply" in argv
+            ids = [a for a in argv[1:] if a != "--apply"]
+            out = []
+            for sid in ids:
+                status = next(s["status"] for s in self.listed if s["deck_id"] == sid)
+                outcome = (
+                    "kept (busy)"
+                    if status == "running"
+                    else "archived"
+                    if apply
+                    else "would archive"
+                )
+                out.append(json.dumps({"deck_id": sid, "outcome": outcome, "detail": None}))
+            return subprocess.CompletedProcess(argv, 0, "\n".join(out) + "\n", "")
+        raise AssertionError(argv)
 
 
 GID = TASK["task_gid"]
-CONDUCTOR = {
-    "id": "14ba1caf-1",
-    "title": "conductor-tasks",
-    "group": "conductor",
-    "status": "waiting",
-}
 REF = ts.ref_for(GID)
 
 
-def _main(deck, argv, monkeypatch, tmp_path, env=None, task=TASK):
+def _main(deck, argv, monkeypatch, tmp_path, env=None, task=TASK, fetch=None):
     monkeypatch.setattr(ts, "CONTEXT_DIR", tmp_path / "ctx")
     return ts.main(
         argv,
-        runner=deck,
-        fetch=lambda gid: dict(task, task_gid=gid),
+        deck=deck,
+        fetch=fetch or (lambda gid: dict(task, task_gid=gid)),
         search=lambda **_: [],
         env=env or {},
     )
 
 
-def _launch(deck):
-    return next(a for a in deck.calls if a[1] == "launch")
+# --- the spec each task becomes ------------------------------------------
 
 
-# --- launch --------------------------------------------------------------
-
-
-def test_launch_defaults_to_the_tasks_conductor_and_group(monkeypatch, tmp_path):
-    deck = FakeDeck([CONDUCTOR])
-
-    assert _main(deck, [GID, "--spawn"], monkeypatch, tmp_path) == 0
-
-    argv = _launch(deck)
-    assert argv[argv.index("--parent") + 1] == "conductor-tasks"
-    assert argv[argv.index("-g") + 1] == "tasks"
-    assert "--no-identity" in argv
-    assert f"asana_gid={GID}" in argv
-    assert argv[argv.index("-t") + 1].startswith(f"{REF} ")
-
-
-def test_launch_sends_the_start_prompt_by_default(monkeypatch, tmp_path):
-    deck = FakeDeck()
+def test_one_spec_per_task_with_the_task_fields(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
 
     _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
 
-    argv = _launch(deck)
-    assert argv[argv.index("--message-file") + 1] == "-"
-    assert "--no-assert-done" in argv
-    assert ts.START_PROMPT in deck.stdin
+    (spec,) = deck.specs()
+    assert spec == {
+        "key_hint": "asana_gid",
+        "key": GID,
+        "title": ts.session_name(REF, TASK["name"]),
+        "adopt_prefix": f"{REF} ",
+        "context": ts.context_block(dict(TASK), REF),
+        "context_path": str(tmp_path / "ctx" / f"{GID}.md"),
+        "cwd": str(ts.REPO),
+        "group": "tasks",
+        "parent": "conductor-tasks",
+        "parent_is_default": True,
+        "hints": {"permalink": TASK["permalink_url"]},
+        "model": None,
+        "idle_timeout": None,
+        "prompt": ts.START_PROMPT,
+        "reopen_prompt": None,
+        "refresh": False,
+    }
 
 
-def test_idle_launches_with_no_message(monkeypatch, tmp_path):
-    deck = FakeDeck()
+def test_context_path_defaults_to_the_task_context_dir():
+    # The 13 live sessions have this path baked into their stored extra args.
+    assert Path.home() / ".claude" / "task-context" == ts.CONTEXT_DIR
+
+
+def test_idle_sends_no_prompt(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
 
     _main(deck, [GID, "--spawn", "--idle"], monkeypatch, tmp_path)
 
-    assert "--message-file" not in _launch(deck)
-    assert not any(deck.stdin)
+    assert deck.specs()[0]["prompt"] is None
+
+
+def test_prompt_overrides_the_start_prompt(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
+
+    _main(deck, [GID, "--spawn", "--prompt", "prep this"], monkeypatch, tmp_path)
+
+    assert deck.specs()[0]["prompt"] == "prep this"
+
+
+def test_prompt_file_is_read(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
+    (tmp_path / "p.txt").write_text("from a file")
+
+    _main(deck, [GID, "--prompt-file", str(tmp_path / "p.txt")], monkeypatch, tmp_path)
+
+    assert deck.specs()[0]["prompt"] == "from a file"
 
 
 def test_idle_and_prompt_conflict(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
-        _main(FakeDeck(), [GID, "--idle", "--prompt", "x"], monkeypatch, tmp_path)
+        _main(FakeDeckSessions(), [GID, "--idle", "--prompt", "x"], monkeypatch, tmp_path)
 
 
-def test_a_reopened_session_is_not_prompted(monkeypatch, tmp_path):
-    deck = FakeDeck([_session("stopped")], {"11223344-9": {"asana_gid": GID}})
+def test_model_idle_timeout_and_refresh_pass_through(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
 
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+    _main(
+        deck, [GID, "--model", "opus", "--idle-timeout", "24h", "--refresh"], monkeypatch, tmp_path
+    )
 
-    assert not any(deck.stdin)
-
-
-def test_launch_passes_the_context_as_a_file(monkeypatch, tmp_path):
-    deck = FakeDeck()
-
-    _main(deck, [GID, "--spawn", "--idle"], monkeypatch, tmp_path)
-
-    argv = _launch(deck)
-    assert "--extra-arg=--append-system-prompt-file" in argv
-    path = tmp_path / "ctx" / f"{GID}.md"
-    assert f"--extra-arg={path}" in argv
-    assert (path.stat().st_mode & 0o777) == 0o600
-    text = path.read_text()
-    assert "## agent-deck" in text
-    assert "AGENTDECK_DONE" not in text  # no parent, no sentinel rule
+    spec = deck.specs()[0]
+    assert (spec["model"], spec["idle_timeout"], spec["refresh"]) == ("opus", "24h", True)
 
 
-def test_a_prompt_goes_on_stdin_without_the_done_instruction(monkeypatch, tmp_path):
-    deck = FakeDeck()
+def test_a_task_without_a_permalink_sends_no_hint(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
 
-    _main(deck, [GID, "--spawn", "--prompt", "prep this"], monkeypatch, tmp_path)
+    _main(deck, [GID], monkeypatch, tmp_path, task=dict(TASK, permalink_url=None))
 
-    argv = _launch(deck)
-    assert argv[argv.index("--message-file") + 1] == "-"
-    assert "--no-assert-done" in argv
-    assert "prep this" in deck.stdin
+    assert deck.specs()[0]["hints"] == {}
 
 
-def test_dry_run_launches_nothing(monkeypatch, tmp_path):
-    deck = FakeDeck()
-
+def test_apply_is_passed_only_with_spawn(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
     _main(deck, [GID], monkeypatch, tmp_path)
+    assert deck.calls[0][0] == ["ensure"]
 
-    assert "launch" not in [a[1] for a in deck.calls]
-    assert "group create" not in deck.verbs()
-
-
-def test_spawn_creates_a_missing_group_uncapped(monkeypatch, tmp_path):
-    deck = FakeDeck()
-
+    deck = FakeDeckSessions()
     _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    create = next(a for a in deck.calls if a[1:3] == ["group", "create"])
-    assert create[3] == "tasks"
-    # create ignores --max-concurrent 0, so the cap is lifted with an update.
-    update = next(a for a in deck.calls if a[1:3] == ["group", "update"])
-    assert update[3] == "tasks"
-    assert update[update.index("--max-concurrent") + 1] == "0"
+    assert deck.calls[0][0] == ["ensure", "--apply"]
 
 
-def test_an_existing_groups_cap_is_left_alone(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck()
-    deck.groups["tasks"] = 1
+def test_repeated_gids_become_one_spec(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
 
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+    _main(deck, [GID, GID, "--spawn"], monkeypatch, tmp_path)
 
-    assert "group update" not in deck.verbs()
-    assert "max_concurrent=1" in capsys.readouterr().err
+    assert len(deck.specs()) == 1
+
+
+def test_explicit_gids_are_not_capped_by_limit(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
+    gids = [f"12170000000000{i:02d}" for i in range(3)]
+
+    _main(deck, gids + ["--spawn", "--limit", "1"], monkeypatch, tmp_path)
+
+    assert len(deck.specs()) == 3
+
+
+def test_completed_and_unfetchable_tasks_are_never_sent(monkeypatch, tmp_path, capsys):
+    deck = FakeDeckSessions()
+    done = "1217000000000002"
+
+    def fetch(gid):
+        if gid == "1217000000000003":
+            raise OSError("boom")
+        return dict(TASK, task_gid=gid, completed=gid == done)
+
+    _main(deck, [GID, done, "1217000000000003", "--spawn"], monkeypatch, tmp_path, fetch=fetch)
+
+    assert [s["key"] for s in deck.specs()] == [GID]
+    out = capsys.readouterr().out
+    assert "skipped (completed)" in out and "fetch failed: boom" in out
+
+
+def test_nothing_to_send_never_calls_deck_sessions(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
+
+    assert deck.calls == []
 
 
 # --- group and parent configuration --------------------------------------
 
 
 def test_group_flag_beats_env_beats_default(monkeypatch, tmp_path):
-    deck = FakeDeck()
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path, env={"TASK_SESSIONS_GROUP": "work"})
-    assert _launch(deck)[_launch(deck).index("-g") + 1] == "work"
+    deck = FakeDeckSessions()
+    _main(deck, [GID], monkeypatch, tmp_path, env={"TASK_SESSIONS_GROUP": "work"})
+    assert deck.specs()[0]["group"] == "work"
 
-    deck = FakeDeck()
+    deck = FakeDeckSessions()
     _main(
-        deck,
-        [GID, "--spawn", "--group", "asana"],
-        monkeypatch,
-        tmp_path,
-        env={"TASK_SESSIONS_GROUP": "work"},
+        deck, [GID, "--group", "asana"], monkeypatch, tmp_path, env={"TASK_SESSIONS_GROUP": "work"}
     )
-    assert _launch(deck)[_launch(deck).index("-g") + 1] == "asana"
+    assert deck.specs()[0]["group"] == "asana"
+
+
+def test_parent_env_is_explicit(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
+
+    _main(deck, [GID], monkeypatch, tmp_path, env={"TASK_SESSIONS_PARENT": "boss"})
+
+    spec = deck.specs()[0]
+    assert (spec["parent"], spec["parent_is_default"]) == ("boss", False)
+
+
+def test_parent_none_opts_out(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
+
+    _main(deck, [GID, "--parent", "none"], monkeypatch, tmp_path)
+
+    assert deck.specs()[0]["parent"] == "none"
 
 
 def test_parent_self_uses_the_calling_session(monkeypatch, tmp_path):
-    deck = FakeDeck([{"id": "781a5faa-1", "title": "me", "group": "my-sessions"}])
+    deck = FakeDeckSessions()
 
     _main(
         deck,
-        [GID, "--spawn", "--parent", "self"],
+        [GID, "--parent", "self"],
         monkeypatch,
         tmp_path,
         env={"AGENTDECK_INSTANCE_ID": "781a5faa-1"},
     )
 
-    argv = _launch(deck)
-    assert argv[argv.index("--parent") + 1] == "781a5faa-1"
-    assert "--no-parent" not in argv
-    assert "AGENTDECK_DONE" in (tmp_path / "ctx" / f"{GID}.md").read_text()
+    assert deck.specs()[0]["parent"] == "781a5faa-1"
 
 
 def test_parent_self_outside_agent_deck_is_an_error(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
-        _main(FakeDeck(), [GID, "--parent", "self"], monkeypatch, tmp_path)
+        _main(FakeDeckSessions(), [GID, "--parent", "self"], monkeypatch, tmp_path)
 
 
-def test_inherit_group_drops_the_group_flag(monkeypatch, tmp_path):
-    deck = FakeDeck([{"id": "c0ffee00-1", "title": "conductor", "group": "conductor"}])
+def test_inherit_group_sends_a_null_group(monkeypatch, tmp_path):
+    deck = FakeDeckSessions()
 
-    _main(deck, [GID, "--spawn", "--parent", "conductor", "--inherit-group"], monkeypatch, tmp_path)
+    _main(deck, [GID, "--parent", "conductor", "--inherit-group"], monkeypatch, tmp_path)
 
-    argv = _launch(deck)
-    assert "-g" not in argv
-    assert "--inherit-group" in argv
+    assert deck.specs()[0]["group"] is None
 
 
 def test_inherit_group_without_a_parent_is_an_error(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
-        _main(FakeDeck(), [GID, "--inherit-group"], monkeypatch, tmp_path)
-
-
-# --- lookup and the state machine ----------------------------------------
-
-
-def _session(status, sid="11223344-9", title=None, group="tasks", **extra):
-    return {"id": sid, "title": title or f"{REF} x", "group": group, "status": status, **extra}
-
-
-def test_a_live_session_is_left_alone(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck([_session("waiting")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "launch" not in [a[1] for a in deck.calls]
-    assert "already open 11223344 (waiting)" in capsys.readouterr().out
-
-
-def test_a_stopped_session_is_reopened_not_duplicated(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck([_session("stopped")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "session start" in deck.verbs()
-    assert "launch" not in [a[1] for a in deck.calls]
-    assert "reopened 11223344" in capsys.readouterr().out
-
-
-def test_a_session_found_in_another_group_still_counts(monkeypatch, tmp_path):
-    deck = FakeDeck([_session("idle", group="my-sessions")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "launch" not in [a[1] for a in deck.calls]
-
-
-def test_a_hand_made_session_with_the_ref_is_adopted(monkeypatch, tmp_path):
-    deck = FakeDeck([_session("idle", group="my-sessions")], {})
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    annotate = [a for a in deck.calls if a[1:3] == ["session", "annotate"] and "--set-hint" in a]
-    assert annotate and annotate[0][-1] == f"asana_gid={GID}"
-    assert "launch" not in [a[1] for a in deck.calls]
-
-
-def test_two_sessions_for_one_task_is_refused(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck(
-        [_session("idle"), _session("idle", sid="55667788-9")],
-        {"11223344-9": {"asana_gid": GID}, "55667788-9": {"asana_gid": GID}},
-    )
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "duplicate 11223344,55667788" in capsys.readouterr().out
-    assert "launch" not in [a[1] for a in deck.calls]
-
-
-def test_an_unreadable_registry_launches_nothing(monkeypatch, tmp_path):
-    deck = FakeDeck(list_fails=True)
-
-    assert _main(deck, [GID, "--spawn"], monkeypatch, tmp_path) == 2
-    assert "launch" not in [a[1] for a in deck.calls]
-
-
-def test_already_exists_from_agent_deck_is_not_a_failure(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck(launch_code="ALREADY_EXISTS")
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "already open" in capsys.readouterr().out
-
-
-def test_repeated_gids_launch_once(monkeypatch, tmp_path):
-    deck = FakeDeck()
-
-    _main(deck, [GID, GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert [a[1] for a in deck.calls].count("launch") == 1
-
-
-def test_explicit_gids_are_not_capped_by_limit(monkeypatch, tmp_path):
-    deck = FakeDeck()
-    gids = [f"12170000000000{i:02d}" for i in range(3)]
-
-    _main(deck, gids + ["--spawn", "--limit", "1"], monkeypatch, tmp_path)
-
-    assert [a[1] for a in deck.calls].count("launch") == 3
-
-
-def test_refresh_sends_context_to_an_idle_session(monkeypatch, tmp_path):
-    deck = FakeDeck([_session("idle")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, [GID, "--spawn", "--refresh"], monkeypatch, tmp_path)
-
-    send = next(a for a in deck.calls if a[1:3] == ["session", "send"])
-    assert send[-1] == "11223344-9"
-    assert any(s and "Updated task context" in s for s in deck.stdin)
-
-
-def test_refresh_never_interrupts_a_running_session(monkeypatch, tmp_path):
-    deck = FakeDeck([_session("running")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, [GID, "--spawn", "--refresh"], monkeypatch, tmp_path)
-
-    assert "session send" not in deck.verbs()
-
-
-def test_prune_archives_a_completed_tasks_session(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck([_session("idle")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
-
-    assert "session archive" in deck.verbs()
-    assert "pruned 11223344" in capsys.readouterr().out
-
-
-def test_prune_keeps_a_running_session(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck([_session("running")], {"11223344-9": {"asana_gid": GID}})
-
-    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
-
-    assert "session archive" not in deck.verbs()
-    assert "kept (busy)" in capsys.readouterr().out
-
-
-def test_json_rows_carry_what_the_agent_reports(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck()
-
-    _main(deck, [GID, "--spawn", "--json"], monkeypatch, tmp_path)
-
-    (row,) = json.loads(capsys.readouterr().out)
-    assert row["permalink"] == TASK["permalink_url"]
-    assert row["project"] == "Ben's Board" and row["section"] == "Inbox"
-    assert row["attach"] == "agent-deck session attach abcdef12"
-
-
-def test_a_missing_default_conductor_launches_unparented(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck()
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "--no-parent" in _launch(deck)
-    assert "conductor-tasks not found" in capsys.readouterr().err
-    assert "AGENTDECK_DONE" not in (tmp_path / "ctx" / f"{GID}.md").read_text()
+        _main(
+            FakeDeckSessions(), [GID, "--parent", "none", "--inherit-group"], monkeypatch, tmp_path
+        )
 
 
 def test_a_missing_explicit_parent_is_an_error(monkeypatch, tmp_path):
-    with pytest.raises(SystemExit):
-        _main(FakeDeck(), [GID, "--spawn", "--parent", "nobody"], monkeypatch, tmp_path)
+    deck = FakeDeckSessions(
+        {GID: {"outcome": "failed", "detail": "parent nobody not found in agent-deck"}}
+    )
+
+    with pytest.raises(SystemExit, match="parent nobody not found"):
+        _main(deck, [GID, "--spawn", "--parent", "nobody"], monkeypatch, tmp_path)
 
 
-def test_parent_none_opts_out_of_the_conductor(monkeypatch, tmp_path):
-    deck = FakeDeck([CONDUCTOR])
-
-    _main(deck, [GID, "--spawn", "--parent", "none"], monkeypatch, tmp_path)
-
-    assert "--no-parent" in _launch(deck)
-
-
-def test_a_conductor_parented_session_gets_the_sentinel_rule(monkeypatch, tmp_path):
-    deck = FakeDeck([CONDUCTOR])
-
-    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
-
-    assert "AGENTDECK_DONE" in (tmp_path / "ctx" / f"{GID}.md").read_text()
-    assert "--no-assert-done" not in _launch(deck)
-
-
-def test_in_tree_covers_sublists_only():
-    assert ts.in_tree("tasks", "tasks")
-    assert ts.in_tree("tasks/waiting-on-others", "tasks")
-    assert not ts.in_tree("tasks-old", "tasks")
-    assert not ts.in_tree("my-sessions", "tasks")
-    assert not ts.in_tree(None, "tasks")
-
-
-def test_a_session_in_a_sublist_is_still_found(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck(
-        [_session("waiting", title="other title", group="tasks/waiting-on-others")],
-        {"11223344-9": {"asana_gid": GID}},
+def test_deck_sessions_warnings_are_forwarded(monkeypatch, tmp_path, capsys):
+    deck = FakeDeckSessions(
+        stderr="warning: parent conductor-tasks not found; launching without a parent\n"
     )
 
     _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
 
-    assert "launch" not in [a[1] for a in deck.calls]
-    assert "already open 11223344" in capsys.readouterr().out
+    assert "conductor-tasks not found" in capsys.readouterr().err
 
 
-def test_prune_reaches_sessions_in_sublists(monkeypatch, tmp_path, capsys):
-    deck = FakeDeck(
-        [_session("idle", group="tasks/waiting-on-ben")], {"11223344-9": {"asana_gid": GID}}
+# --- outcome mapping -----------------------------------------------------
+
+OUTCOMES = [
+    ({"outcome": "launched", "deck_id": "abcdef12-1", "status": "starting"}, "launched abcdef12"),
+    (
+        {"outcome": "already open", "deck_id": "11223344-9", "status": "waiting"},
+        "already open 11223344 (waiting)",
+    ),
+    (
+        {"outcome": "already open", "deck_id": "11223344-9", "status": "idle", "adopted": True},
+        "already open 11223344 (idle) · adopted",
+    ),
+    (
+        {"outcome": "already open", "detail": "session exists: 99"},
+        "already open (session exists: 99)",
+    ),
+    ({"outcome": "reopened", "deck_id": "11223344-9", "status": "stopped"}, "reopened 11223344"),
+    ({"outcome": "refreshed", "deck_id": "11223344-9", "status": "idle"}, "refreshed 11223344"),
+    ({"outcome": "duplicate", "detail": "11223344-9,55667788-9"}, "duplicate 11223344,55667788"),
+    ({"outcome": "failed", "detail": "tmux exploded"}, "failed: tmux exploded"),
+    (
+        {"outcome": "failed", "deck_id": "11223344-9", "detail": "refresh failed: busy"},
+        "refresh failed: busy",
+    ),
+    ({"outcome": "would launch"}, "would launch"),
+    ({"outcome": "would reopen", "deck_id": "11223344-9"}, "would reopen 11223344"),
+    ({"outcome": "would refresh", "deck_id": "11223344-9"}, "would refresh 11223344"),
+]
+
+
+@pytest.mark.parametrize(("result", "text"), OUTCOMES)
+def test_outcomes_map_to_the_familiar_strings(result, text, monkeypatch, tmp_path, capsys):
+    deck = FakeDeckSessions({GID: result})
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert capsys.readouterr().out.rstrip().endswith(f"→ {text}")
+
+
+def test_tsv_row_shape(monkeypatch, tmp_path, capsys):
+    _main(FakeDeckSessions(), [GID, "--spawn"], monkeypatch, tmp_path)
+
+    (line,) = capsys.readouterr().out.splitlines()
+    assert line.split("\t") == [
+        REF,
+        GID,
+        "2026-09-15",
+        "Ben's Board/Inbox",
+        TASK["name"],
+        TASK["permalink_url"],
+        "→ launched abcdef12",
+    ]
+
+
+def test_json_rows_carry_what_the_agent_reports(monkeypatch, tmp_path, capsys):
+    _main(FakeDeckSessions(), [GID, "--spawn", "--json"], monkeypatch, tmp_path)
+
+    (row,) = json.loads(capsys.readouterr().out)
+    assert set(row) == {
+        "ref",
+        "gid",
+        "name",
+        "due",
+        "project",
+        "section",
+        "permalink",
+        "outcome",
+        "deck_id",
+        "status",
+        "group",
+        "attach",
+    }
+    assert row["permalink"] == TASK["permalink_url"]
+    assert row["project"] == "Ben's Board" and row["section"] == "Inbox"
+    assert row["outcome"] == "launched abcdef12"
+    assert row["deck_id"] == "abcdef12-1" and row["group"] == "tasks"
+    assert row["attach"] == "agent-deck session attach abcdef12"
+
+
+# --- failures ------------------------------------------------------------
+
+
+def test_registry_unavailable_exits_2(monkeypatch, tmp_path, capsys):
+    deck = FakeDeckSessions(exit_code=2, stderr='{"error": "registry unavailable: tmux down"}\n')
+
+    assert _main(deck, [GID, "--spawn"], monkeypatch, tmp_path) == 2
+    err = capsys.readouterr().err
+    assert "registry unavailable: tmux down — nothing launched" in err
+
+
+def test_a_missing_deck_sessions_binary_exits_2(monkeypatch, tmp_path, capsys):
+    def missing(argv, stdin=None):
+        raise FileNotFoundError("deck-sessions")
+
+    assert _main(missing, [GID, "--spawn"], monkeypatch, tmp_path) == 2
+    assert "deck-sessions not on PATH" in capsys.readouterr().err
+
+
+# --- prune ---------------------------------------------------------------
+
+
+def _listed(sid, gid, status="idle", archived=False):
+    return {
+        "deck_id": sid,
+        "key": gid,
+        "title": f"t {gid}",
+        "group": "tasks",
+        "status": status,
+        "archived": archived,
+    }
+
+
+def test_prune_archives_only_the_completed_tasks_session(monkeypatch, tmp_path, capsys):
+    open_gid = "1217000000000009"
+    deck = FakeDeckSessions(
+        sessions=[
+            _listed("11223344-9", GID),
+            _listed("99999999-1", open_gid),
+            _listed("77777777-1", "1217000000000008", archived=True),
+        ]
+    )
+    fetch = lambda gid: {"task_gid": gid, "completed": gid == GID}  # noqa: E731
+
+    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, fetch=fetch)
+
+    assert deck.calls[0][0] == ["sessions", "--key-hint", "asana_gid", "--group", "tasks"]
+    assert deck.calls[1][0] == ["archive", "--apply", "11223344-9"]
+    assert capsys.readouterr().out == f"{GID}\tt {GID}\t→ pruned 11223344\n"
+
+
+def test_prune_treats_a_deleted_task_as_done(monkeypatch, tmp_path):
+    deck = FakeDeckSessions(sessions=[_listed("11223344-9", GID)])
+
+    def fetch(gid):
+        raise urllib.error.HTTPError("u", 404, "gone", {}, None)
+
+    _main(deck, ["--prune"], monkeypatch, tmp_path, fetch=fetch)
+
+    assert deck.calls[1][0] == ["archive", "11223344-9"]
+
+
+def test_prune_dry_run_and_busy(monkeypatch, tmp_path, capsys):
+    deck = FakeDeckSessions(
+        sessions=[_listed("11223344-9", GID), _listed("55667788-9", "1217000000000002", "running")]
     )
 
-    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
+    _main(deck, ["--prune"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
 
-    assert "pruned 11223344" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "→ would prune 11223344" in out and "→ kept (busy) 55667788" in out
+
+
+def test_prune_with_nothing_done_archives_nothing(monkeypatch, tmp_path):
+    deck = FakeDeckSessions(sessions=[_listed("11223344-9", GID)])
+
+    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path)
+
+    assert [c[0][0] for c in deck.calls] == ["sessions"]

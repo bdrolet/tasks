@@ -17,13 +17,16 @@ prompt and a start prompt that sets it working (`--idle` opts out). `agent-deck 
     task-sessions --print-context 1218118170820306   # the block a session would boot with
 
 agent-deck's registry is the only state. Each session carries the hint
-`asana_gid=<gid>`; a run lists the registry, reads those hints, and leaves a
-task with a live session alone, reopens a stopped one (same conversation), and
-launches the rest. A launch sends START_PROMPT (or `--prompt`) as the first
+`asana_gid=<gid>`; a run leaves a task with a live session alone, reopens a
+stopped one (same conversation), and launches the rest. The agent-deck
+mechanics live in `deck-sessions` (~/src/scripts/deck-sessions, umbrella spec
+~/src/scripts/docs/superpowers/specs/2026-11-02-deck-sessions-design.md); this
+script builds one spec per task and maps the results back. A launch sends START_PROMPT (or `--prompt`) as the first
 message, so the session starts working at once; `--idle` sends nothing and
 the session waits at an empty prompt at zero cost. Reopened sessions are never
 prompted. Design:
-docs/superpowers/specs/2026-11-02-agent-deck-task-sessions-design.md.
+docs/superpowers/specs/2026-11-02-agent-deck-task-sessions-design.md and
+docs/superpowers/specs/2026-11-02-task-sessions-on-deck-sessions-design.md.
 
 Group: --group, else $TASK_SESSIONS_GROUP, else `tasks`.
 Parent: --parent none|self|<session>, else $TASK_SESSIONS_PARENT, else
@@ -34,7 +37,6 @@ under the repo's venv.
 """
 
 import argparse
-import datetime
 import functools
 import json
 import os
@@ -42,7 +44,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -72,14 +74,12 @@ Asana task, or take any other outward-facing or irreversible action without \
 asking first. If the task looks like a duplicate of another open task, say so \
 and stop."""
 GID_HINT = "asana_gid"
-LIVE = {"running", "waiting", "idle", "starting"}
-REOPENABLE = {"stopped", "error"}
 
 ref_for = task_ref.ref
 
 
 class DeckUnavailable(Exception):
-    """agent-deck could not be asked, so nothing it says can be trusted."""
+    """deck-sessions could not read agent-deck's registry (or isn't installed)."""
 
 
 # --- tasks-api -----------------------------------------------------------
@@ -179,45 +179,9 @@ def context_block(task: dict, ref: str) -> str:
     return "\n".join(lines)
 
 
-def deck_section(title: str, group: str | None, parented: bool) -> str:
-    """Stands in for agent-deck's identity block, which our context file displaces.
-
-    Claude keeps only the last --append-system-prompt-file it is given, so the
-    launch passes --no-identity and carries the parts that matter here (spec D4).
-    """
-    where = f" in group `{group}`" if group else ""
-    lines = [
-        "",
-        "",
-        "## agent-deck",
-        "",
-        f"You run inside agent-deck as session `{title}`{where}. "
-        "`agent-deck session current --json` returns your live record.",
-    ]
-    if parented:
-        lines += [
-            "",
-            "A parent session supervises you. When the work you were given is fully "
-            "done, end your final message with exactly one line:",
-            "`===AGENTDECK_DONE=== status=<ok|fail> summary=<one line>`",
-            "To ask the parent something, start a line with `NEED:`.",
-        ]
-    return "\n".join(lines)
-
-
 def session_name(ref: str, name: str) -> str:
     full = f"{ref} {name}"
     return full if len(full) <= NAME_MAX else full[: NAME_MAX - 1] + "…"
-
-
-def write_context(gid: str, text: str, directory: Path | None = None) -> Path:
-    directory = directory or CONTEXT_DIR
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{gid}.md"
-    path.touch(mode=0o600, exist_ok=True)
-    path.chmod(0o600)
-    path.write_text(text)
-    return path
 
 
 # --- configuration -------------------------------------------------------
@@ -228,11 +192,6 @@ class Placement:
     group: str | None  # None = inherit the parent's group
     parent: str | None  # resolved session id/title; None = no parent
     parent_is_default: bool = False
-
-    def flags(self) -> list[str]:
-        flags = ["--parent", self.parent] if self.parent else ["--no-parent"]
-        flags += ["-g", self.group] if self.group else ["--inherit-group"]
-        return flags
 
 
 def resolve_placement(args, env=os.environ) -> Placement:
@@ -256,137 +215,81 @@ def resolve_placement(args, env=os.environ) -> Placement:
     return Placement(group=group, parent=parent, parent_is_default=not explicit)
 
 
-def check_parent(placement: Placement, deck_rows: list[dict]) -> str | None:
-    """Drop a default parent that isn't in the registry; refuse an explicit one.
+# --- deck-sessions -------------------------------------------------------
 
-    Returns a warning when the default conductor is missing — the sessions
-    still launch, just unsupervised.
-    """
-    if not placement.parent:
-        return None
-    known = any(
-        placement.parent in (row.get("id"), row.get("title"))
-        or (len(placement.parent) >= 6 and (row.get("id") or "").startswith(placement.parent))
-        for row in deck_rows
+
+def _deck(argv: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["deck-sessions", *argv], input=stdin, capture_output=True, text=True, check=False
     )
-    if known:
-        return None
-    if placement.parent_is_default:
-        missing = placement.parent
-        placement.parent = None
-        if placement.group is None:
-            raise SystemExit("task-sessions: --inherit-group needs a parent that exists")
-        return f"parent {missing} not found; launching without a parent"
-    raise SystemExit(f"task-sessions: parent {placement.parent} not found in agent-deck")
 
 
-# --- agent-deck ----------------------------------------------------------
-
-
-def _run(argv: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, cwd=REPO, input=stdin, capture_output=True, text=True, check=False)
-
-
-def _json(result: subprocess.CompletedProcess) -> dict | list | None:
+def _call_deck(argv: list[str], stdin: str | None, deck) -> str:
+    """Run deck-sessions; return stdout. Forwards its warnings, raises on exit 2."""
     try:
-        return json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
-def _error(result: subprocess.CompletedProcess) -> str:
-    body = _json(result)
-    if isinstance(body, dict) and body.get("error"):
-        return str(body["error"]).splitlines()[0]
-    text = (result.stderr or result.stdout or "").strip()
-    return text.splitlines()[0] if text else f"exit {result.returncode}"
-
-
-def listing(runner=_run) -> list[dict]:
-    """Every session in the profile. Raises when the answer can't be trusted (defect 1)."""
-    try:
-        result = runner(["agent-deck", "list", "--json"])
+        result = deck(argv, stdin)
     except OSError as e:
-        raise DeckUnavailable(str(e))
-    rows = _json(result)
-    if result.returncode != 0 or not isinstance(rows, list):
-        raise DeckUnavailable(_error(result))
-    return rows
+        raise DeckUnavailable(f"deck-sessions not on PATH ({e})")
+    for line in (result.stderr or "").splitlines():
+        try:
+            body = json.loads(line)
+        except json.JSONDecodeError:
+            body = None
+        if isinstance(body, dict) and body.get("error"):
+            raise DeckUnavailable(str(body["error"]).removeprefix("registry unavailable: "))
+        print(line, file=sys.stderr)
+    if result.returncode != 0:
+        raise DeckUnavailable(f"deck-sessions exit {result.returncode}")
+    return result.stdout
 
 
-def hints(session_id: str, runner=_run) -> dict:
-    result = runner(["agent-deck", "session", "annotate", session_id, "--json"])
-    body = _json(result)
-    if result.returncode != 0 or not isinstance(body, dict):
-        raise DeckUnavailable(f"annotate {session_id}: {_error(result)}")
-    return body.get("hints") or {}
+def spec_for(row: "Row", args, placement: Placement) -> dict:
+    """The deck-sessions spec for one task (spec D2)."""
+    permalink = row.task.get("permalink_url")
+    return {
+        "key_hint": GID_HINT,
+        "key": row.gid,
+        "title": row.title,
+        "adopt_prefix": f"{row.ref} ",
+        "context": context_block(row.task, row.ref),
+        "context_path": str(CONTEXT_DIR / f"{row.gid}.md"),
+        "cwd": str(REPO),
+        "group": placement.group,
+        "parent": placement.parent or "none",
+        "parent_is_default": placement.parent_is_default,
+        "hints": {"permalink": permalink} if permalink else {},
+        "model": args.model,
+        "idle_timeout": args.idle_timeout,
+        "prompt": args.prompt,
+        "reopen_prompt": None,
+        "refresh": bool(args.refresh),
+    }
 
 
-def launch_argv(
-    *,
-    title: str,
-    gid: str,
-    permalink: str | None,
-    context_file: Path,
-    placement: Placement,
-    model: str | None = None,
-    idle_timeout: str | None = None,
-    prompt: bool = False,
-) -> list[str]:
-    argv = ["agent-deck", "launch", "--json", "--trust-folder", "-c", "claude", "--no-identity"]
-    argv += placement.flags()
-    argv += ["-t", title, "--hint", f"{GID_HINT}={gid}"]
-    if permalink:
-        argv += ["--hint", f"permalink={permalink}"]
-    if model:
-        argv += ["--model", model]
-    if idle_timeout:
-        argv += ["--idle-timeout", idle_timeout]
-    argv += [
-        "--extra-arg=--append-system-prompt-file",
-        f"--extra-arg={context_file}",
-    ]
-    if prompt:
-        argv += ["--message-file", "-"]
-        if not placement.parent:
-            argv.append("--no-assert-done")
-    argv.append(str(REPO))
-    return argv
+def _short(session_id: str) -> str:
+    return session_id[:SHORT_ID]
 
 
-def ensure_group(group: str, runner=_run) -> str | None:
-    """Create the group if missing; return a warning when its cap would serialize sessions."""
-    result = runner(["agent-deck", "group", "show", group, "--json"])
-    body = _json(result)
-    if result.returncode != 0 or not isinstance(body, dict) or not body.get("success", True):
-        created = runner(
-            [
-                "agent-deck",
-                "group",
-                "create",
-                group,
-                "--default-path",
-                str(REPO),
-                "--max-concurrent",
-                "0",
-            ]
-        )
-        if created.returncode != 0:
-            return f"could not create group {group}: {_error(created)}"
-        # `group create --max-concurrent 0` is ignored (v1.16.36 stores the serial
-        # default of 1); `group update` honours 0. Only a group we just created is
-        # touched — an existing group's cap is the user's choice.
-        updated = runner(["agent-deck", "group", "update", group, "--max-concurrent", "0"])
-        return (
-            None if updated.returncode == 0 else f"could not uncap group {group}: {_error(updated)}"
-        )
-    cap = body.get("max_concurrent", 0)
-    if cap not in (0, None):
-        return f"group {group} has max_concurrent={cap}; sessions given a prompt will queue"
-    return None
-
-
-# --- planning ------------------------------------------------------------
+def outcome_text(result: dict) -> str:
+    """deck-sessions' outcome in the words task-sessions has always printed."""
+    outcome, detail, sid = result.get("outcome"), result.get("detail"), result.get("deck_id")
+    short = _short(sid) if sid else ""
+    if outcome == "launched":
+        return f"launched {short}"
+    if outcome == "already open":
+        if not sid:
+            return f"already open ({detail})"
+        adopted = " · adopted" if result.get("adopted") else ""
+        return f"already open {short} ({result.get('status')}){adopted}"
+    if outcome in ("reopened", "refreshed", "would reopen", "would refresh"):
+        return f"{outcome} {short}"
+    if outcome == "duplicate":
+        return "duplicate " + ",".join(_short(i) for i in (detail or "").split(","))
+    if outcome == "would launch":
+        return outcome
+    if detail and detail.startswith("refresh failed"):
+        return detail
+    return f"failed: {detail}"
 
 
 @dataclass
@@ -394,8 +297,6 @@ class Row:
     ref: str
     gid: str
     task: dict
-    sessions: list[dict] = field(default_factory=list)
-    adopt: bool = False
     outcome: str = ""
     deck_id: str | None = None
     status: str | None = None
@@ -406,165 +307,36 @@ class Row:
         return session_name(self.ref, self.task["name"])
 
 
-def in_tree(session_group: str | None, group: str | None) -> bool:
-    """True when a session sits in the group or one of its sublists (`tasks/waiting-on-others`).
-
-    The tasks conductor files sessions into sublists by what they are waiting on;
-    they are still task sessions.
-    """
-    if not group or not session_group:
-        return False
-    return session_group == group or session_group.startswith(f"{group}/")
-
-
-def find_sessions(rows: list[Row], deck_rows: list[dict], group: str | None, runner=_run) -> None:
-    """Attach each row's existing sessions: the hint is identity, the title prefix finds hand-made ones."""
-    by_gid = {row.gid: row for row in rows}
-    prefixes = {f"{row.ref} ": row for row in rows}
-    for session in deck_rows:
-        title = session.get("title") or ""
-        prefix_row = next((r for p, r in prefixes.items() if title.startswith(p)), None)
-        in_group = in_tree(session.get("group"), group)
-        if not in_group and prefix_row is None:
-            continue
-        gid = hints(session["id"], runner).get(GID_HINT)
-        if gid in by_gid:
-            by_gid[gid].sessions.append(session)
-        elif gid is None and prefix_row is not None:
-            prefix_row.sessions.append(session)
-            prefix_row.adopt = True
-
-
-def _short(session_id: str) -> str:
-    return session_id[:SHORT_ID]
-
-
-def act(row: Row, args, placement: Placement, runner=_run) -> None:
-    """Decide and (under --spawn) carry out one task's outcome. Never raises for one task."""
-    spawn = args.spawn
-    if len(row.sessions) > 1:
-        row.outcome = "duplicate " + ",".join(_short(s["id"]) for s in row.sessions)
-        return
-
-    context = context_block(row.task, row.ref) + deck_section(
-        row.title, placement.group, bool(placement.parent)
-    )
-
-    if row.sessions:
-        session = row.sessions[0]
-        sid, status = session["id"], session.get("status")
-        row.deck_id, row.status, row.group = sid, status, session.get("group")
-        if spawn and row.adopt:
-            runner(
-                ["agent-deck", "session", "annotate", sid, "--set-hint", f"{GID_HINT}={row.gid}"]
-            )
-        if session.get("archived"):
-            if not spawn:
-                row.outcome = f"would reopen {_short(sid)}"
-                return
-            runner(["agent-deck", "session", "unarchive", sid])
-            status = "stopped"
-        if status in REOPENABLE:
-            if not spawn:
-                row.outcome = f"would reopen {_short(sid)}"
-                return
-            write_context(row.gid, context)
-            result = runner(["agent-deck", "session", "start", sid])
-            row.outcome = (
-                f"reopened {_short(sid)}" if result.returncode == 0 else f"failed: {_error(result)}"
-            )
-            if args.refresh and result.returncode == 0:
-                _refresh(row, sid, context, runner)
-            return
-        if args.refresh and status in LIVE - {"running"}:
-            if not spawn:
-                row.outcome = f"would refresh {_short(sid)}"
-                return
-            _refresh(row, sid, context, runner)
-            return
-        row.outcome = f"already open {_short(sid)} ({status})" + (
-            " · adopted" if row.adopt and spawn else ""
-        )
-        return
-
-    if not spawn:
-        row.outcome = "would launch"
-        return
-    context_file = write_context(row.gid, context)
-    argv = launch_argv(
-        title=row.title,
-        gid=row.gid,
-        permalink=row.task.get("permalink_url"),
-        context_file=context_file,
-        placement=placement,
-        model=args.model,
-        idle_timeout=args.idle_timeout,
-        prompt=bool(args.prompt),
-    )
-    result = runner(argv, args.prompt) if args.prompt else runner(argv)
-    body = _json(result)
-    if result.returncode == 0 and isinstance(body, dict) and body.get("id"):
-        row.deck_id, row.status, row.group = body["id"], body.get("status"), body.get("group")
-        row.outcome = f"launched {_short(body['id'])}"
-    elif isinstance(body, dict) and body.get("code") == "ALREADY_EXISTS":
-        row.outcome = f"already open ({_error(result)})"
-    else:
-        row.outcome = f"failed: {_error(result)}"
-
-
-def _refresh(row: Row, sid: str, context: str, runner=_run) -> None:
-    stamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    message = (
-        f"Updated task context (Asana snapshot as of {stamp}); it supersedes the one "
-        f"in your system prompt. No action needed beyond reading it.\n\n{context}"
-    )
-    result = runner(
-        [
-            "agent-deck",
-            "session",
-            "send",
-            "--defer-if-busy",
-            "--no-tag",
-            "--message-file",
-            "-",
-            sid,
-        ],
-        message,
-    )
-    row.outcome = (
-        f"refreshed {_short(sid)}"
-        if result.returncode == 0
-        else f"refresh failed: {_error(result)}"
-    )
-
-
-def prune(deck_rows: list[dict], group: str, spawn: bool, runner=_run, fetch=fetch) -> list[str]:
+def prune(group: str, spawn: bool, deck=_deck, fetch=fetch) -> list[str]:
     """Stop and archive sessions in the group whose task is completed or gone."""
-    lines = []
-    for session in deck_rows:
-        if not in_tree(session.get("group"), group) or session.get("archived"):
-            continue
-        gid = hints(session["id"], runner).get(GID_HINT)
-        if not gid:
+    rows = json.loads(
+        _call_deck(["sessions", "--key-hint", GID_HINT, "--group", group], None, deck)
+    )
+    done = []
+    for session in rows:
+        if session.get("archived"):
             continue
         try:
-            done = bool(fetch(gid).get("completed"))
+            completed = bool(fetch(session["key"]).get("completed"))
         except urllib.error.HTTPError as e:
-            done = e.code == 404
-        if not done:
-            continue
-        sid = _short(session["id"])
-        if session.get("status") == "running":
-            lines.append(f"{gid}\t{session.get('title')}\t→ kept (busy) {sid}")
-        elif not spawn:
-            lines.append(f"{gid}\t{session.get('title')}\t→ would prune {sid}")
-        else:
-            runner(["agent-deck", "session", "stop", session["id"]])
-            result = runner(["agent-deck", "session", "archive", session["id"]])
-            outcome = (
-                f"pruned {sid}" if result.returncode == 0 else f"prune failed: {_error(result)}"
-            )
-            lines.append(f"{gid}\t{session.get('title')}\t→ {outcome}")
+            completed = e.code == 404
+        if completed:
+            done.append(session)
+    if not done:
+        return []
+    by_id = {s["deck_id"]: s for s in done}
+    argv = ["archive"] + (["--apply"] if spawn else []) + [s["deck_id"] for s in done]
+    lines = []
+    for line in _call_deck(argv, None, deck).splitlines():
+        result = json.loads(line)
+        session = by_id.get(result["deck_id"], {})
+        sid = _short(result["deck_id"])
+        outcome = {
+            "archived": f"pruned {sid}",
+            "kept (busy)": f"kept (busy) {sid}",
+            "would archive": f"would prune {sid}",
+        }.get(result["outcome"], f"prune failed: {result.get('detail')}")
+        lines.append(f"{session.get('key')}\t{session.get('title')}\t→ {outcome}")
     return lines
 
 
@@ -577,7 +349,7 @@ def _location(task: dict) -> str:
 
 
 def main(
-    argv: list[str] | None = None, *, runner=_run, fetch=fetch, search=search, env=os.environ
+    argv: list[str] | None = None, *, deck=_deck, fetch=fetch, search=search, env=os.environ
 ) -> int:
     parser = argparse.ArgumentParser(
         prog="task-sessions",
@@ -637,20 +409,11 @@ def main(
         args.prompt = START_PROMPT
     placement = resolve_placement(args, env)
 
-    try:
-        deck_rows = listing(runner)
-    except DeckUnavailable as e:
-        print(f"registry unavailable: {e} — nothing launched", file=sys.stderr)
-        return 2
-    warning = check_parent(placement, deck_rows)
-    if warning:
-        print(f"warning: {warning}", file=sys.stderr)
-
     if args.prune:
         if not placement.group:
             raise SystemExit("task-sessions: --prune needs a group, not --inherit-group")
         try:
-            for line in prune(deck_rows, placement.group, args.spawn, runner, fetch):
+            for line in prune(placement.group, args.spawn, deck, fetch):
                 print(line)
         except DeckUnavailable as e:
             print(f"registry unavailable: {e}", file=sys.stderr)
@@ -663,10 +426,9 @@ def main(
             and not args.due_after
         ):
             return 0
-        deck_rows = listing(runner)
 
     if args.gids:
-        gids = list(dict.fromkeys(args.gids))  # dedupe, keep order (defect 5)
+        gids = list(dict.fromkeys(args.gids))  # dedupe, keep order
     else:
         hits = search(
             query=args.query,
@@ -690,27 +452,28 @@ def main(
             task = {"task_gid": gid, "name": "?", "_error": str(e)}
         rows.append(Row(ref=ref_for(gid), gid=gid, task=task))
 
-    try:
-        find_sessions(rows, deck_rows, placement.group, runner)
-    except DeckUnavailable as e:
-        print(f"registry unavailable: {e} — nothing launched", file=sys.stderr)
-        return 2
-
-    if args.spawn and placement.group:
-        warning = ensure_group(placement.group, runner)
-        if warning:
-            print(f"warning: {warning}", file=sys.stderr)
-
-    for row in rows:  # serial on purpose: agent-deck thrashes on parallel launches
+    for row in rows:
         if row.task.get("_error"):
             row.outcome = f"fetch failed: {row.task['_error']}"
         elif row.task.get("completed"):
             row.outcome = "skipped (completed)"
-        else:
-            try:
-                act(row, args, placement, runner)
-            except (DeckUnavailable, OSError) as e:
-                row.outcome = f"failed: {e}"
+    pending = [row for row in rows if not row.outcome]
+
+    if pending:
+        specs = "".join(json.dumps(spec_for(row, args, placement)) + "\n" for row in pending)
+        try:
+            out = _call_deck(["ensure"] + (["--apply"] if args.spawn else []), specs, deck)
+        except DeckUnavailable as e:
+            print(f"registry unavailable: {e} — nothing launched", file=sys.stderr)
+            return 2
+        results = [json.loads(line) for line in out.splitlines() if line.strip()]
+        for row, result in zip(pending, results, strict=True):
+            detail = result.get("detail") or ""
+            if result.get("outcome") == "failed" and detail.startswith("parent "):
+                raise SystemExit(f"task-sessions: {detail}")
+            row.outcome = outcome_text(result)
+            row.deck_id, row.status = result.get("deck_id"), result.get("status")
+            row.group = result.get("group")
 
     if args.json:
         print(

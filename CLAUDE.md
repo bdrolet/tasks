@@ -311,27 +311,37 @@ view. Dry-run by default; `--spawn` acts. `--print-context <gid>` shows what a
 session would boot with. Design:
 `docs/superpowers/specs/2026-11-02-agent-deck-task-sessions-design.md`.
 
-agent-deck's registry is the only state — there is no GID map file. Each
-session carries the hint `asana_gid=<gid>`; a run reads those hints and
-reports a live session as `already open`, starts a stopped one again
-(`reopened`, same conversation), refuses two sessions for one task
+agent-deck's registry is the only state — there is no GID map file. The
+agent-deck mechanics live in **`deck-sessions`** (`~/src/scripts/deck-sessions`,
+on PATH via its `install.sh`; umbrella spec
+`~/src/scripts/docs/superpowers/specs/2026-11-02-deck-sessions-design.md`):
+`task_sessions.py` builds one JSON spec per task (`key_hint: asana_gid`, title,
+context, group, parent, prompt), pipes them to `deck-sessions ensure [--apply]`,
+and maps the results back to its own rows. Design of the switch:
+`docs/superpowers/specs/2026-11-02-task-sessions-on-deck-sessions-design.md`.
+
+What that means for tasks: each session carries the hint `asana_gid=<gid>`; a
+run reports a live session as `already open`, starts a stopped (or archived)
+one again (`reopened`, same conversation), refuses two sessions for one task
 (`duplicate`), adopts a hand-made session whose title starts with the task's
-ref, and launches the rest. An unreadable registry launches nothing (exit 2).
+ref, and launches the rest. An unreadable registry, or `deck-sessions`
+missing from PATH, launches nothing (exit 2). The context file stays at
+`~/.claude/task-context/<gid>.md` (live sessions have that path baked into
+their stored extra args).
 Group: `--group`, else `TASK_SESSIONS_GROUP`, else `tasks`. Parent:
 `--parent none|self|<session>`, else `TASK_SESSIONS_PARENT`, else
 `conductor-tasks` — the agent-deck tasks conductor, whose
 `~/.local/share/agent-deck/conductor/tasks/POLICY.md` scopes it to the task
 sessions it parents. A missing default conductor degrades to no parent with a
-warning; a missing explicit parent is an error. With no parent, `--no-parent`
-is sent explicitly, because a launch from inside an agent-deck session
-auto-parents under the caller. The launch passes
-`--no-identity`: Claude keeps only the last `--append-system-prompt-file`, so
-the context file carries its own short agent-deck section instead.
+warning; a missing explicit parent is an error.
 `--refresh` sends fresh context as a message (a resumed conversation never
-re-reads its system prompt); `--prune` archives sessions whose task is completed.
+re-reads its system prompt); `--prune` lists the group's sessions
+(`deck-sessions sessions`), fetches each task, and archives those whose task
+is completed or deleted (`deck-sessions archive`), keeping busy ones.
 Sublists of the group (`tasks/waiting-on-others`, `tasks/waiting-on-ben`,
 `tasks/done`) count as the group: the conductor files sessions there by what
-they wait on, and lookup and `--prune` still find them (`in_tree`).
+they wait on, and lookup and `--prune` still find them (deck-sessions'
+`in_tree`).
 
 **Task refs** — listings label each row with a three-character base36 ref
 hashed from the GID (`scripts/task_ref.py`), stable across listings with
