@@ -298,18 +298,37 @@ format — that's the point of keeping them in sync.
 ## Per-task sessions
 
 `scripts/task_sessions.py` (on PATH as `task-sessions`) gives each task its own
-background Claude Code session, preloaded with that task's notes, subtasks and
-comments via `claude --bg --append-system-prompt`. No prompt is passed, so a
-spawned session idles at zero token cost until someone runs `claude attach <id>`
-— which needs a real terminal, being a full-screen TUI. Dry-run by default;
-`--spawn` launches. `--print-context <gid>` shows what a session would boot with.
+agent-deck Claude session with that task's notes, subtasks and comments in its
+system prompt (a 0600 file under
+`~/.claude/task-context/<gid>.md`, passed via `--extra-arg
+--append-system-prompt-file`). A launch sends a start prompt (`START_PROMPT`:
+re-fetch, research, safe prep, report — no outward-facing actions without
+asking), so the session starts working at once; `--prompt` replaces it and
+`--idle` sends nothing. Reopened sessions are never prompted.
+`agent-deck session attach <id>`
+opens one (needs a real terminal; Ctrl+Q detaches), `agent-deck -g tasks` is the
+view. Dry-run by default; `--spawn` acts. `--print-context <gid>` shows what a
+session would boot with. Design:
+`docs/superpowers/specs/2026-11-02-agent-deck-task-sessions-design.md`.
 
-`claude --bg` assigns the session id itself (it warns and ignores
-`--session-id`), so the id is parsed back out of its output. `~/.claude/task-sessions.json`
-maps GID → session id and is reconciled against `claude agents --json --all` on
-every run: a task whose session is still listed is skipped as `already open`, and
-`claude rm` is what frees it — `stop` leaves the session listed. The map only
-knows sessions the script spawned, so a hand-made one doesn't prevent a duplicate.
+agent-deck's registry is the only state — there is no GID map file. Each
+session carries the hint `asana_gid=<gid>`; a run reads those hints and
+reports a live session as `already open`, starts a stopped one again
+(`reopened`, same conversation), refuses two sessions for one task
+(`duplicate`), adopts a hand-made session whose title starts with the task's
+ref, and launches the rest. An unreadable registry launches nothing (exit 2).
+Group: `--group`, else `TASK_SESSIONS_GROUP`, else `tasks`. Parent:
+`--parent none|self|<session>`, else `TASK_SESSIONS_PARENT`, else
+`conductor-tasks` — the agent-deck tasks conductor, whose
+`~/.local/share/agent-deck/conductor/tasks/POLICY.md` scopes it to the task
+sessions it parents. A missing default conductor degrades to no parent with a
+warning; a missing explicit parent is an error. With no parent, `--no-parent`
+is sent explicitly, because a launch from inside an agent-deck session
+auto-parents under the caller. The launch passes
+`--no-identity`: Claude keeps only the last `--append-system-prompt-file`, so
+the context file carries its own short agent-deck section instead.
+`--refresh` sends fresh context as a message (a resumed conversation never
+re-reads its system prompt); `--prune` archives sessions whose task is completed.
 
 **Task refs** — listings label each row with a three-character base36 ref
 hashed from the GID (`scripts/task_ref.py`), stable across listings with
