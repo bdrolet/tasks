@@ -533,3 +533,33 @@ def test_a_conductor_parented_session_gets_the_sentinel_rule(monkeypatch, tmp_pa
 
     assert "AGENTDECK_DONE" in (tmp_path / "ctx" / f"{GID}.md").read_text()
     assert "--no-assert-done" not in _launch(deck)
+
+
+def test_in_tree_covers_sublists_only():
+    assert ts.in_tree("tasks", "tasks")
+    assert ts.in_tree("tasks/waiting-on-others", "tasks")
+    assert not ts.in_tree("tasks-old", "tasks")
+    assert not ts.in_tree("my-sessions", "tasks")
+    assert not ts.in_tree(None, "tasks")
+
+
+def test_a_session_in_a_sublist_is_still_found(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck(
+        [_session("waiting", title="other title", group="tasks/waiting-on-others")],
+        {"11223344-9": {"asana_gid": GID}},
+    )
+
+    _main(deck, [GID, "--spawn"], monkeypatch, tmp_path)
+
+    assert "launch" not in [a[1] for a in deck.calls]
+    assert "already open 11223344" in capsys.readouterr().out
+
+
+def test_prune_reaches_sessions_in_sublists(monkeypatch, tmp_path, capsys):
+    deck = FakeDeck(
+        [_session("idle", group="tasks/waiting-on-ben")], {"11223344-9": {"asana_gid": GID}}
+    )
+
+    _main(deck, ["--prune", "--spawn"], monkeypatch, tmp_path, task=dict(TASK, completed=True))
+
+    assert "pruned 11223344" in capsys.readouterr().out
