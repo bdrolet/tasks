@@ -54,6 +54,7 @@ fi
 ln -sfn "$REPO_ROOT/scripts/task_sessions.py" "$BIN_DEST/task-sessions"
 echo "linked $BIN_DEST/task-sessions -> $(readlink "$BIN_DEST/task-sessions")"
 command -v agent-deck >/dev/null || echo "warning: agent-deck is not on PATH — task-sessions needs it" >&2
+command -v deck-sessions >/dev/null || echo "warning: deck-sessions is not on PATH — run ~/src/scripts/deck-sessions/install.sh" >&2
 
 # task_next.py onto PATH as `task-next` — the prioritizer CLI. Imports
 # task_ref from its own directory, so it has to be symlinked (not copied)
