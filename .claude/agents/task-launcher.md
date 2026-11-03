@@ -48,7 +48,22 @@ A GID in the dispatch wins — use it as given. **A three-character ref is not a
 GID**; resolve it through the `refs:` map the dispatch carries. A ref in a command
 is a bug.
 
-Otherwise search, exactly as [[searching-tasks]] does:
+**"Next" requests go to the prioritizer, never to `/search`.** "My next tasks",
+"what's up today", "load my next N", "today's tasks" and anything else that means
+"what should I be working on" → take the GIDs from today's selection, in order:
+
+```bash
+curl -s -XPOST "$BASE/next" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{}'      # add "n": N if a count was given
+```
+
+Use the `task_gid`s from the response's `next` array. That selection already
+leaves out snoozed tasks, Inbox triage and parent tasks (only their subtasks are
+ranked). `/search` does none of that: it returns snoozed and parent tasks sorted
+by due date, which is the wrong list. If `next` is empty, report that and spawn
+nothing; don't fall back to `/search`.
+
+Otherwise, for a named task or a listing request, search exactly as [[searching-tasks]] does:
 
 ```bash
 curl -s -XPOST "$BASE/search" -H "Authorization: Bearer $TOKEN" \

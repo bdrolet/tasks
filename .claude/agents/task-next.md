@@ -44,7 +44,7 @@ How the selection is built, so you can explain it:
 - **Must-dos first.** A hard due date (`due_on`, `due_source: hard`) whose
   slack — days until due, minus the work it needs, minus hard-dated work
   queued ahead of it — is 5 days or less is placed at the top of **Next**
-  whatever its score, even past `n`, but only while the 5-point day has
+  whatever its score, even past `n`, but only while the 12-point day (`capacity.points_per_day`) has
   room. A day of work surfaces about a week out; an hour's a few days out.
   Within must-dos, the ones that can still finish by their due day come
   first, earliest deadline first — when two cannot both be made, the one

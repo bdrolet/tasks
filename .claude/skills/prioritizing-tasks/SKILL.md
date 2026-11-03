@@ -44,12 +44,12 @@ Or the CLI, which does the same and prints ref-first TSV: `task-next`,
 
 ## Meaning
 
-- `POST /next` — today's selection (capacity 5 points, diversity across
+- `POST /next` — today's selection (capacity 12 points, `capacity.points_per_day`, diversity across
   projects, optional `energy` deep|shallow and `n`) plus `overcommitted`,
   `stale`, `nudge`. Logs a `manual` run; never bumps deferral counters.
   - Must-dos first: a hard `due_on` whose effective slack (days until due
     minus the work it needs minus hard work queued ahead) is ≤ 5 leads the
-    list whatever its score, beyond `n` but only while the 5-point day has
+    list whatever its score, beyond `n` but only while the 12-point day has
     room. Within must-dos: the ones that can still finish by their due day,
     earliest deadline first (a costlier deadline displaces a cheaper one
     that cannot share the week with it), then the already-late ones by cost

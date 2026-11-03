@@ -8,7 +8,7 @@ from services import prioritize_config as pc
 
 def test_repo_config_loads_with_spec_defaults():
     cfg = pc.load()
-    assert cfg.points_per_day == 5
+    assert cfg.points_per_day == 12
     assert cfg.default_points == 3
     assert cfg.weights == {
         "priority": 0.20,
@@ -52,7 +52,7 @@ def test_category_weights_read_project_names(tmp_path: Path):
 
 def test_env_var_overrides_path(tmp_path: Path, monkeypatch):
     p = tmp_path / "p.toml"
-    p.write_text(pc.DEFAULT_PATH.read_text().replace("points_per_day = 5", "points_per_day = 8"))
+    p.write_text(pc.DEFAULT_PATH.read_text().replace("points_per_day = 12", "points_per_day = 8"))
     monkeypatch.setenv("PRIORITIZE_CONFIG_PATH", str(p))
     assert pc.load().points_per_day == 8
 

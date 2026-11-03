@@ -11,6 +11,7 @@ on:
       - 'services/**'
       - 'handlers/**'
       - 'requirements.txt'
+      - 'config/**'
       - 'terraform/**'
 
 jobs:

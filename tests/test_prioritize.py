@@ -7,7 +7,8 @@ from models.prioritize import Enrichment, Overrides, Stats, TaskFacts
 from services import prioritize as pz
 from services import prioritize_config as pc
 
-CFG = pc.load()
+# Fixtures below were computed for a 5-point day, whatever the repo config is tuned to.
+CFG = replace_facts(pc.load(), points_per_day=5)
 TODAY = date(2026, 9, 23)
 TS = datetime(2026, 9, 1, tzinfo=timezone.utc)
 

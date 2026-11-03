@@ -11,6 +11,7 @@ on:
       - 'services/**'
       - 'models/**'
       - 'Dockerfile'
+      - 'config/**'
       - 'requirements.txt'
 
 jobs:

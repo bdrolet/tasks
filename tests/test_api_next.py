@@ -11,6 +11,7 @@ from services import prioritize_config as pc
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer x"}
+pytestmark = pytest.mark.usefixtures("five_point_day")
 NOW = datetime(2026, 9, 23, 12, tzinfo=timezone.utc)
 
 
