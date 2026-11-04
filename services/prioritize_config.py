@@ -37,6 +37,7 @@ class Config:
     stale_after_days: int
     deferred_limit: int
     excluded_projects: tuple[str, ...]
+    excluded_tags: tuple[str, ...]
     hard_due_slack_days: int
     starvation_boost_per_day: float
     starvation_max_boost: float
@@ -89,6 +90,7 @@ def load(path: str | None = None) -> Config:
         stale_after_days=int(stale["after_days"]),
         deferred_limit=int(stale["deferred_limit"]),
         excluded_projects=tuple(str(p) for p in raw["projects"]["excluded"]),
+        excluded_tags=tuple(str(t) for t in raw.get("tags", {}).get("excluded", [])),
         hard_due_slack_days=int(sel["hard_due_slack_days"]),
         starvation_boost_per_day=float(starve["boost_per_day"]),
         starvation_max_boost=float(starve["max_boost"]),

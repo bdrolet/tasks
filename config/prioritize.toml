@@ -55,6 +55,9 @@ Consulting = 1.0
 [projects]
 excluded = ["Inbox"]          # gathered and stored, never ranked or selected (bucket excluded:project)
 
+[tags]
+excluded = ["application-tracked"]  # tagged tasks are gathered and stored, never ranked (bucket excluded:tag); the job-search conductor tracks them
+
 [selection]
 default_n = 5
 diversity_penalty = 0.95      # same-day, per pick in the same project

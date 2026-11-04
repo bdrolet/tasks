@@ -386,6 +386,20 @@ def create_project(name: str, sections: list[str] | None = None) -> dict:
     }
 
 
+def create_section(project_gid: str, name: str) -> dict:
+    """Add a section to an existing project; returns {"gid", "name"}."""
+    resp = _request(
+        "POST",
+        f"/projects/{project_gid}/sections",
+        operation="create_section",
+        params={"opt_fields": "gid,name"},
+        json={"data": {"name": name}},
+    )
+    resp.raise_for_status()
+    data = resp.json()["data"]
+    return {"gid": data["gid"], "name": data["name"]}
+
+
 def list_project_tasks(
     project_gid: str, *, only_open: bool = False, opt_fields: str = SEARCH_OPT_FIELDS
 ) -> list[dict]:
