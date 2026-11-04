@@ -113,3 +113,10 @@ def test_old_window_key_no_longer_loads(tmp_path: Path):
     )
     with pytest.raises(KeyError):
         pc.load(str(p))
+
+
+def test_config_excluded_tags_default_empty(tmp_path: Path):
+    assert pc.load().excluded_tags == ("application-tracked",)
+    p = tmp_path / "p.toml"
+    p.write_text(pc.DEFAULT_PATH.read_text().replace("[tags]", "[unused]"))
+    assert pc.load(str(p)).excluded_tags == ()

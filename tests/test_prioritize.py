@@ -1182,3 +1182,13 @@ def test_undated_task_is_never_a_must_do():
         components={"due_source": "none", "effective_slack": None},
     )
     assert pz._is_must(t, CFG) is False
+
+
+def test_excluded_tag_buckets_task():
+    tagged = facts("t", points=1, tags=("application-tracked",))
+    work = facts("w", points=1)
+    cfg = _replace(CFG, excluded_tags=("application-tracked",))
+    s = pz.score_set([tagged, work], {}, {}, {}, cfg, TODAY)
+    by = s.by_gid()
+    assert by["t"].bucket == "excluded:tag" and by["t"].rank is None
+    assert [t.gid for t in s.next()] == ["w"]

@@ -325,6 +325,8 @@ def _bucket(
         )
     if facts.project_name in config.excluded_projects:
         return _Bucketed("excluded:project", None, None, waiting_on, waiting_source)
+    if any(tag in config.excluded_tags for tag in facts.tags):
+        return _Bucketed("excluded:tag", None, None, waiting_on, waiting_source)
     reason, inherited = None, None
     if own.blocked:
         reason = "blocked"

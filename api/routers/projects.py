@@ -36,6 +36,10 @@ class CreateProjectRequest(BaseModel):
     sections: list[str] = []
 
 
+class CreateSectionRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
 class CreatedProjectResponse(BaseModel):
     project_gid: str
     permalink_url: str | None = None
@@ -75,3 +79,10 @@ def create_project(body: CreateProjectRequest) -> CreatedProjectResponse:
         permalink_url=result.get("permalink_url"),
         sections=result["sections"],
     )
+
+
+@router.post("/projects/{project_gid}/sections", response_model=SectionInfo, status_code=201)
+def create_section(project_gid: str, body: CreateSectionRequest) -> SectionInfo:
+    with translate_asana_errors():
+        result = asana.create_section(project_gid, body.name)
+    return SectionInfo(gid=result["gid"], name=result["name"])

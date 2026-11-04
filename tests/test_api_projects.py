@@ -41,3 +41,17 @@ def test_create_project(monkeypatch):
     assert body["project_gid"] == "p-new"
     assert body["permalink_url"] == "https://app.asana.com/x/p-new"
     assert body["sections"] == {"Planning": "s1"}
+
+
+def test_create_section_returns_gid(monkeypatch):
+    calls = []
+
+    def fake(project_gid, name):
+        calls.append((project_gid, name))
+        return {"gid": "s1", "name": name}
+
+    monkeypatch.setattr(asana, "create_section", fake)
+    resp = client.post("/projects/p1/sections", headers=AUTH, json={"name": "Applied"})
+    assert resp.status_code == 201
+    assert resp.json() == {"gid": "s1", "name": "Applied"}
+    assert calls == [("p1", "Applied")]
